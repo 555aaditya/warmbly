@@ -20,6 +20,7 @@ export interface ScheduledJobRun {
     // Set by "run now"; the owning loop clears it when it picks the request up.
     run_requested_at?: string;
     next_run_at?: string;
+    retired_at?: string;
     updated_at: string;
 }
 

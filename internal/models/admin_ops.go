@@ -190,6 +190,7 @@ type ScheduledJobRun struct {
 	// when it picks the request up.
 	RunRequestedAt *time.Time `json:"run_requested_at,omitempty"`
 	NextRunAt      *time.Time `json:"next_run_at,omitempty"`
+	RetiredAt      *time.Time `json:"retired_at,omitempty"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
