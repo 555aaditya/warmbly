@@ -278,9 +278,8 @@ func resolveSendDeadLetter(ctx context.Context, tx pgx.Tx, taskID uuid.UUID) err
 	return err
 }
 
-func persistSendHold(ctx context.Context, tx pgx.Tx, mailboxID uuid.UUID, result models.SendEmailResult, state string) error {
-	if state != "unknown" {
-		_, err := tx.Exec(ctx, `WITH next_hold AS (
+func refreshUnknownSendHold(ctx context.Context, tx pgx.Tx, mailboxID, taskID uuid.UUID) error {
+	_, err := tx.Exec(ctx, `WITH next_hold AS (
 			SELECT id,reason FROM (
 			 SELECT t.id,'unknown' AS reason,1 AS priority,t.created_at FROM tasks t
 			 WHERE t.email_account_id=$1 AND t.send_result_state='unknown'
@@ -291,8 +290,13 @@ func persistSendHold(ctx context.Context, tx pgx.Tx, mailboxID uuid.UUID, result
 			) candidates ORDER BY priority,created_at,id LIMIT 1)
 			UPDATE email_accounts ea SET send_recovery_task_id=n.id,send_recovery_hold=n.id IS NOT NULL,send_recovery_reason=n.reason
 			FROM (SELECT 1) singleton LEFT JOIN next_hold n ON true
-			WHERE ea.id=$1 AND ea.send_recovery_task_id=$2 AND ea.send_recovery_reason='unknown'`, mailboxID, result.TaskID)
-		if err != nil {
+			WHERE ea.id=$1 AND ea.send_recovery_task_id=$2 AND ea.send_recovery_reason='unknown'`, mailboxID, taskID)
+	return err
+}
+
+func persistSendHold(ctx context.Context, tx pgx.Tx, mailboxID uuid.UUID, result models.SendEmailResult, state string) error {
+	if state != "unknown" {
+		if err := refreshUnknownSendHold(ctx, tx, mailboxID, result.TaskID); err != nil {
 			return err
 		}
 	}

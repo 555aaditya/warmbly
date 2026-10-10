@@ -196,3 +196,106 @@ func TestLiveSendRecoveryResolutionRequiresEvidenceAndRetainsUnknown(t *testing.
 		t.Fatal("operator evidence reference was not retained", history)
 	}
 }
+
+func TestLiveUnstartedDispatchRetainsDeferredOutcomeConflict(t *testing.T) {
+	for _, action := range []string{"cancel outbound", "defer warmup"} {
+		for _, anotherUnknown := range []bool{false, true} {
+			t.Run(action+map[bool]string{false: "/conflict", true: "/another unknown then conflict"}[anotherUnknown], func(t *testing.T) {
+				f, r := lineageFixture(t)
+				ctx := t.Context()
+				exec := func(query string, args ...any) {
+					t.Helper()
+					if _, err := f.pool.Exec(ctx, query, args...); err != nil {
+						t.Fatal(err)
+					}
+				}
+				exec(`UPDATE tasks SET status='completed',completed_at=NOW()-INTERVAL '5 minutes',send_result_state='unknown' WHERE id=$1`, f.task)
+				exec(`UPDATE email_accounts SET send_recovery_hold=true,send_recovery_reason='unknown',send_recovery_task_id=$2 WHERE id=$1`, f.sender, f.task)
+				resolution := models.SendRecoveryResolution{HeldTaskID: f.task, HeldReason: "unknown", EvidenceType: "operator_confirmed_not_sent", ConfirmationReference: "Provider confirmation fixture"}
+				repo := NewEmailRepostory(&db.DB{Pool: f.pool}, nil)
+				if _, xerr := repo.Update(ctx, f.org.String(), f.sender.String(), &models.UpdateEmail{SendRecoveryResolution: &resolution}); xerr != nil {
+					t.Fatal(xerr)
+				}
+				results, err := r.ListUnappliedSendResults(ctx, 200)
+				if err != nil || len(results) != 1 || results[0].TaskID != f.task {
+					t.Fatal("confirmed outcome unavailable", err, len(results))
+				}
+				if err := r.ApplySendResult(ctx, results[0], func(context.Context) error { return nil }); err != nil {
+					t.Fatal(err)
+				}
+				task, worker, nonce := uuid.New(), uuid.New(), uuid.New()
+				exec(`INSERT INTO fleet_nodes(id,role,active,last_seen_at,warmup_send_protocol)VALUES($1,'worker',true,NOW(),2)`, worker)
+				t.Cleanup(func() { _, _ = f.pool.Exec(context.Background(), `DELETE FROM fleet_nodes WHERE id=$1`, worker) })
+				lane := "email"
+				var executorNonce any = nonce
+				if action == "defer warmup" {
+					lane = "warmup"
+					executorNonce = nil
+				}
+				exec(`INSERT INTO tasks(id,email_account_id,task_type,status,message_id,send_result_state,send_executor_worker,send_executor_nonce)
+				VALUES($1,$2,$3,'completed','','unknown',$4,$5)`, task, f.sender, lane, worker, executorNonce)
+				if action == "defer warmup" {
+					exec(`INSERT INTO warmup_tasks(task_id,dispatch_worker_id,dispatch_nonce)VALUES($1,$2,$3)`, task, worker, nonce)
+				}
+				exec(`UPDATE email_accounts SET send_recovery_hold=true,send_recovery_reason='unknown',send_recovery_task_id=$2 WHERE id=$1`, f.sender, task)
+				if err := r.ApplySendResult(ctx, models.SendEmailResult{TaskID: f.task, Success: true, MessageID: "late-native@example.test"}, func(context.Context) error {
+					t.Fatal("contradictory result changed committed accounting")
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				var recorded bool
+				if err := f.pool.QueryRow(ctx, `SELECT conflict_detected_at IS NOT NULL FROM send_recovery_resolutions WHERE recovery_task_id=$1 AND previous_reason='unknown'`, f.task).Scan(&recorded); err != nil || !recorded {
+					t.Fatal("native contradiction not retained", recorded, err)
+				}
+				other := uuid.New()
+				if anotherUnknown {
+					exec(`INSERT INTO tasks(id,email_account_id,task_type,status,message_id,send_result_state)VALUES($1,$2,'email','completed','','unknown')`, other, f.sender)
+				}
+				if action == "defer warmup" {
+					err = r.DeferWarmupDispatch(ctx, task, f.sender, worker, nonce, time.Now().Add(time.Hour))
+				} else {
+					err = r.CancelOutbound(ctx, task, f.sender, worker, nonce)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				var held bool
+				var reason *string
+				var heldTask *uuid.UUID
+				if err := f.pool.QueryRow(ctx, `SELECT send_recovery_hold,send_recovery_reason,send_recovery_task_id FROM email_accounts WHERE id=$1`, f.sender).Scan(&held, &reason, &heldTask); err != nil {
+					t.Fatal(err)
+				}
+				if anotherUnknown {
+					if !held || reason == nil || *reason != "unknown" || heldTask == nil || *heldTask != other {
+						t.Fatal("unstarted dispatch did not transfer the remaining unknown hold", held, reason, heldTask)
+					}
+					if err := r.ApplySendResult(ctx, models.SendEmailResult{TaskID: other, Success: true}, func(context.Context) error { return nil }); err != nil {
+						t.Fatal(err)
+					}
+					if err := f.pool.QueryRow(ctx, `SELECT send_recovery_hold,send_recovery_reason,send_recovery_task_id FROM email_accounts WHERE id=$1`, f.sender).Scan(&held, &reason, &heldTask); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if !held || reason == nil || *reason != "conflict" || heldTask == nil || *heldTask != f.task {
+					t.Fatalf("unstarted dispatch erased authoritative conflict: held=%v reason=%v task=%v", held, reason, heldTask)
+				}
+				admission, err := r.GetSendAdmission(ctx, f.org, f.sender, models.InboxProviderSMTPIMAP, time.Now())
+				if err != nil || admission.Allowed || admission.HoldReason != "conflict" {
+					t.Fatal("conflicting outcomes allowed another provider send", admission, err)
+				}
+				if action == "defer warmup" {
+					state, err := r.BeginWarmupDispatch(ctx, task, f.sender, worker, nonce)
+					if err != nil || state.State == "execute" {
+						t.Fatal("deferred nonce still executable", state, err)
+					}
+				} else {
+					state, err := r.InspectOutbound(ctx, task, f.sender, worker)
+					if err != nil || state.State != "denied" {
+						t.Fatal("cancelled nonce still executable", state, err)
+					}
+				}
+			})
+		}
+	}
+}

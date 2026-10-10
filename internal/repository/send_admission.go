@@ -503,7 +503,7 @@ func (r *taskRepository) cancelOutbound(ctx context.Context, task, mailbox, work
 			return err
 		}
 	}
-	if _, err = tx.Exec(ctx, `UPDATE email_accounts SET send_recovery_hold=false,send_recovery_task_id=NULL,send_recovery_reason=NULL WHERE id=$1 AND send_recovery_reason='unknown' AND send_recovery_task_id=$2 AND NOT EXISTS(SELECT 1 FROM tasks WHERE email_account_id=$1 AND send_result_state='unknown')`, mailbox, task); err != nil {
+	if err = refreshUnknownSendHold(ctx, tx, mailbox, task); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
