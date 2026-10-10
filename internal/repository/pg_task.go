@@ -914,8 +914,10 @@ func (r *taskRepository) RecordDispatchAttempt(ctx context.Context, taskID uuid.
 		    WHERE id=$1 AND status='pending'`, taskID, retryAt)
 		return err
 	}
-	_, err := r.db.Exec(ctx, `UPDATE tasks SET dispatch_retry_at=NULL,
-	    dispatch_failure_since=NULL,dispatch_failure_at=NULL WHERE id=$1`, taskID)
+	_, err := r.db.Exec(ctx, `UPDATE tasks SET dispatch_retry_at=CASE
+	    WHEN status='pending' AND scheduled_at<=NOW() THEN GREATEST(dispatch_retry_at,$2)
+	    ELSE NULL END,
+	    dispatch_failure_since=NULL,dispatch_failure_at=NULL WHERE id=$1`, taskID, retryAt)
 	return err
 }
 
