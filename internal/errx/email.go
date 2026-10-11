@@ -148,6 +148,35 @@ func MError(eType MailErrorType, code MailErrorCode, message string, resolveMeth
 	}
 }
 
+const (
+	MailConnectionReasonDNSFailure    = "DNS lookup failed"
+	MailConnectionReasonDNSTimeout    = "DNS lookup timed out"
+	MailConnectionReasonCertificate   = "TLS certificate validation failed"
+	MailConnectionReasonWorkerAddress = "worker network address unavailable"
+	MailConnectionReasonRefused       = "connection refused"
+	MailConnectionReasonRoute         = "network route unavailable"
+	MailConnectionReasonClosed        = "connection closed"
+	MailConnectionReasonTimeout       = "connection timed out"
+	MailConnectionReasonFailed        = "connection failed"
+	MailConnectionStageIMAPDial       = "IMAP dial"
+	MailConnectionStageIMAPTLS        = "IMAP TLS"
+	MailConnectionStageIMAPSTARTTLS   = "IMAP STARTTLS"
+	mailServerUnreachableFormat       = "The connection to the mail server could not be established (%s: %s). The server may be offline or blocking the connection."
+)
+
+func IsKnownIMAPConnectionMessage(message string) bool {
+	for _, stage := range [...]string{MailConnectionStageIMAPDial, MailConnectionStageIMAPTLS, MailConnectionStageIMAPSTARTTLS} {
+		for _, reason := range [...]string{MailConnectionReasonDNSFailure, MailConnectionReasonDNSTimeout, MailConnectionReasonCertificate,
+			MailConnectionReasonWorkerAddress, MailConnectionReasonRefused, MailConnectionReasonRoute, MailConnectionReasonClosed,
+			MailConnectionReasonTimeout, MailConnectionReasonFailed} {
+			if message == fmt.Sprintf(mailServerUnreachableFormat, stage, reason) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 var (
 	ErrMailUpdateLimit     = MError(MailErrorCritical, MailErrorCodeUpdateLimit, "Your inbox has received an unusually large number of updates. Please reactivate your inbox once the issue is resolved.", MailErrorResolveMethodReload)
 	ErrMailGoogleAuth      = MError(MailErrorCritical, MailErrorCodeGoogleAuth, "Cannot access your Gmail account. Please re-authorize your account to restore mailbox access.", MailErrorResolveMethodReload)
@@ -167,7 +196,7 @@ var (
 		return MError(
 			MailErrorWarning,
 			MailErrorCodeServerUnreachable,
-			fmt.Sprintf("The connection to the mail server could not be established (%s: %s). The server may be offline or blocking the connection.", stage, cause),
+			fmt.Sprintf(mailServerUnreachableFormat, stage, cause),
 			MailErrorResolveMethodRetry,
 		)
 	}

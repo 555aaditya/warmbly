@@ -1,15 +1,53 @@
 package imap
 
 import (
+	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"strings"
+	"syscall"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/rs/zerolog/log"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 )
+
+func connectionFailureReason(err error) string {
+	var dns *net.DNSError
+	if errors.As(err, &dns) {
+		if dns.IsTimeout {
+			return errx.MailConnectionReasonDNSTimeout
+		}
+		return errx.MailConnectionReasonDNSFailure
+	}
+	var unknownAuthority x509.UnknownAuthorityError
+	var invalidCertificate x509.CertificateInvalidError
+	var wrongHost x509.HostnameError
+	if errors.As(err, &unknownAuthority) || errors.As(err, &invalidCertificate) || errors.As(err, &wrongHost) {
+		return errx.MailConnectionReasonCertificate
+	}
+	if errors.Is(err, syscall.EADDRNOTAVAIL) {
+		return errx.MailConnectionReasonWorkerAddress
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return errx.MailConnectionReasonRefused
+	}
+	if errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.EHOSTUNREACH) {
+		return errx.MailConnectionReasonRoute
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+		return errx.MailConnectionReasonClosed
+	}
+	var netErr net.Error
+	if errors.Is(err, context.DeadlineExceeded) || errors.As(err, &netErr) && netErr.Timeout() {
+		return errx.MailConnectionReasonTimeout
+	}
+	return errx.MailConnectionReasonFailed
+}
 
 func (c *Client) handleError(err error) *errx.MailError {
 	if errors.Is(err, errSyncViewMoved) {

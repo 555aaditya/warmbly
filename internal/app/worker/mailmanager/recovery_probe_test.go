@@ -1,6 +1,7 @@
 package mailmanager
 
 import (
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -38,8 +39,12 @@ func TestRecoveryProbeFailedReplacementRetainsStoppedButReofferRecovers(t *testi
 	creds.IMAP = &models.Service{Host: "127.0.0.1", Port: port, Username: "local", Password: "local", Security: models.MailSecurityNone}
 	s.Credentials = &creds
 	retry.SmtpImap, retry.ImapSync = &s, true
-	if err := m.AddWMail(t.Context(), &retry); err != errx.ErrMailServerUnreachable {
-		t.Fatalf("initial unavailable provider: %v", err)
+	loadErr := m.AddWMail(t.Context(), &retry)
+	var failure *errx.MailError
+	want := errx.ErrMailServerUnreachableAt(errx.MailConnectionStageIMAPDial, errors.New(errx.MailConnectionReasonRefused))
+	if !errors.As(loadErr, &failure) || failure.Type != want.Type || failure.Code != want.Code ||
+		failure.ResolveMethod != want.ResolveMethod || failure.Message != want.Message || !errx.IsKnownIMAPConnectionMessage(failure.Message) {
+		t.Fatalf("initial unavailable provider: %v", loadErr)
 	}
 	if m.Get(d.ID) != old || !m.Has(d.ID) || old.Ctx.Err() == nil {
 		t.Fatal("failed replacement did not retain stopped pointer")
@@ -50,7 +55,7 @@ func TestRecoveryProbeFailedReplacementRetainsStoppedButReofferRecovers(t *testi
 	if old.SameExecution(d) || old.SameExecution(&retry) {
 		t.Fatal("stopped pointer bypasses reload on republish")
 	}
-	old.CaptureError(errx.ErrMailServerUnreachable)
+	old.CaptureError(failure)
 	if events != 0 {
 		t.Fatal("retired pointer emitted a fresh transport report")
 	}

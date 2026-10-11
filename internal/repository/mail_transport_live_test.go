@@ -2,12 +2,15 @@ package repository
 
 import (
 	"context"
+	"errors"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
 	"github.com/warmbly/warmbly/internal/models"
 )
@@ -73,6 +76,308 @@ func (f transportFixture) errors(t *testing.T, unresolved bool) []EmailAccountEr
 		t.Fatal(err)
 	}
 	return rows
+}
+
+func TestLiveMailTransportOnlyCurrentWorkerObservationUpdatesConnectionReason(t *testing.T) {
+	for _, op := range []models.MailTransportOperation{models.MailTransportUnknown, models.MailTransportSync} {
+		for _, tc := range []struct{ name, message string }{
+			{"raw_cause", errx.ErrMailServerUnreachableAt("IMAP dial", errors.New("synthetic.invalid password=synthetic")).Message},
+			{"unsupported_stage", errx.ErrMailServerUnreachableAt("IMAP unsupported", errors.New("connection refused")).Message},
+			{"trailing_text", errx.ErrMailServerUnreachableAt("IMAP TLS", errors.New("TLS certificate validation failed")).Message + " synthetic-private"},
+		} {
+			t.Run(string(op)+"/"+tc.name, func(t *testing.T) {
+				f := newTransportFixture(t)
+				at := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+				report := func(message string) {
+					t.Helper()
+					d := f.report(op, &at)
+					d.Message = message
+					d.UserMessage = &d.Message
+					if _, err := f.repo.CreateOnce(t.Context(), d); err != nil {
+						t.Fatal(err)
+					}
+					at = at.Add(time.Minute)
+				}
+				assertMessage := func(want string) {
+					t.Helper()
+					rows := f.errors(t, true)
+					if len(rows) != 1 || rows[0].Message != want || rows[0].UserMessage == nil || *rows[0].UserMessage != want {
+						t.Fatal("malformed incoming message acquired precise authority")
+					}
+				}
+				generic := errx.ErrMailServerUnreachable.Message
+				report(generic)
+				report(tc.message)
+				assertMessage(generic)
+				precise := errx.ErrMailServerUnreachableAt("IMAP dial", errors.New("connection refused")).Message
+				report(precise)
+				assertMessage(precise)
+				report(tc.message)
+				assertMessage(generic)
+			})
+		}
+		t.Run(string(op)+"/malformed_existing", func(t *testing.T) {
+			f := newTransportFixture(t)
+			at := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+			malformed := errx.ErrMailServerUnreachableAt("IMAP old", errors.New("synthetic-private")).Message
+			d := f.report(op, &at)
+			d.Message = malformed
+			d.UserMessage = &d.Message
+			if _, err := f.repo.CreateOnce(t.Context(), d); err != nil {
+				t.Fatal(err)
+			}
+			d.Message = errx.ErrMailServerUnreachable.Message
+			if _, err := f.repo.CreateOnce(t.Context(), d); err != nil {
+				t.Fatal(err)
+			}
+			if rows := f.errors(t, true); len(rows) != 1 || rows[0].Message != malformed || rows[0].UserMessage == nil || *rows[0].UserMessage != malformed {
+				t.Fatal("same-time report rewrote historical message")
+			}
+			later := at.Add(time.Minute)
+			d.ObservedAt = &later
+			if _, err := f.repo.CreateOnce(t.Context(), d); err != nil {
+				t.Fatal(err)
+			}
+			if rows := f.errors(t, true); len(rows) != 1 || rows[0].Message != errx.ErrMailServerUnreachable.Message || rows[0].UserMessage == nil || *rows[0].UserMessage != rows[0].Message || !rows[0].CreatedAt.Equal(later) {
+				t.Fatal("malformed existing prefix gained a fresh diagnostic clock")
+			}
+		})
+		for _, clock := range []string{"nil", "zero", "epoch", "negative", "future"} {
+			t.Run(string(op)+"/first_insert_clock/"+clock, func(t *testing.T) {
+				f := newTransportFixture(t)
+				var observed *time.Time
+				switch clock {
+				case "zero":
+					observed = new(time.Time)
+				case "epoch", "negative", "future":
+					value := time.Unix(0, 0).UTC()
+					if clock == "negative" {
+						value = time.Unix(-1, 0).UTC()
+					} else if clock == "future" {
+						value = time.Now().Add(time.Hour).UTC()
+					}
+					observed = &value
+				}
+				d := f.report(op, observed)
+				d.Message = errx.ErrMailServerUnreachableAt(errx.MailConnectionStageIMAPDial, errors.New(errx.MailConnectionReasonRefused)).Message
+				d.UserMessage = &d.Message
+				before := time.Now().UTC().Truncate(time.Second)
+				row, err := f.repo.CreateOnce(t.Context(), d)
+				if err != nil || row == nil || row.Message != errx.ErrMailServerUnreachable.Message || row.UserMessage == nil || *row.UserMessage != row.Message || row.ObservationSource != "receipt" || row.Operation != op || row.CreatedAt.Before(before) {
+					t.Fatal("first warning gave invalid-clock evidence a precise reason", err)
+				}
+			})
+			t.Run(string(op)+"/invalid_clock/"+clock, func(t *testing.T) {
+				f := newTransportFixture(t)
+				at := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+				d := f.report(op, &at)
+				d.Message = errx.ErrMailServerUnreachableAt(errx.MailConnectionStageIMAPDial, errors.New(errx.MailConnectionReasonRefused)).Message
+				d.UserMessage = &d.Message
+				if _, err := f.repo.CreateOnce(t.Context(), d); err != nil {
+					t.Fatal(err)
+				}
+				var invalid *time.Time
+				switch clock {
+				case "zero":
+					invalid = new(time.Time)
+				case "epoch", "negative", "future":
+					value := time.Unix(0, 0).UTC()
+					if clock == "negative" {
+						value = time.Unix(-1, 0).UTC()
+					} else if clock == "future" {
+						value = time.Now().Add(time.Hour).UTC()
+					}
+					invalid = &value
+				}
+				d.ObservedAt = invalid
+				d.Message = errx.ErrMailServerUnreachableAt(errx.MailConnectionStageIMAPTLS, errors.New(errx.MailConnectionReasonCertificate)).Message
+				before := time.Now().UTC().Truncate(time.Second)
+				if _, err := f.repo.CreateOnce(t.Context(), d); err != nil {
+					t.Fatal(err)
+				}
+				rows := f.errors(t, true)
+				if len(rows) != 1 || rows[0].Message != errx.ErrMailServerUnreachable.Message || rows[0].UserMessage == nil || *rows[0].UserMessage != rows[0].Message || rows[0].ObservationSource != "receipt" || rows[0].ReceivedAt == nil || rows[0].CreatedAt.Before(before) {
+					t.Fatal("invalid clock presented a specific reason as fresh worker evidence")
+				}
+			})
+		}
+		for _, legacy := range []string{"nil_user_message", "custom_user_message", "other_error_code", "unclassified_message"} {
+			t.Run(string(op)+"/legacy_compatibility/"+legacy, func(t *testing.T) {
+				f := newTransportFixture(t)
+				at := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+				d := f.report(op, &at)
+				d.TransportGeneration = uuid.Nil
+				d.Message = errx.ErrMailServerUnreachableAt(errx.MailConnectionStageIMAPDial, errors.New(errx.MailConnectionReasonRefused)).Message
+				custom := "Legacy user-facing warning"
+				if legacy != "nil_user_message" {
+					d.UserMessage = &custom
+				}
+				switch legacy {
+				case "other_error_code":
+					d.ErrorCode = "CONNECTION_LOST"
+				case "unclassified_message":
+					d.Message = "Legacy transport warning"
+				}
+				wantMessage := errx.ErrMailServerUnreachable.Message
+				if legacy == "other_error_code" || legacy == "unclassified_message" {
+					wantMessage = d.Message
+				}
+				row, err := f.repo.CreateOnce(t.Context(), d)
+				if err != nil || row == nil || row.Message != wantMessage || !reflect.DeepEqual(row.UserMessage, d.UserMessage) || row.ErrorCode != d.ErrorCode || row.Operation != models.MailTransportUnknown {
+					t.Fatal("classified first-insert guard changed unrelated legacy fields", err)
+				}
+				later := at.Add(time.Minute)
+				d.ObservedAt, d.TransportGeneration = &later, f.generation
+				if _, err := f.repo.CreateOnce(t.Context(), d); err != nil {
+					t.Fatal(err)
+				}
+				if rows := f.errors(t, true); len(rows) == 0 || !reflect.DeepEqual(rows[0].UserMessage, d.UserMessage) {
+					t.Fatal("classified refresh changed custom or absent legacy user message")
+				}
+			})
+		}
+		t.Run(string(op)+"/foreign_user", func(t *testing.T) {
+			f := newTransportFixture(t)
+			at := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+			d := f.report(op, &at)
+			d.Message = errx.ErrMailServerUnreachableAt(errx.MailConnectionStageIMAPDial, errors.New(errx.MailConnectionReasonRefused)).Message
+			if _, err := f.repo.CreateOnce(t.Context(), d); err != nil {
+				t.Fatal(err)
+			}
+			before := f.errors(t, false)
+			later := at.Add(time.Minute)
+			d.ObservedAt, d.UserID = &later, uuid.New()
+			d.Message = errx.ErrMailServerUnreachableAt(errx.MailConnectionStageIMAPTLS, errors.New(errx.MailConnectionReasonCertificate)).Message
+			if row, err := f.repo.CreateOnce(t.Context(), d); err != nil || row != nil {
+				t.Fatal("foreign user acquired mailbox warning authority", err)
+			}
+			if !reflect.DeepEqual(before, f.errors(t, false)) {
+				t.Fatal("foreign user changed mailbox warning evidence")
+			}
+		})
+		t.Run(string(op)+"/resolved_row", func(t *testing.T) {
+			f := newTransportFixture(t)
+			at := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+			d := f.report(op, &at)
+			old, err := f.repo.CreateOnce(t.Context(), d)
+			if err != nil || old == nil {
+				t.Fatal("initial warning missing", err)
+			}
+			if err := f.repo.Resolve(t.Context(), old.ID, "local test"); err != nil {
+				t.Fatal(err)
+			}
+			before := f.errors(t, false)
+			later := at.Add(time.Minute)
+			d.ObservedAt = &later
+			d.Message = errx.ErrMailServerUnreachableAt(errx.MailConnectionStageIMAPTLS, errors.New(errx.MailConnectionReasonCertificate)).Message
+			fresh, err := f.repo.CreateOnce(t.Context(), d)
+			if err != nil || fresh == nil || fresh.ID == old.ID || fresh.Message != d.Message || !fresh.CreatedAt.Equal(later) || fresh.ResolvedAt != nil {
+				t.Fatal("fresh warning reused resolved history", err)
+			}
+			rows := f.errors(t, false)
+			if len(rows) != 2 || !reflect.DeepEqual(rows[1], before[0]) || len(f.errors(t, true)) != 1 {
+				t.Fatal("fresh warning changed resolved history")
+			}
+		})
+		for _, generation := range []string{"missing", "mismatched"} {
+			t.Run(string(op)+"/generation/"+generation, func(t *testing.T) {
+				f := newTransportFixture(t)
+				at := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+				d := f.report(op, &at)
+				d.Message = errx.ErrMailServerUnreachableAt(errx.MailConnectionStageIMAPDial, errors.New(errx.MailConnectionReasonRefused)).Message
+				if _, err := f.repo.CreateOnce(t.Context(), d); err != nil {
+					t.Fatal(err)
+				}
+				before := f.errors(t, true)
+				later := at.Add(time.Minute)
+				d.ObservedAt = &later
+				d.TransportGeneration = uuid.Nil
+				if generation == "mismatched" {
+					d.TransportGeneration = uuid.New()
+				}
+				d.Message = errx.ErrMailServerUnreachableAt(errx.MailConnectionStageIMAPTLS, errors.New(errx.MailConnectionReasonCertificate)).Message
+				if _, err := f.repo.CreateOnce(t.Context(), d); err != nil {
+					t.Fatal(err)
+				}
+				rows := f.errors(t, true)
+				wantCount := 1
+				if op == models.MailTransportSync {
+					wantCount = 2
+				}
+				if len(rows) != wantCount || rows[0].Operation != models.MailTransportUnknown || rows[0].Message != errx.ErrMailServerUnreachable.Message || !rows[0].CreatedAt.Equal(later) {
+					t.Fatal("unverified generation presented a specific current connection reason")
+				}
+				if op == models.MailTransportSync && !reflect.DeepEqual(rows[1], before[0]) {
+					t.Fatal("ambiguous generation changed current sync warning authority")
+				}
+			})
+		}
+	}
+	for _, op := range []models.MailTransportOperation{models.MailTransportUnknown, models.MailTransportSync} {
+		t.Run(string(op), func(t *testing.T) {
+			f := newTransportFixture(t)
+			at := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+			report := func(generation uuid.UUID, observed *time.Time, message string) {
+				t.Helper()
+				data := f.report(op, observed)
+				data.TransportGeneration = generation
+				data.Message = message
+				if _, err := f.repo.CreateOnce(t.Context(), data); err != nil {
+					t.Fatal(err)
+				}
+			}
+			assertCurrent := func(want string, when time.Time) {
+				t.Helper()
+				var count int
+				var actual string
+				var stored time.Time
+				if err := f.pool.QueryRow(t.Context(),
+					`SELECT count(*) OVER(),message,created_at FROM email_account_errors
+					 WHERE email_account_id=$1 AND error_code='SERVER_UNREACHABLE'
+					 AND operation=$2 AND resolved_at IS NULL`, f.account, op,
+				).Scan(&count, &actual, &stored); err != nil || count != 1 || actual != want || !stored.Equal(when) {
+					t.Fatalf("current warning: count=%d message=%q time=%s want=%q at=%s err=%v", count, actual, stored, want, when, err)
+				}
+			}
+
+			generic := errx.ErrMailServerUnreachable.Message
+			report(f.generation, &at, generic)
+			fresh := at.Add(time.Minute)
+			classified := errx.ErrMailServerUnreachableAt("IMAP dial", errors.New("connection refused")).Message
+			report(f.generation, &fresh, classified)
+			assertCurrent(classified, fresh)
+			report(f.generation, &at, "stale source message")
+			report(f.generation, &fresh, "same-second ambiguous message")
+			assertCurrent(classified, fresh)
+
+			later := fresh.Add(time.Minute)
+			report(f.generation, &later, "provider response includes private detail")
+			assertCurrent(generic, later)
+			newer := later.Add(time.Minute)
+			classified = errx.ErrMailServerUnreachableAt("IMAP TLS", errors.New("TLS certificate validation failed")).Message
+			report(f.generation, &newer, classified)
+			assertCurrent(classified, newer)
+			if op == models.MailTransportUnknown {
+				oldGeneration := newer.Add(time.Minute)
+				report(uuid.New(), &oldGeneration, "older restored mailbox details")
+				assertCurrent(generic, oldGeneration)
+				rows := f.errors(t, true)
+				if len(rows) != 1 || rows[0].Operation != models.MailTransportUnknown {
+					t.Fatalf("ambiguous report changed warning scope: %+v", rows)
+				}
+			} else {
+				unverified := time.Now().Add(time.Hour)
+				report(f.generation, &unverified, "future timestamp is not a worker observation")
+				var message, source string
+				if err := f.pool.QueryRow(t.Context(),
+					`SELECT message,observation_source FROM email_account_errors
+					 WHERE email_account_id=$1 AND operation=$2 AND resolved_at IS NULL`, f.account, op,
+				).Scan(&message, &source); err != nil || message != generic || source != "receipt" {
+					t.Fatalf("unverified timestamp presented as fresh IMAP cause: %q source=%q err=%v", message, source, err)
+				}
+			}
+		})
+	}
 }
 
 func TestLiveMailTransportOperationIsolationAndUnknownHold(t *testing.T) {

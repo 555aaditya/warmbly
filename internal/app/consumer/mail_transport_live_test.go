@@ -1,13 +1,124 @@
 package jobs
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/errx"
+	"github.com/warmbly/warmbly/internal/infrastructure/pubsub"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/repository"
 )
+
+type transportWarningPayload struct {
+	UserID  string            `json:"user_id"`
+	EmailID string            `json:"email_id"`
+	Data    map[string]string `json:"data"`
+}
+
+type transportWarningBus struct {
+	events []transportWarningPayload
+}
+
+func (b *transportWarningBus) Publish(_ context.Context, _ string, data interface{}, _ map[string]string) error {
+	encoded, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	var event transportWarningPayload
+	if err := json.Unmarshal(encoded, &event); err != nil {
+		return err
+	}
+	b.events = append(b.events, event)
+	return nil
+}
+
+func TestLiveMailTransportConnectionReasonNotificationUsesRecordedEvidence(t *testing.T) {
+	for _, op := range []models.MailTransportOperation{models.MailTransportUnknown, models.MailTransportSync} {
+		for _, observation := range []string{"current", "missing_generation", "mismatched_generation", "nil_clock", "negative_clock", "future_clock"} {
+			for _, userMessage := range []string{"mirrored", "missing", "custom", "private_nil"} {
+				t.Run(string(op)+"/"+observation+"/"+userMessage, func(t *testing.T) {
+					d := liveDB(t)
+					f := newSendResultFixture(t, d)
+					if _, err := d.Exec(t.Context(), `INSERT INTO organization_members (organization_id,user_id,role,accepted_at) VALUES ($1,$2,'owner',NOW())`, f.org, f.user); err != nil {
+						t.Fatal(err)
+					}
+					var generation uuid.UUID
+					if err := d.QueryRow(t.Context(), `SELECT transport_generation FROM email_accounts WHERE id=$1`, f.mailbox).Scan(&generation); err != nil {
+						t.Fatal(err)
+					}
+					bus := &transportWarningBus{}
+					repo := repository.NewEmailAccountErrorRepository(d)
+					s := &JobsService{EmailAccountErrorRepository: repo, StreamingPublisher: pubsub.NewStreamingPublisher(bus, repository.NewEventAudienceRepository(d.Pool))}
+					mailErr := errx.ErrMailServerUnreachableAt(errx.MailConnectionStageIMAPDial, errors.New(errx.MailConnectionReasonRefused))
+					info := mailErr.GetUserErrorInfo()
+					event := models.EmailErrorEvent{
+						EmailAccountID: f.mailbox.String(), UserID: f.user.String(),
+						ErrorCode: string(mailErr.Code), ErrorType: string(mailErr.Type), ResolveMethod: string(mailErr.ResolveMethod),
+						Message: mailErr.Message, UserMessage: info.Message, UserTitle: info.Title, UserVisible: true,
+						Operation: op, TransportGeneration: generation, Timestamp: time.Now().Add(-time.Minute).Unix(),
+					}
+					wantMessage, wantSource, wantOperation := mailErr.Message, models.MailTransportObservationSource("worker"), op
+					if observation != "current" {
+						wantMessage = errx.ErrMailServerUnreachable.Message
+					}
+					switch observation {
+					case "missing_generation":
+						event.TransportGeneration, wantOperation = uuid.Nil, models.MailTransportUnknown
+					case "mismatched_generation":
+						event.TransportGeneration, wantOperation = uuid.New(), models.MailTransportUnknown
+					case "nil_clock", "negative_clock", "future_clock":
+						wantSource = "receipt"
+						event.Timestamp = 0
+						if observation == "negative_clock" {
+							event.Timestamp = -1
+						} else if observation == "future_clock" {
+							event.Timestamp = time.Now().Add(time.Hour).Unix()
+						}
+					}
+					wantUserMessage, wantNotification := wantMessage, wantMessage
+					switch userMessage {
+					case "missing":
+						event.UserMessage, wantUserMessage, wantNotification = "", "", ""
+						if wantMessage == errx.ErrMailServerUnreachable.Message {
+							wantNotification = wantMessage
+						}
+					case "custom":
+						event.UserMessage = "Legacy account warning"
+						wantUserMessage, wantNotification = event.UserMessage, event.UserMessage
+					case "private_nil":
+						event.Message = "Legacy private transport detail"
+						wantMessage = event.Message
+						event.UserMessage, wantUserMessage, wantNotification = "", "", ""
+					}
+					for range 2 {
+						if err := s.HandleEmailServerError(t.Context(), event); err != nil {
+							t.Fatal(err)
+						}
+					}
+					rows, err := repo.GetByAccountID(t.Context(), f.mailbox, true)
+					if err != nil || len(rows) != 1 || rows[0].Message != wantMessage || rows[0].Operation != wantOperation || rows[0].ObservationSource != wantSource {
+						t.Fatal("stored first warning gained unverified precision or changed scope", err)
+					}
+					if wantUserMessage == "" && rows[0].UserMessage != nil || wantUserMessage != "" && (rows[0].UserMessage == nil || *rows[0].UserMessage != wantUserMessage) {
+						t.Fatal("stored warning changed explicit legacy user text")
+					}
+					if len(bus.events) != 1 || bus.events[0].UserID != f.user.String() || bus.events[0].EmailID != f.mailbox.String() || bus.events[0].Data["message"] != wantNotification {
+						t.Fatal("notification disagreed with stored warning or repeated on redelivery")
+					}
+					var currentGeneration uuid.UUID
+					if err := d.QueryRow(t.Context(), `SELECT transport_generation FROM email_accounts WHERE id=$1`, f.mailbox).Scan(&currentGeneration); err != nil || currentGeneration != generation {
+						t.Fatal("diagnostic changed mailbox generation", err)
+					}
+				})
+			}
+		}
+	}
+}
 
 func TestLiveMailTransportConfirmedSendReconcilesOnlySend(t *testing.T) {
 	for _, rollback := range []bool{false, true} {
