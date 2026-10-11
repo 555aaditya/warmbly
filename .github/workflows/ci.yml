@@ -228,6 +228,23 @@ jobs:
           go test -race ./internal/tasks -run '^Test(LiveWarmup(SafetyHoldReschedules|Recovery|TaskDoesNotApplyResults|DispatchDefersInvalidHours)|WarmupSenderDistinguishes)' -count=1
           go test -race ./internal/app/consumer -run '^TestLiveStoredSendResult' -count=1
 
+      - name: Monitoring database observation regressions (PostgreSQL)
+        env:
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+        run: |
+          set -euo pipefail
+          go test -race -v ./internal/repository -run '^TestLiveMonitoringDatabaseClock' -count=1 | tee monitoring-clock.log
+          if grep -q -- '--- SKIP:' monitoring-clock.log; then
+            echo "Monitoring database observation regressions must execute without skips"
+            exit 1
+          fi
+          for test in TestLiveMonitoringDatabaseClockAfterRequestStart \
+            TestLiveMonitoringDatabaseClockWarningSemantics \
+            TestLiveMonitoringDatabaseClockPredicateBoundaries \
+            TestLiveMonitoringDatabaseClockSingleSnapshot; do
+            grep -q "^--- PASS: $test " monitoring-clock.log
+          done
+
       - name: Warmup charge and authoritative result regressions (PostgreSQL)
         env:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
