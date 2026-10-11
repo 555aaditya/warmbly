@@ -47,6 +47,7 @@ Read the report, pick the groups to apply, and confirm.
 - Archives are kept for 7 days and then deleted automatically.
 - The passphrase is never stored. If you lose it, the credentials in that archive cannot be recovered.
 - An import runs as one transaction. If anything fails, nothing lands.
+- Mailbox overwrite preserves report history, send audit and restrictive holds. Recovery is checked automatically against the destination's newly loaded mailbox transport; an old or in-flight result cannot clear restored transport warnings. Skipped mailboxes are unaffected.
 - To move a whole self-hosted install, use `warmblyctl backup` and `warmblyctl restore` instead.
 
 <Fold>
@@ -94,6 +95,10 @@ Inbox, send history, delivery events, and logs are the ones that grow without li
 The pending warmup-filing queue stays on its source instance. The destination resyncs mail and files recognized warmup messages using its own workers and the mailbox's placement setting.
 
 Warmup statistics travel as history. Per-task charge and refund markers reset on import so settling an old task cannot refund another send's destination statistics. Whole-instance database backups retain these markers.
+
+Mailbox transport-error reports travel as history, retaining every report ID, observation timestamp, task reference and recorded resolution. Their operation and observation provenance reset to unknown, including overwrite imports and older archives without those fields. Imported and legacy historical reports do not share the uniqueness rule for new, locally observed reports and are not automatically cleared by a successful sync or send. Unknown history means recovery is unverified, not that a provider is still failing.
+
+Instance-local transport-success clocks do not travel with an archive. The mailbox transport generation is omitted from exported rows, manifest columns and stored-result/confirmation JSON envelopes; other result and audit evidence remains intact. Importing a new mailbox or overwriting an existing one creates its own destination generation and invalidates only that mailbox's derived transport clocks in the same transaction. Skipped mailboxes and mailboxes not in the archive keep their generation and clocks. This does not clear restrictive send holds, confirmed-task evidence or accounting history.
 
 Send-recovery audit rows also travel as history, including operator confirmations and payload-free contradictory outcome metadata. Their local provenance resets on import. A source-instance confirmation cannot become an executable result or release a conflict hold on the destination. Unknown outcomes stay restrictive until independent authoritative worker results or a fresh local administrator/provider confirmation resolves them; importing an archive never authorizes a resend. Recovery uses available authoritative results automatically, without a new customer sending or connection step. Only unresolved evidence needs administrator verification, not customer log investigation.
 

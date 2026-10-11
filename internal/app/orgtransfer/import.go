@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 
@@ -260,6 +261,33 @@ func (s *service) importTable(
 			}
 		}
 	}
+	for _, c := range t.ResetColumnsOnOverwrite {
+		if writable[c] && reset[c] && !slices.Contains(resetOnOverwrite, c) {
+			resetOnOverwrite = append(resetOnOverwrite, c)
+		}
+	}
+	var invalidations []repository.ImportInvalidation
+	for _, relation := range t.InvalidateOnImport {
+		columns, err := s.repo.TableColumns(ctx, relation.Table)
+		if err != nil {
+			return 0, nil, fmt.Errorf("inspect checkpoint relation %s: %w", relation.Table, err)
+		}
+		if len(columns) > 0 {
+			if len(relation.ResetColumns) > 0 {
+				var available []string
+				for _, c := range relation.ResetColumns {
+					if slices.ContainsFunc(columns, func(info repository.ColumnInfo) bool { return info.Name == c }) {
+						available = append(available, c)
+					}
+				}
+				if len(available) == 0 {
+					continue
+				}
+				relation.ResetColumns = available
+			}
+			invalidations = append(invalidations, relation)
+		}
+	}
 
 	insertCols := make([]string, 0, len(mt.Columns))
 	unknown := 0
@@ -328,7 +356,7 @@ func (s *service) importTable(
 		if foreign > 0 {
 			return fmt.Errorf("%s: %w", t.Name, ErrForeignRows)
 		}
-		n, err := s.repo.InsertBatch(ctx, tx, t.Name, insertCols, batch, ic.conflict, pk, t.OwnerScope(), orgID, resetOnOverwrite)
+		n, err := s.repo.InsertBatch(ctx, tx, t.Name, insertCols, batch, ic.conflict, pk, t.OwnerScope(), orgID, resetOnOverwrite, invalidations)
 		if err != nil {
 			return err
 		}

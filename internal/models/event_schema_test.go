@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"testing"
@@ -69,13 +70,16 @@ func TestEventAvroReadsPreUpgradeEnvelopes(t *testing.T) {
 			t.Fatal(err)
 		}
 		var got WorkerEvent
-		if err := EventAvro.Unmarshal(WorkerEvent{}.Schema(), payload, &got); err != nil {
+		if err := EventAvro.Unmarshal(preTransportSchema(t, WorkerEvent{}.Schema()), payload, &got); err != nil {
 			t.Fatal(err)
 		}
 		if got.Type != WorkerEventTypeAddEmail {
 			t.Fatalf("worker type changed: %s", got.Type)
 		}
-		assertBody(t, got.Body, sample(WorkerEventBodies[WorkerEventTypeAddEmail]))
+		want := sample(WorkerEventBodies[WorkerEventTypeAddEmail]).(*AddWorkerEmail)
+		want.TransportGeneration = [16]byte{}
+		want.Sync.State.TransportGeneration = [16]byte{}
+		assertBody(t, got.Body, want)
 	})
 	t.Run("job", func(t *testing.T) {
 		payload, err := base64.StdEncoding.DecodeString("FEVNQUlMX1NFTlQiSDgxODE4MTgxLTgxODEtODE4MS04MTgxLTgxODE4MTgxODE4MQECeAJ4AniA8IbC7mUCAgJ4AngOAngCeAJ4AngCeIDwhsLuZQKA8IbC7mUCeAJ4AngCeAECeAJ4AngCeAJ4")
@@ -83,14 +87,66 @@ func TestEventAvroReadsPreUpgradeEnvelopes(t *testing.T) {
 			t.Fatal(err)
 		}
 		var got JobEvent
-		if err := EventAvro.Unmarshal(JobEvent{}.Schema(), payload, &got); err != nil {
+		if err := EventAvro.Unmarshal(preTransportSchema(t, JobEvent{}.Schema()), payload, &got); err != nil {
 			t.Fatal(err)
 		}
 		if got.Type != JobEventTypeEmailSent {
 			t.Fatalf("job type changed: %s", got.Type)
 		}
-		assertBody(t, got.Body, sample(JobEventBodies[JobEventTypeEmailSent]))
+		want := sample(JobEventBodies[JobEventTypeEmailSent]).(SendEmailResult)
+		want.TransportGeneration = [16]byte{}
+		assertBody(t, got.Body, want)
 	})
+}
+
+// Unframed fixtures need their writer schema, just as registry decoding does.
+func preTransportSchema(t *testing.T, schema avro.Schema) avro.Schema {
+	t.Helper()
+	doc, err := SchemaDocument(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root any
+	if err := json.Unmarshal([]byte(doc), &root); err != nil {
+		t.Fatal(err)
+	}
+	var strip func(any)
+	strip = func(v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			if fields, ok := x["fields"].([]any); ok {
+				kept := fields[:0]
+				for _, f := range fields {
+					field := f.(map[string]any)
+					if field["name"] == "transport_generation" || x["name"] == "EmailErrorEvent" && field["name"] == "operation" {
+						continue
+					}
+					strip(f)
+					kept = append(kept, f)
+				}
+				x["fields"] = kept
+			}
+			for k, value := range x {
+				if k != "fields" {
+					strip(value)
+				}
+			}
+		case []any:
+			for _, value := range x {
+				strip(value)
+			}
+		}
+	}
+	strip(root)
+	old, err := json.Marshal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := avro.Parse(string(old))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
 }
 
 // The decoded body has to arrive as the type the handler asserts on, carrying

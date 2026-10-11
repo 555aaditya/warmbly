@@ -59,6 +59,7 @@ type SmtpImapData struct {
 }
 
 type WMail struct {
+	TransportGeneration uuid.UUID
 	lifecycleMu         sync.Mutex
 	stopped             bool
 	stopDone            chan struct{}
@@ -155,13 +156,14 @@ func NewWMail(
 	mailCtx, cancel := context.WithCancel(context.Background())
 
 	mail := &WMail{
-		ID:        data.ID,
-		UserID:    data.UserID,
-		OrgID:     data.OrganizationID,
-		Email:     data.Email,
-		FirstName: data.FirstName,
-		LastName:  data.LastName,
-		EmailType: data.Type,
+		ID:                  data.ID,
+		UserID:              data.UserID,
+		TransportGeneration: data.TransportGeneration,
+		OrgID:               data.OrganizationID,
+		Email:               data.Email,
+		FirstName:           data.FirstName,
+		LastName:            data.LastName,
+		EmailType:           data.Type,
 		// Unset in the payload means yes; see AddWorkerEmail.SavesSentCopy.
 		SaveToSent: data.Type == models.InboxProviderSMTPIMAP && data.SavesSentCopy(),
 		onEvent: func(jobType models.JobEventType, body any) error {
@@ -207,6 +209,7 @@ func NewWMail(
 			State:   st,
 		})
 	})
+	mail.tracker.transportGeneration = mail.TransportGeneration
 
 	switch data.Type {
 	case models.InboxProviderGoogle:

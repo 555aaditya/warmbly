@@ -3,6 +3,7 @@ package wmail
 import (
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/warmbly/warmbly/internal/models"
 )
@@ -16,11 +17,12 @@ const syncStateHeartbeat = 10 * time.Minute
 // of the tick; the consumer persists it and the loader hands it back on the
 // next assignment.
 type syncTracker struct {
-	state        models.SyncState
-	dirty        bool
-	lastSent     time.Time
-	emit         func(models.SyncState) error
-	tickComplete bool
+	transportGeneration uuid.UUID
+	state               models.SyncState
+	dirty               bool
+	lastSent            time.Time
+	emit                func(models.SyncState) error
+	tickComplete        bool
 }
 
 func newSyncTracker(seed *models.SyncState, emit func(models.SyncState) error) *syncTracker {
@@ -28,6 +30,8 @@ func newSyncTracker(seed *models.SyncState, emit func(models.SyncState) error) *
 	if seed != nil {
 		t.state = *seed
 	}
+	// A loaded checkpoint is not a completed pass in this worker incarnation.
+	t.state.TransportGeneration = uuid.Nil
 	if t.state.BackfillStatus == "" {
 		t.state.BackfillStatus = models.SyncBackfillPending
 	}
@@ -86,6 +90,7 @@ func (t *syncTracker) setFoldersSkipped(cap, conflict int) {
 func (t *syncTracker) touch(now time.Time) {
 	stamp := now
 	t.state.LastSyncedAt = &stamp
+	t.state.TransportGeneration = t.transportGeneration
 	t.flush(now)
 }
 

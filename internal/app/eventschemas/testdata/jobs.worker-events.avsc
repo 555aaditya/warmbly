@@ -11,6 +11,16 @@
           "fields": [
             {
               "default": "",
+              "name": "transport_generation",
+              "type": "string"
+            },
+            {
+              "default": "",
+              "name": "operation",
+              "type": "string"
+            },
+            {
+              "default": "",
               "name": "task_id",
               "type": "string"
             },
@@ -709,11 +719,17 @@
                 "folders_skipped_conflict": 0,
                 "last_synced_at": null,
                 "throttle_reason": "",
-                "throttled_until": null
+                "throttled_until": null,
+                "transport_generation": ""
               },
               "name": "state",
               "type": {
                 "fields": [
+                  {
+                    "default": "",
+                    "name": "transport_generation",
+                    "type": "string"
+                  },
                   {
                     "default": "",
                     "name": "backfill_status",
@@ -979,6 +995,11 @@
         },
         {
           "fields": [
+            {
+              "default": "",
+              "name": "transport_generation",
+              "type": "string"
+            },
             {
               "default": "",
               "name": "task_id",

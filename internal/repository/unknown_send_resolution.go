@@ -106,7 +106,7 @@ func (r *taskRepository) ListUnappliedSendResults(ctx context.Context, limit int
 	 WHERE r.previous_reason='unknown' AND r.conflict_detected_at IS NULL AND r.confirmed_result IS NOT NULL AND r.recorded_locally_at IS NOT NULL
 	 AND w.dispatch_result IS NOT NULL AND t.send_result_applied_at IS NOT NULL AND t.status<>'cancelled'
 	 UNION ALL
-	 SELECT t.id,t.created_at,t.send_result_state,t.send_result_applied_at,r.confirmed_result,2 FROM send_recovery_resolutions r JOIN tasks t ON t.id=r.recovery_task_id
+	 SELECT t.id,t.created_at,t.send_result_state,t.send_result_applied_at,r.confirmed_result-'transport_generation',2 FROM send_recovery_resolutions r JOIN tasks t ON t.id=r.recovery_task_id
 	 WHERE r.confirmed_result IS NOT NULL AND r.recorded_locally_at IS NOT NULL
 	 AND (t.send_result_applied_at IS NULL OR (`+repairableSendDeadLetterPredicate+`)) AND t.status<>'cancelled'
 	 ),

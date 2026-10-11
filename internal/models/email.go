@@ -38,11 +38,12 @@ const (
 )
 
 type Email struct {
-	ID             uuid.UUID  `json:"id"`
-	UserID         string     `json:"user_id"`
-	OrganizationID *uuid.UUID `json:"organization_id,omitempty"`
-	WorkerID       *uuid.UUID `json:"worker_id"`
-	Email          string     `json:"email"`
+	TransportGeneration uuid.UUID  `json:"-"`
+	ID                  uuid.UUID  `json:"id"`
+	UserID              string     `json:"user_id"`
+	OrganizationID      *uuid.UUID `json:"organization_id,omitempty"`
+	WorkerID            *uuid.UUID `json:"worker_id"`
+	Email               string     `json:"email"`
 
 	Name           string `json:"name"`
 	SignaturePlain string `json:"signature_plain"`
