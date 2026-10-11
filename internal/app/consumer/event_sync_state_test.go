@@ -11,6 +11,8 @@ import (
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
+var syncTestGeneration = uuid.New()
+
 // stubSyncStateRepo accepts what the worker relays.
 type stubSyncStateRepo struct {
 	repository.EmailSyncStateRepository
@@ -34,6 +36,8 @@ type stubErrorRepo struct {
 	resolvedBy     string
 	resolvedBefore time.Time
 	calls          int
+	operation      models.MailTransportOperation
+	fail           bool
 }
 
 func (s *stubErrorRepo) ResolveByCodesBefore(_ context.Context, _ uuid.UUID, codes []string, before time.Time, by string) *errx.Error {
@@ -41,7 +45,15 @@ func (s *stubErrorRepo) ResolveByCodesBefore(_ context.Context, _ uuid.UUID, cod
 	s.resolvedCodes = append(s.resolvedCodes, codes...)
 	s.resolvedBefore = before
 	s.resolvedBy = by
+	if s.fail {
+		return errx.InternalError()
+	}
 	return nil
+}
+
+func (s *stubErrorRepo) RecordTransportSuccess(ctx context.Context, id uuid.UUID, operation models.MailTransportOperation, at time.Time, _ *uuid.UUID, _ uuid.UUID) *errx.Error {
+	s.operation = operation
+	return s.ResolveByCodesBefore(ctx, id, transientMailErrorCodes, at, string(operation)+" recovered")
 }
 
 // Nothing but a credential reconnect ever resolved an error row, so a mailbox
@@ -61,7 +73,7 @@ func TestSyncStateClearsTransientMailErrors(t *testing.T) {
 	if err := s.HandleSyncState(context.Background(), &models.JobEventSyncState{
 		UserID:  uuid.New(),
 		EmailID: emailID,
-		State:   models.SyncState{BackfillStatus: models.SyncBackfillComplete, LastSyncedAt: &syncedAt},
+		State:   models.SyncState{TransportGeneration: syncTestGeneration, BackfillStatus: models.SyncBackfillComplete, LastSyncedAt: &syncedAt},
 	}); err != nil {
 		t.Fatalf("HandleSyncState: %v", err)
 	}
@@ -72,6 +84,9 @@ func TestSyncStateClearsTransientMailErrors(t *testing.T) {
 
 	if errRepo.calls != 1 {
 		t.Fatalf("resolved errors %d times, want once per relayed state", errRepo.calls)
+	}
+	if errRepo.operation != models.MailTransportSync {
+		t.Fatal("sync recovery did not carry explicit operation scope")
 	}
 	want := map[string]bool{"SERVER_UNREACHABLE": true, "CONNECTION_LOST": true, "RESOURCE_NOT_FOUND": true, "IMAP_UNKNOWN": true}
 	for _, code := range errRepo.resolvedCodes {
@@ -99,7 +114,7 @@ func TestSyncStateLeavesActionableErrorsAlone(t *testing.T) {
 	if err := s.HandleSyncState(context.Background(), &models.JobEventSyncState{
 		UserID:  uuid.New(),
 		EmailID: uuid.New(),
-		State:   models.SyncState{LastSyncedAt: &syncedAt},
+		State:   models.SyncState{TransportGeneration: syncTestGeneration, LastSyncedAt: &syncedAt},
 	}); err != nil {
 		t.Fatalf("HandleSyncState: %v", err)
 	}
@@ -136,5 +151,47 @@ func TestSyncStateWithoutATimestampResolvesNothing(t *testing.T) {
 	}
 	if errRepo.calls != 0 {
 		t.Errorf("resolved errors %d times from a state with no timestamp to bound it by", errRepo.calls)
+	}
+}
+
+func TestSyncStateRejectsIncompleteAndInvalidSuccessClocks(t *testing.T) {
+	old := time.Now().Add(-time.Hour)
+	future := time.Now().Add(time.Hour)
+	zero := time.Time{}
+	for _, state := range []models.SyncState{
+		{TransportGeneration: syncTestGeneration, LastSyncedAt: &future}, {TransportGeneration: syncTestGeneration, LastSyncedAt: &zero},
+		{TransportGeneration: syncTestGeneration, LastSyncedAt: &old, Deferred: 1},
+		{TransportGeneration: syncTestGeneration, LastSyncedAt: &old, BackfillCursor: models.SyncCursor{GoogleRecovery: &models.GoogleHistoryRecovery{}}},
+	} {
+		errRepo := &stubErrorRepo{}
+		s := &JobsService{EmailSyncStateRepository: &stubSyncStateRepo{}, EmailAccountErrorRepository: errRepo}
+		if err := s.HandleSyncState(t.Context(), &models.JobEventSyncState{EmailID: uuid.New(), State: state}); err != nil {
+			t.Fatal(err)
+		}
+		if errRepo.calls != 0 {
+			t.Fatal("incomplete/future state was treated as recovery")
+		}
+	}
+}
+
+func TestSyncStateRecoveryRetriesBeforeStateIsStored(t *testing.T) {
+	at := time.Now().Add(-time.Minute)
+	older := at.Add(-time.Minute)
+	errRepo := &stubErrorRepo{fail: true}
+	stateRepo := &stubSyncStateRepo{saved: &models.SyncState{TransportGeneration: syncTestGeneration, LastSyncedAt: &older}}
+	s := &JobsService{EmailSyncStateRepository: stateRepo, EmailAccountErrorRepository: errRepo}
+	event := &models.JobEventSyncState{EmailID: uuid.New(), State: models.SyncState{TransportGeneration: syncTestGeneration, LastSyncedAt: &at}}
+	if err := s.HandleSyncState(t.Context(), event); err == nil {
+		t.Fatal("recovery failure was acknowledged")
+	}
+	if stateRepo.put != nil {
+		t.Fatal("state stored before recovery, suppressing an idempotent retry")
+	}
+	errRepo.fail = false
+	if err := s.HandleSyncState(t.Context(), event); err != nil {
+		t.Fatal(err)
+	}
+	if errRepo.calls != 2 {
+		t.Fatal("recovery failure suppressed retry")
 	}
 }

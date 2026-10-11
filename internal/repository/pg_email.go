@@ -223,8 +223,33 @@ type EmailRepository interface {
 }
 
 type emailRepository struct {
-	DB      *db.DB
-	Encrypt *encrypt.Encrypter
+	DB                *db.DB
+	Encrypt           *encrypt.Encrypter
+	transportSnapshot pgx.Tx
+}
+
+type EmailTransportSnapshot interface {
+	WithTransportSnapshot(context.Context, func(EmailRepository) error) error
+}
+
+func (r *emailRepository) WithTransportSnapshot(ctx context.Context, read func(EmailRepository) error) error {
+	tx, err := r.DB.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	snapshot := &emailRepository{DB: r.DB, Encrypt: r.Encrypt, transportSnapshot: tx}
+	if err := read(snapshot); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (r *emailRepository) transportQueryRow(ctx context.Context, query string, args ...any) pgx.Row {
+	if r.transportSnapshot != nil {
+		return r.transportSnapshot.QueryRow(ctx, query, args...)
+	}
+	return r.DB.QueryRow(ctx, query, args...)
 }
 
 // NewEmailRepostory builds the email repository. enc seals SMTP/IMAP and
@@ -493,7 +518,7 @@ func (r *emailRepository) GetDelegation(ctx context.Context, accountID uuid.UUID
 		WHERE id = $1 AND auth_method = 'delegated' AND domain_grant_id IS NOT NULL AND organization_id IS NOT NULL`
 	var d models.DelegatedMailbox
 	var provider string
-	err := r.DB.QueryRow(ctx, query, accountID).Scan(&d.AccountID, &d.OrganizationID, &provider, &d.Email, &d.GrantID, &d.Subject, &d.Status)
+	err := r.transportQueryRow(ctx, query, accountID).Scan(&d.AccountID, &d.OrganizationID, &provider, &d.Email, &d.GrantID, &d.Subject, &d.Status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -2253,6 +2278,7 @@ func (r *emailRepository) SetWarmupLifecycle(ctx context.Context, orgID, emailAc
 func (r *emailRepository) GetByID(ctx context.Context, emailAccountID uuid.UUID) (*models.Email, *errx.Error) {
 	query := `
 		SELECT
+		 ea.transport_generation,
 		 ea.id, ea.user_id, ea.organization_id, ea.worker_id, ea.email, ea.name, ea.signature_plain, ea.signature_html, ea.signature_sync, ea.signature_code, ea.send_as_email,
 		 ea.provider, ea.mail_host, ea.auth_method, ea.domain_grant_id, ea.vendor_connection_id, COALESCE((SELECT vc.vendor FROM mailbox_vendor_connections vc WHERE vc.id = ea.vendor_connection_id), ''), ea.avatar_url, ea.status, COALESCE(ea.last_synced_at, ea.created_at) AS last_synced_at, ea.last_id, ea.campaign_limit,
 		 ea.min_wait_time, ea.reply_to, ea.tracking_domain, ea.tracking_domain_verified, ea.tracking_domain_verified_at, ea.track_direct_mail, ea.warmup, ea.warmup_paused_at, ea.warmup_base,
@@ -2268,7 +2294,8 @@ func (r *emailRepository) GetByID(ctx context.Context, emailAccountID uuid.UUID)
 	`
 
 	var i models.Email
-	err := r.DB.QueryRow(ctx, query, emailAccountID).Scan(
+	err := r.transportQueryRow(ctx, query, emailAccountID).Scan(
+		&i.TransportGeneration,
 		&i.ID, &i.UserID, &i.OrganizationID, &i.WorkerID, &i.Email, &i.Name, &i.SignaturePlain, &i.SignatureHTML, &i.SignatureSync, &i.SignatureCode, &i.SendAsEmail,
 		&i.Provider, &i.MailHost, &i.AuthMethod, &i.DomainGrantID, &i.VendorConnectionID, &i.Vendor, &i.AvatarURL, &i.Status, &i.LastSyncedAt, &i.LastID, &i.CampaignLimit,
 		&i.MinWaitTime, &i.ReplyTo, &i.TrackingDomain, &i.TrackingDomainVerified, &i.TrackingDomainVerifiedAt, &i.TrackDirectMail, &i.Warmup, &i.WarmupPausedAt, &i.WarmupBase,
@@ -2589,7 +2616,7 @@ func (r *emailRepository) GetSMTPCredentials(ctx context.Context, emailAccountID
 	var creds SMTPCredentials
 	var smtpHost, smtpUser, smtpPassword, imapHost, imapUser, imapPassword string
 
-	err := r.DB.QueryRow(ctx, query, emailAccountID).Scan(
+	err := r.transportQueryRow(ctx, query, emailAccountID).Scan(
 		&smtpHost, &creds.SMTPPort, &smtpUser, &smtpPassword, &creds.SMTPSecurity,
 		&imapHost, &creds.IMAPPort, &imapUser, &imapPassword, &creds.IMAPSecurity,
 	)
@@ -2652,7 +2679,7 @@ func (r *emailRepository) GetOAuthCredentials(ctx context.Context, emailAccountI
 	var accessToken, refreshToken string
 	var expiresAt time.Time
 
-	err := r.DB.QueryRow(ctx, query, emailAccountID).Scan(
+	err := r.transportQueryRow(ctx, query, emailAccountID).Scan(
 		&accessToken, &refreshToken, &expiresAt,
 	)
 	if err != nil {
@@ -2674,7 +2701,7 @@ func (r *emailRepository) GetOAuthCredentials(ctx context.Context, emailAccountI
 		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
-	if accessLegacy || refreshLegacy {
+	if (accessLegacy || refreshLegacy) && r.transportSnapshot == nil {
 		r.resealOAuthCredentials(ctx, emailAccountID, decryptedAccessToken, decryptedRefreshToken)
 	}
 

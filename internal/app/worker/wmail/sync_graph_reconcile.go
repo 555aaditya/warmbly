@@ -160,7 +160,7 @@ func (w *WMail) graphSyncError(err error) *errx.MailError {
 	if errors.As(err, &merr) {
 		return merr
 	}
-	w.CaptureError(err)
+	w.captureSyncError(err)
 	return nil
 }
 

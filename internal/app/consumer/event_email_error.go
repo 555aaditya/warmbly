@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -275,21 +276,25 @@ func (s *JobsService) HandleEmailServerError(ctx context.Context, event models.E
 	recorded := true
 	if s.EmailAccountErrorRepository != nil {
 		errorRecord := &repository.CreateEmailAccountError{
-			EmailAccountID: emailAccountID,
-			UserID:         userID,
-			ErrorCode:      event.ErrorCode,
-			Severity:       "WARNING",
-			ResolveMethod:  event.ResolveMethod,
-			Title:          event.UserTitle,
-			Message:        event.Message,
-			UserMessage:    ptrString(event.UserMessage),
-			ActionRequired: ptrString(event.ActionRequired),
-			TaskID:         taskID,
+			EmailAccountID:      emailAccountID,
+			UserID:              userID,
+			ErrorCode:           event.ErrorCode,
+			Severity:            "WARNING",
+			ResolveMethod:       event.ResolveMethod,
+			Title:               event.UserTitle,
+			Message:             event.Message,
+			UserMessage:         ptrString(event.UserMessage),
+			ActionRequired:      ptrString(event.ActionRequired),
+			TaskID:              taskID,
+			ObservedAt:          serverErrorObservedAt(event.Timestamp),
+			Operation:           serverErrorOperation(event.Operation, taskID, event.TaskID != ""),
+			TransportGeneration: event.TransportGeneration,
 		}
 
 		row, xerr := s.EmailAccountErrorRepository.CreateOnce(ctx, errorRecord)
 		if xerr != nil {
 			log.Error().Str("error", xerr.Message).Msg("Failed to store server error")
+			return xerr
 		}
 		recorded = xerr == nil && row != nil
 	}
@@ -310,6 +315,21 @@ func (s *JobsService) HandleEmailServerError(ctx context.Context, event models.E
 	}
 
 	return nil
+}
+
+func serverErrorObservedAt(timestamp int64) *time.Time {
+	if timestamp <= 0 || timestamp > time.Now().Unix() {
+		return nil
+	}
+	observed := time.Unix(timestamp, 0).UTC()
+	return &observed
+}
+
+func serverErrorOperation(operation models.MailTransportOperation, taskID *uuid.UUID, taskProvided bool) models.MailTransportOperation {
+	if operation == models.MailTransportSync && taskProvided || operation == models.MailTransportSend && (taskID == nil || *taskID == uuid.Nil) {
+		return models.MailTransportUnknown
+	}
+	return operation.Conservative()
 }
 
 // ptrString returns a pointer to a string, or nil if empty

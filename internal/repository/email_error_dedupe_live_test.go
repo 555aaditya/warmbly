@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/models"
 )
 
 // Issue #405: a self-hosted instance whose IMAP server refused the same
@@ -45,6 +46,7 @@ func TestLiveEmailErrorDedupeKeepsOneUnresolvedRowPerCode(t *testing.T) {
 			arg any
 		}{
 			{`DELETE FROM email_account_errors WHERE email_account_id = $1`, account},
+			{`DELETE FROM tasks WHERE email_account_id = $1`, account},
 			{`DELETE FROM email_accounts WHERE organization_id = $1`, org},
 			{`DELETE FROM organizations WHERE id = $1`, org},
 			{`DELETE FROM users WHERE id = $1`, user},
@@ -55,15 +57,20 @@ func TestLiveEmailErrorDedupeKeepsOneUnresolvedRowPerCode(t *testing.T) {
 		}
 	})
 
+	var generation uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT transport_generation FROM email_accounts WHERE id=$1`, account).Scan(&generation); err != nil {
+		t.Fatal(err)
+	}
 	row := func(code string) *CreateEmailAccountError {
 		return &CreateEmailAccountError{
-			EmailAccountID: account,
-			UserID:         user,
-			ErrorCode:      code,
-			Severity:       "WARNING",
-			ResolveMethod:  "RETRY",
-			Title:          "Email Error",
-			Message:        "Something went wrong: NO System Error",
+			TransportGeneration: generation,
+			EmailAccountID:      account,
+			UserID:              user,
+			ErrorCode:           code,
+			Severity:            "WARNING",
+			ResolveMethod:       "RETRY",
+			Title:               "Email Error",
+			Message:             "Something went wrong: NO System Error",
 		}
 	}
 
@@ -106,7 +113,7 @@ func TestLiveEmailErrorDedupeKeepsOneUnresolvedRowPerCode(t *testing.T) {
 	if xerr != nil || len(rows) != 1 || rows[0].CreatedAt.Before(before) {
 		t.Fatalf("ongoing failure observation expired: %+v %v", rows, xerr)
 	}
-	if xerr := repo.ResolveByCodesBefore(ctx, account, []string{"IMAP_UNKNOWN"}, before, "stale success"); xerr != nil {
+	if xerr := repo.RecordTransportSuccess(ctx, account, models.MailTransportSync, time.Now().Add(-3*time.Hour), nil, generation); xerr != nil {
 		t.Fatal(xerr)
 	}
 	if n := unresolved("IMAP_UNKNOWN"); n != 1 {
@@ -120,6 +127,53 @@ func TestLiveEmailErrorDedupeKeepsOneUnresolvedRowPerCode(t *testing.T) {
 	}
 	if other == nil {
 		t.Fatal("a different error code must still be recorded")
+	}
+	workerTime := time.Now().Add(-2 * time.Hour).UTC().Truncate(time.Second)
+	late := row("RESOURCE_NOT_FOUND")
+	late.Operation = models.MailTransportSync
+	late.ObservedAt = &workerTime
+	firstLate, xerr := repo.CreateOnce(ctx, late)
+	if xerr != nil || firstLate == nil || !firstLate.CreatedAt.Equal(workerTime) {
+		t.Fatalf("delayed event looked fresh instead of retaining worker time: %v %v", firstLate, xerr)
+	}
+	newerTime := time.Now().Add(-5 * time.Minute).UTC().Truncate(time.Second)
+	late.ObservedAt = &newerTime
+	if _, xerr := repo.CreateOnce(ctx, late); xerr != nil {
+		t.Fatal(xerr)
+	}
+	late.ObservedAt = &workerTime
+	if _, xerr := repo.CreateOnce(ctx, late); xerr != nil {
+		t.Fatal(xerr)
+	}
+	var stored time.Time
+	if err := pool.QueryRow(ctx, `SELECT created_at FROM email_account_errors WHERE id=$1`, firstLate.ID).Scan(&stored); err != nil || !stored.Equal(newerTime) {
+		t.Fatalf("redelivery moved the latest worker observation backwards: %v %v", stored, err)
+	}
+
+	taskID := uuid.New()
+	exec(`INSERT INTO tasks(id,task_type,email_account_id,status,message_id,scheduled_at)
+	      VALUES($1,'warmup',$2,'pending','',NOW())`, taskID, account)
+	send := row("CONNECTION_LOST")
+	send.Operation = models.MailTransportSend
+	send.TaskID = &taskID
+	if _, xerr := repo.CreateOnce(ctx, send); xerr != nil {
+		t.Fatal(xerr)
+	}
+	if xerr := repo.RecordTransportSuccess(ctx, account, models.MailTransportSync, time.Now().Add(-time.Second), nil, generation); xerr != nil {
+		t.Fatal(xerr)
+	}
+	if unresolved("RESOURCE_NOT_FOUND") != 0 || unresolved("CONNECTION_LOST") != 1 {
+		t.Fatal("inbound sync cleared a task-scoped send failure or kept an older sync error")
+	}
+	send.ErrorCode = "SERVER_UNREACHABLE"
+	if _, xerr := repo.CreateOnce(ctx, send); xerr != nil {
+		t.Fatal(xerr)
+	}
+	if xerr := repo.RecordTransportSuccess(ctx, account, models.MailTransportSync, time.Now().Add(-time.Second), nil, generation); xerr != nil {
+		t.Fatal(xerr)
+	}
+	if unresolved("SERVER_UNREACHABLE") != 2 {
+		t.Fatal("deduping a send error into a mailbox report lost its send scope")
 	}
 
 	// Once the mailbox recovers and the row is resolved, the next occurrence
@@ -179,6 +233,8 @@ func TestLiveEmailErrorDedupeSurvivesConcurrentRelays(t *testing.T) {
 	})
 
 	const racers = 8
+	firstObserved := time.Now().Add(-2 * time.Hour).UTC().Truncate(time.Second)
+	sendTask := uuid.New()
 	var (
 		wg      sync.WaitGroup
 		mu      sync.Mutex
@@ -190,6 +246,11 @@ func TestLiveEmailErrorDedupeSurvivesConcurrentRelays(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
+			observed := firstObserved.Add(time.Duration(i) * time.Minute)
+			var taskID *uuid.UUID
+			if i == racers-1 {
+				taskID = &sendTask
+			}
 			row, xerr := repo.CreateOnce(ctx, &CreateEmailAccountError{
 				EmailAccountID: account,
 				UserID:         user,
@@ -198,6 +259,8 @@ func TestLiveEmailErrorDedupeSurvivesConcurrentRelays(t *testing.T) {
 				ResolveMethod:  "RETRY",
 				Title:          "Email Error",
 				Message:        "Something went wrong: NO System Error",
+				ObservedAt:     &observed,
+				TaskID:         taskID,
 			})
 			mu.Lock()
 			defer mu.Unlock()
@@ -224,5 +287,13 @@ func TestLiveEmailErrorDedupeSurvivesConcurrentRelays(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("unresolved rows = %d after %d concurrent relays, want 1", n, racers)
+	}
+	var observed time.Time
+	var taskID *uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT created_at,task_id FROM email_account_errors WHERE email_account_id=$1 AND resolved_at IS NULL`, account).Scan(&observed, &taskID); err != nil {
+		t.Fatal(err)
+	}
+	if !observed.Equal(firstObserved.Add((racers-1)*time.Minute)) || taskID == nil || *taskID != sendTask {
+		t.Fatalf("concurrent initial reports lost the latest observation or send context: %v %v", observed, taskID)
 	}
 }

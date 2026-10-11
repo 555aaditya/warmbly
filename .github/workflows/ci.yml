@@ -253,6 +253,52 @@ jobs:
 
           go test -race -v -p 1 ./internal/app/consumer -run '^TestLiveAdvancedBounceReconciliationRollbackAndReplayWithOneConnection$' -count=1
 
+      - name: Typed mailbox history, archive checkpoint and real-driver upgrade regressions (PostgreSQL)
+        env:
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+        run: |
+          set -o pipefail
+          go test -race -v -p 1 ./internal/infrastructure/db -run '^TestLiveMailTransport(CLIStartup|UpgradePreservesHistoryAndRollback)$' -count=1 | tee mailbox-transport-upgrade.log
+          grep -q '^--- PASS: TestLiveMailTransportCLIStartup ' mailbox-transport-upgrade.log
+          grep -q '^--- PASS: TestLiveMailTransportUpgradePreservesHistoryAndRollback ' mailbox-transport-upgrade.log
+          ! grep -q -- '--- SKIP:' mailbox-transport-upgrade.log
+          go test -race -v -p 1 ./internal/repository ./internal/app/orgtransfer ./internal/app/consumer -run '^TestLive(MailTransport.*|ImportMailTransport.*)$' -count=1 | tee mailbox-transport-runtime.log
+          for test in TestLiveMailTransportNativeDomainExcludesHistory TestLiveMailTransportImportSerializesWithConfirmedResult TestLiveImportMailTransportCheckpointCountsAndUnchangedRows TestLiveMailTransportConfirmedSendReconcilesOnlySend TestLiveImportMailTransportLateAndSpanningSuccess TestLiveImportMailTransportCredentialOnlyWritesRotateFence TestLiveImportMailTransportExportOmitsGeneration TestLiveImportMailTransportWholeArchiveOmitsGeneration TestLiveMailTransportSnapshotKeepsConfigurationAndGenerationTogether TestLiveMailTransportOperatorConfirmationDoesNotRecover; do
+            grep -q "^--- PASS: $test " mailbox-transport-runtime.log
+          done
+          ! grep -q -- '--- SKIP:' mailbox-transport-runtime.log
+          grep -q '^--- PASS: TestLiveImportMailTransportWholeArchiveSendResultLockOrder ' mailbox-transport-runtime.log
+          for logfile in mailbox-transport-upgrade.log mailbox-transport-runtime.log; do
+            test "$(grep -c '^=== RUN' "$logfile")" -gt 0
+            printf '%s RUN=%s PASS=%s SKIP=0\n' "$logfile" "$(grep -c '^=== RUN' "$logfile")" "$(grep -c -- '--- PASS:' "$logfile")"
+          done
+          go test -race -v -p 1 ./internal/app/worker/wmail ./internal/app/worker/mailmanager ./internal/app/consumer -run '^Test(MailTransportGeneration.*|SyncState.*)$' -count=1 | tee mailbox-transport-worker.log
+          grep -q '^--- PASS: TestMailTransportGenerationRequiresFreshCompletedSyncPass ' mailbox-transport-worker.log
+          grep -q '^--- PASS: TestMailTransportGenerationReplacesUnchangedCredentialsAndDrains ' mailbox-transport-worker.log
+          ! grep -q -- '--- SKIP:' mailbox-transport-worker.log
+
+      - name: Typed mailbox JSON and native Avro registry compatibility
+        env:
+          SR_URL: http://127.0.0.1:18181
+        run: |
+          set -o pipefail
+          docker run -d --name mailbox-transport-registry -p 18181:8081 redpandadata/redpanda:v24.3.13 redpanda start --mode dev-container --smp 1 --memory 512M --reserve-memory 0M --node-id 0 --check=false
+          trap 'docker rm -f mailbox-transport-registry' EXIT
+          ready=false
+          for attempt in $(seq 1 60); do
+            if curl -fsS "$SR_URL/subjects" >/dev/null; then ready=true; break; fi
+            sleep 1
+          done
+          test "$ready" = true
+          go test -tags kafka -race -v -p 1 ./internal/infrastructure/codec -run '^TestMailTransportCodec.*Compatibility$' -count=1 | tee mailbox-transport-codec.log
+          grep -q '^--- PASS: TestMailTransportCodecJSONCompatibility ' mailbox-transport-codec.log
+          grep -q '^--- PASS: TestMailTransportCodecRegistryCompatibility ' mailbox-transport-codec.log
+          for testcase in add send sync error; do
+            grep -q -- "--- PASS: TestMailTransportCodecRegistryCompatibility/$testcase " mailbox-transport-codec.log
+          done
+          ! grep -q -- '--- SKIP:' mailbox-transport-codec.log
+          printf 'codec RUN=%s PASS=%s SKIP=0\n' "$(grep -c '^=== RUN' mailbox-transport-codec.log)" "$(grep -c -- '--- PASS:' mailbox-transport-codec.log)"
+
       - name: Mailbox sync admission, replay, truthful state and upgrade regressions (PostgreSQL)
         env:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable

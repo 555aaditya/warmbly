@@ -120,10 +120,11 @@ type EmailSendError struct {
 
 // SendEmailResult is the result from worker after sending email
 type SendEmailResult struct {
-	TaskID        uuid.UUID `json:"task_id" avro:"task_id"`
-	Success       bool      `json:"success" avro:"success"`
-	MessageID     string    `json:"message_id,omitempty" avro:"message_id"`
-	ProviderMsgID string    `json:"provider_msg_id,omitempty" avro:"provider_msg_id"`
+	TransportGeneration uuid.UUID `json:"transport_generation,omitempty" avro:"transport_generation"`
+	TaskID              uuid.UUID `json:"task_id" avro:"task_id"`
+	Success             bool      `json:"success" avro:"success"`
+	MessageID           string    `json:"message_id,omitempty" avro:"message_id"`
+	ProviderMsgID       string    `json:"provider_msg_id,omitempty" avro:"provider_msg_id"`
 	// ThreadID is the provider-side conversation the message landed in, for
 	// the providers that have one (Gmail). The control plane records it
 	// against the task so the next step of the sequence can be appended to
@@ -157,8 +158,9 @@ type AddWorkerEmailGraphData struct {
 }
 
 type AddWorkerEmail struct {
-	ID     uuid.UUID `json:"id" avro:"id"`
-	UserID uuid.UUID `json:"user_id" avro:"user_id"`
+	TransportGeneration uuid.UUID `json:"transport_generation,omitempty" avro:"transport_generation"`
+	ID                  uuid.UUID `json:"id" avro:"id"`
+	UserID              uuid.UUID `json:"user_id" avro:"user_id"`
 	// OrganizationID scopes the organization-wide sync budget. Nil for a
 	// legacy personal mailbox, which then only has per-mailbox budgets.
 	OrganizationID *uuid.UUID `json:"organization_id" avro:"organization_id"`

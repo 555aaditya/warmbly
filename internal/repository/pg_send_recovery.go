@@ -154,6 +154,8 @@ func resultState(result models.SendEmailResult) string {
 	return "unknown"
 }
 
+const SendResultMailboxLockNamespace int64 = 269
+
 // ApplySendResult commits reconciliation and its terminal marker together.
 func (r *taskRepository) ApplySendResult(ctx context.Context, result models.SendEmailResult, apply func(context.Context) error) error {
 	if result.TaskID == uuid.Nil {
@@ -179,7 +181,7 @@ func (r *taskRepository) ApplySendResult(ctx context.Context, result models.Send
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 269))`, mailboxID.String()); err != nil {
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, $2))`, mailboxID.String(), SendResultMailboxLockNamespace); err != nil {
 		return err
 	}
 	state := resultState(result)

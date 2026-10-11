@@ -29,6 +29,15 @@ import (
 // Identifier safety: table names come from the compiled registry, and column
 // names are always intersected against the destination catalog before they
 // reach a query. Nothing from an uploaded archive is ever interpolated.
+// ImportInvalidation clears derived rows keyed by records actually imported.
+type ImportInvalidation struct {
+	ResetColumns   []string
+	Table          string
+	Column         string
+	Key            string
+	LockNamespaces []int64
+}
+
 type OrgTransferRepository interface {
 	// ---- schema introspection ----
 
@@ -66,7 +75,7 @@ type OrgTransferRepository interface {
 	CountForeignRows(ctx context.Context, tx pgx.Tx, table, owner string, pk []string, refs []TenantReference, orgID uuid.UUID, rows []json.RawMessage) (int64, error)
 	// InsertBatch writes rows into table, honouring the conflict strategy. An
 	// overwrite only updates an existing row that owner selects for orgID.
-	InsertBatch(ctx context.Context, tx pgx.Tx, table string, cols []string, rows []json.RawMessage, conflict models.OrgImportConflict, pk []string, owner string, orgID uuid.UUID, resetOnOverwrite []string) (int64, error)
+	InsertBatch(ctx context.Context, tx pgx.Tx, table string, cols []string, rows []json.RawMessage, conflict models.OrgImportConflict, pk []string, owner string, orgID uuid.UUID, resetOnOverwrite []string, invalidations []ImportInvalidation) (int64, error)
 	// DeveloperBlocked reports an operator's block on building apps for this
 	// workspace or person.
 	DeveloperBlocked(ctx context.Context, tx pgx.Tx, orgID, userID uuid.UUID) (bool, error)
@@ -306,7 +315,7 @@ func (r *orgTransferRepository) StreamScoped(ctx context.Context, table, scope s
 		return fmt.Errorf("lift statement timeout: %w", err)
 	}
 
-	q := `SELECT to_jsonb(t) FROM public.` + quoteIdent(table) + ` t WHERE ` + scope
+	q := `SELECT to_jsonb(` + quoteIdent(table) + `) FROM public.` + quoteIdent(table) + ` WHERE ` + scope
 	rows, err := tx.Query(ctx, q, orgID)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", table, err)
@@ -476,6 +485,7 @@ func (r *orgTransferRepository) InsertBatch(
 	owner string,
 	orgID uuid.UUID,
 	resetOnOverwrite []string,
+	invalidations []ImportInvalidation,
 ) (int64, error) {
 	if len(rows) == 0 || len(cols) == 0 {
 		return 0, nil
@@ -526,6 +536,45 @@ func (r *orgTransferRepository) InsertBatch(
 		q += ` ON CONFLICT DO NOTHING`
 	}
 
+	if len(invalidations) > 0 {
+		for _, relation := range invalidations {
+			for _, namespace := range relation.LockNamespaces {
+				lockQuery := `SELECT pg_advisory_xact_lock(hashtextextended(keys.key::text,$2))
+				FROM (SELECT DISTINCT ` + quoteIdent(relation.Key) + ` AS key
+				FROM jsonb_populate_recordset(NULL::public.` + quoteIdent(table) + `,$1::jsonb)) keys
+				ORDER BY keys.key::text`
+				if _, err := tx.Exec(ctx, lockQuery, payload, namespace); err != nil {
+					return 0, fmt.Errorf("lock import checkpoints for %s: %w", table, err)
+				}
+			}
+		}
+		keys := make([]string, 0, len(invalidations))
+		seen := map[string]bool{}
+		for _, relation := range invalidations {
+			if !seen[relation.Key] {
+				keys = append(keys, relation.Key)
+				seen[relation.Key] = true
+			}
+		}
+		q = `WITH imported AS (` + q + ` RETURNING ` + quoteIdents(keys) + `)`
+		for i, relation := range invalidations {
+			if len(relation.ResetColumns) > 0 {
+				sets := make([]string, 0, len(relation.ResetColumns))
+				for _, c := range relation.ResetColumns {
+					sets = append(sets, quoteIdent(c)+" = DEFAULT")
+				}
+				q += fmt.Sprintf(", invalidated_%d AS (UPDATE public.%s SET %s WHERE %s IN (SELECT %s FROM imported))", i, quoteIdent(relation.Table), strings.Join(sets, ", "), quoteIdent(relation.Column), quoteIdent(relation.Key))
+			} else {
+				q += fmt.Sprintf(", invalidated_%d AS (DELETE FROM public.%s WHERE %s IN (SELECT %s FROM imported))", i, quoteIdent(relation.Table), quoteIdent(relation.Column), quoteIdent(relation.Key))
+			}
+		}
+		q += ` SELECT COUNT(*) FROM imported`
+		var written int64
+		if err := tx.QueryRow(ctx, q, args...).Scan(&written); err != nil {
+			return 0, fmt.Errorf("insert into %s and invalidate checkpoints: %w", table, err)
+		}
+		return written, nil
+	}
 	tag, err := tx.Exec(ctx, q, args...)
 	if err != nil {
 		return 0, fmt.Errorf("insert into %s: %w", table, err)

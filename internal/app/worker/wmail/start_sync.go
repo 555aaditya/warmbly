@@ -87,7 +87,7 @@ func (w *WMail) syncOnce(ctx context.Context) (result *errx.MailError) {
 				w.tracker.tickComplete = false
 			}
 			err := fmt.Errorf("mail sync panic: %v", r)
-			w.CaptureError(err)
+			w.captureSyncError(err)
 			log.Error().Err(err).Str("email_id", w.ID.String()).Msg("mail sync panicked")
 			result = &errx.MailError{Code: errx.MailErrorCodeImapUnknown, Type: errx.MailErrorWarning, Message: "mail sync pass interrupted"}
 		}
@@ -111,12 +111,12 @@ func (w *WMail) syncOnce(ctx context.Context) (result *errx.MailError) {
 		if isTransportError(err) {
 			w.transportFailures++
 			if w.transportFailures > 1 {
-				w.CaptureError(err)
+				w.captureSyncError(err)
 				log.Debug().Err(err).Str("email_id", w.ID.String()).Int("consecutive", w.transportFailures).Msg("mail server still unreachable")
 				return err
 			}
 		}
-		w.CaptureError(err)
+		w.captureSyncError(err)
 		log.Warn().Err(err).Str("email_id", w.ID.String()).Msg("mail sync error")
 		return err
 	}

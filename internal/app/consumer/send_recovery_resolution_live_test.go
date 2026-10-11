@@ -36,6 +36,11 @@ func TestLiveUnknownSendOperatorResolutionReconcilesAndAudits(t *testing.T) {
 			if _, xerr := repo.Update(ctx, f.org.String(), f.mailbox.String(), &models.UpdateEmail{SendRecoveryResolution: resolution}); xerr != nil {
 				t.Fatal(xerr)
 			}
+			if sent {
+				if _, err := h.Pool.Exec(ctx, `UPDATE send_recovery_resolutions r SET confirmed_result=jsonb_set(confirmed_result,'{transport_generation}',to_jsonb(e.transport_generation::text)) FROM email_accounts e WHERE r.recovery_task_id=$1 AND e.id=$2`, id, f.mailbox); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if _, xerr := repo.Update(ctx, f.org.String(), f.mailbox.String(), &models.UpdateEmail{SendRecoveryResolution: resolution}); xerr == nil {
 				t.Fatal("duplicate confirmation overwrote audit")
 			}
@@ -45,8 +50,13 @@ func TestLiveUnknownSendOperatorResolutionReconcilesAndAudits(t *testing.T) {
 			}
 			// A replacement consumer replays the durable confirmation without a broker event.
 			replacement := liveJobsService(h)
+			replacement.EmailAccountErrorRepository = repository.NewEmailAccountErrorRepository(h)
 			replacement.reconcileRecordedSendResults(ctx)
 			replacement.reconcileRecordedSendResults(ctx)
+			var clocks int
+			if err := h.QueryRow(ctx, `SELECT COUNT(*) FROM email_account_transport_recovery WHERE email_account_id=$1`, f.mailbox).Scan(&clocks); err != nil || clocks != 0 {
+				t.Fatal("operator confirmation manufactured transport recovery", clocks, err)
+			}
 			var state string
 			var applied bool
 			var audits, attempts, counted int
@@ -81,6 +91,10 @@ func TestLiveUnknownSendOperatorResolutionReconcilesAndAudits(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLiveMailTransportOperatorConfirmationDoesNotRecover(t *testing.T) {
+	TestLiveUnknownSendOperatorResolutionReconcilesAndAudits(t)
 }
 
 func TestLiveRecordedWorkerOutcomeSurvivesLostEvent(t *testing.T) {

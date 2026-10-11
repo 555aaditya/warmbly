@@ -1,6 +1,9 @@
 package orgtransfer
 
-import "github.com/warmbly/warmbly/internal/models"
+import (
+	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/repository"
+)
 
 // KeyDomain names which key a sealed column was encrypted under. Warmbly has
 // two, and an archive that confuses them produces mailboxes that authenticate
@@ -55,6 +58,12 @@ type SecretColumn struct {
 	PlaintextPrefix string
 }
 
+// JSONColumnExclusion names instance-local keys inside a stored JSON envelope.
+type JSONColumnExclusion struct {
+	Column string
+	Keys   []string
+}
+
 // Table is one exported relation and the policy for moving it.
 type Table struct {
 	Name  string
@@ -80,6 +89,12 @@ type Table struct {
 	// the rows.
 	Blobs []BlobColumn
 
+	// ExcludeOnExport omits instance-local columns from rows and the manifest.
+	ExcludeOnExport []string
+
+	// ExcludeJSONOnExport strips only named keys within registered JSON envelopes.
+	ExcludeJSONOnExport []JSONColumnExclusion
+
 	// ResetOnImport are columns left out of the insert because they name
 	// something that exists only on the source instance: a queue handle, a
 	// health counter, a last-seen timestamp. Omitting them is what makes the
@@ -89,6 +104,11 @@ type Table struct {
 
 	// ResetOnOverwrite also defaults reset columns when replacing destination rows.
 	ResetOnOverwrite bool
+	// ResetColumnsOnOverwrite applies only selected instance-local defaults.
+	ResetColumnsOnOverwrite []string
+
+	// InvalidateOnImport resets derived relations only for rows actually written.
+	InvalidateOnImport []repository.ImportInvalidation
 
 	// ImportSkip exports the table for the record but never writes it back.
 	ImportSkip bool
@@ -199,7 +219,13 @@ var Tables = []Table{
 	},
 	{
 		Name: "email_accounts", Group: models.OrgDataGroupCore,
-		Scope: scopeOrg,
+		Scope:                   scopeOrg,
+		ExcludeOnExport:         []string{"transport_generation"},
+		ResetColumnsOnOverwrite: []string{"transport_generation"},
+		InvalidateOnImport: []repository.ImportInvalidation{{
+			Table: "email_account_transport_recovery", Column: "email_account_id", Key: "id",
+			LockNamespaces: []int64{repository.SendResultMailboxLockNamespace, repository.MailTransportLockNamespace},
+		}},
 		// Send cooldowns and recovery holds travel as mailbox columns; never reset them.
 		// Worker placement is a property of the instance the mailbox runs on,
 		// never of the mailbox. The destination assigns its own.
@@ -227,6 +253,7 @@ var Tables = []Table{
 		// A tracking host is verified per instance and per workspace, so the
 		// destination's own sweep verifies it again.
 		ResetOnImport: []string{
+			"transport_generation",
 			"worker_id", "auth_checked_at", "auth_failing_since", "cold_ramp_started_at",
 			"send_lifecycle", "send_lifecycle_since", "send_lifecycle_reason", "seed_scope",
 			"avatar_checked_at", "tracking_domain_verified", "tracking_domain_verified_at",
@@ -241,7 +268,8 @@ var Tables = []Table{
 	},
 	{
 		Name: "email_accounts_smtp_imap", Group: models.OrgDataGroupCore,
-		Scope: `email_account_id IN ` + orgMailboxes,
+		Scope:              `email_account_id IN ` + orgMailboxes,
+		InvalidateOnImport: mailboxCredentialInvalidations(),
 		Secrets: []SecretColumn{
 			{Column: "smtp_host", Domain: KeyDomainInstance},
 			{Column: "smtp_user", Domain: KeyDomainInstance},
@@ -253,7 +281,8 @@ var Tables = []Table{
 	},
 	{
 		Name: "email_accounts_oauth", Group: models.OrgDataGroupCore,
-		Scope: `email_account_id IN ` + orgMailboxes,
+		Scope:              `email_account_id IN ` + orgMailboxes,
+		InvalidateOnImport: mailboxCredentialInvalidations(),
 		Secrets: []SecretColumn{
 			{Column: "access_token", Domain: KeyDomainInstance},
 			{Column: "refresh_token", Domain: KeyDomainInstance},
@@ -779,6 +808,7 @@ var Tables = []Table{
 	// ---------- send pipeline ----------
 	{
 		Name: "tasks", Group: models.OrgDataGroupSending,
+		ExcludeJSONOnExport: []JSONColumnExclusion{{Column: "send_executor_result", Keys: []string{"transport_generation"}}},
 		// A placement probe's task stays behind: a pending one would send from
 		// the destination to the source instance's seeds.
 		Scope: `email_account_id IN ` + orgMailboxes + ` AND task_type <> 'placement'`,
@@ -792,11 +822,12 @@ var Tables = []Table{
 	},
 	{
 		Name: "send_recovery_resolutions", Group: models.OrgDataGroupSending,
-		Scope:            scopeOrg,
-		Owner:            scopeOrg,
-		ResetOnImport:    []string{"recorded_locally_at", "conflict_resolved_at"},
-		ResetOnOverwrite: true,
-		Note:             "Recovery evidence travels as history. Source-instance results and resolutions cannot execute or release a conflict hold after import; fresh local confirmation or independent authoritative worker evidence is required.",
+		ExcludeJSONOnExport: []JSONColumnExclusion{{Column: "confirmed_result", Keys: []string{"transport_generation"}}},
+		Scope:               scopeOrg,
+		Owner:               scopeOrg,
+		ResetOnImport:       []string{"recorded_locally_at", "conflict_resolved_at"},
+		ResetOnOverwrite:    true,
+		Note:                "Recovery evidence travels as history. Source-instance results and resolutions cannot execute or release a conflict hold after import; fresh local confirmation or independent authoritative worker evidence is required.",
 	},
 	{
 		// An AI-group table, but it sits here because task_id points at tasks.
@@ -824,9 +855,10 @@ var Tables = []Table{
 	},
 	{
 		Name: "warmup_tasks", Group: models.OrgDataGroupSending,
-		PartnerRefs:   []string{"target_account_id"},
-		Scope:         `task_id IN ` + orgTasks,
-		ResetOnImport: []string{"parent_task_id", "parent_received_id", "parent_message_id", "lineage_version", "schedule_revision", "queued_revision", "dispatch_nonce", "dispatch_worker_id", "dispatch_started_at", "dispatch_result", "warmup_charged_date", "warmup_reply_charged", "warmup_refunded_at"},
+		ExcludeJSONOnExport: []JSONColumnExclusion{{Column: "dispatch_result", Keys: []string{"transport_generation"}}},
+		PartnerRefs:         []string{"target_account_id"},
+		Scope:               `task_id IN ` + orgTasks,
+		ResetOnImport:       []string{"parent_task_id", "parent_received_id", "parent_message_id", "lineage_version", "schedule_revision", "queued_revision", "dispatch_nonce", "dispatch_worker_id", "dispatch_started_at", "dispatch_result", "warmup_charged_date", "warmup_reply_charged", "warmup_refunded_at"},
 	},
 	{
 		Name: "warmup_tokens", Group: models.OrgDataGroupSending,
@@ -860,7 +892,10 @@ var Tables = []Table{
 	},
 	{
 		Name: "email_account_errors", Group: models.OrgDataGroupSending,
-		Scope: `email_account_id IN ` + orgMailboxes,
+		Scope:            `email_account_id IN ` + orgMailboxes,
+		ResetOnImport:    []string{"operation", "observation_source", "received_at"},
+		ResetOnOverwrite: true,
+		Note:             "Historical reports travel; operation and clock provenance reset to unknown on the destination.",
 	},
 	{
 		Name: "tracked_links", Group: models.OrgDataGroupSending,
@@ -1012,53 +1047,54 @@ var Tables = []Table{
 // with the reason. Kept as data so the docs page and the coverage test both
 // read from one list instead of restating it.
 var ExcludedTables = map[string]string{
-	"sync_arrival_outbox":           "Encrypted, org-key-owned arrival delivery queue bound to this instance's provider handles and body storage. Pending maps are excluded too so destination sync retries them; no queue secrets or blob references travel. Full instance backups retain queue, org keys and bodies together.",
-	"send_result_effects":           "Source-instance reconciliation delivery queue. Pending webhook and notification effects must drain on the source; imports must not replay customer notifications. Full instance backups retain the durable outbox.",
-	"warmup_received":               "Raw receiving-mailbox observations and provider thread handles are source-instance evidence, not portable send authority. Aggregated warmup placement history travels; imported threads cannot continue without new verified observations.",
-	"diagnostic_auth_verifications": "Bounded DKIM observations and grants bind source-instance workers, provider messages and cross-workspace diagnostic parents. They cannot authorize imported mail; destination verification starts unknown. Full instance database backups retain them.",
-	"warmup_pending_filings":        "Provider filing awaiting acknowledgement on this instance. The destination resyncs mailbox messages.",
-	"unibox_pending_emails":         "Unverified mailbox-sync events awaiting this instance's warmup checks. The destination resyncs provider mail with its own warmup and cloud-link state.",
-	"organization_encrypted_keys":   "The organization's data key, wrapped by the source instance's KMS. The destination cannot unwrap it, and shipping it would put every org secret behind one exported blob.",
-	"api_idempotency_keys":          "A short-lived replay cache for in-flight API requests.",
-	"realtime_events":               "The websocket outbox. Every row is already delivered or expired.",
-	"integration_oauth_states":      "In-flight OAuth handshakes, valid for minutes and bound to the source instance's redirect URL.",
-	"crm_sync_jobs":                 "The outbox of pending CRM writes on this instance; the destination's own events feed its outbox.",
-	"crm_sync_cursors":              "Pull checkpoints for this instance; the destination starts its own pull.",
-	"salesforce_record_links":       "Which Salesforce record each contact is, with a cached copy of it. The destination links contacts again by address the first time it syncs or shows them, and reads the record fresh.",
-	"salesforce_activity_queue":     "Activity waiting to be logged in Salesforce, and the recent outcome of what was. What was logged is already in Salesforce; what was waiting belongs to this instance's drain.",
-	"salesforce_sync_state":         "Where this instance's pull loop got to in each Salesforce org, and the API calls it counted today. The destination starts its own cursor when the connection first syncs.",
-	"oauth_authorization_codes":     "Single-use authorization codes, valid for seconds.",
-	"oauth_developer_blocks":        "An operator's decision on the source instance about who may build apps there; the destination's operators decide for theirs.",
-	"app_directory_listings":        "A publication on the source instance's community directory, featured or hidden by its team. Publish again on the destination, where its own team decides.",
-	"scheduled_deletions":           "Instance lifecycle state. Importing a pending deletion would schedule the destination workspace for destruction.",
-	"dedicated_worker_assignments":  "Worker topology, which is a property of the instance rather than the workspace.",
-	"warmup_spam_moves":             "Per-message attribution evidence for warmup mail this instance synced, kept only to decide recent tampering; the destination judges its own.",
-	"mailbox_owner_activity":        "Five-minute buckets of sync-observed owner activity on this instance, read only to attribute recent spam moves.",
-	"warmup_pools":                  "Instance-global pool definitions shared by every workspace on the instance.",
-	"pool_link_codes":               "In-flight link handshakes between a self-hosted instance and this cloud, valid for minutes.",
-	"cli_auth_codes":                "In-flight `warmbly auth login` handshakes, valid for minutes. The API key an approval mints does travel, with the api_keys rows.",
-	"pool_link_instances":           "Self-hosted instances linked to this workspace's pool allowance. The token hash only authenticates against this instance, and the enrolled mailboxes are mirrors of mailboxes that live elsewhere.",
-	"pool_link_mailboxes":           "Which mailbox rows are warmup-only mirrors for a linked instance. They follow pool_link_instances, which does not travel.",
-	"cloud_link":                    "Workspace connections to Warmbly Cloud and legacy instance links: their encrypted tokens only work on this installation and do not travel.",
-	"cloud_link_mailboxes":          "Which local mailboxes Warmbly Cloud warms for this instance. The enrollment belongs to the link, which does not travel.",
-	"warmup_conversations":          "The instance's shared warmup content library, not workspace data.",
-	"copy_judgments":                "A cache of copy judgments keyed by the hash of the words judged. The destination re-reads a step the first time its Advisor runs.",
-	"warmup_thread_messages":        "Message identifiers this instance recognised as turns of a warmup conversation, so the reply to each is recognised too. The destination syncs provider mail afresh and rebuilds it from the warmup tokens, which do travel.",
-	"sessions":                      "Live login sessions. They are bound to the source instance's signing key and must not survive a move.",
-	"mailbox_erasures":              "Erasure still owed for a mailbox this instance deleted: a grant to revoke at the provider, and message bodies to remove from this instance's blob store. Both name work on the instance that wrote the row, and the mailboxes are already gone.",
-	"login_history":                 "Where people signed in from, kept only to compare a new sign-in against recent ones. It belongs to the person rather than the workspace, and a destination must build its own baseline before it can call anything anomalous.",
-	"mailbox_imports":               "Mailbox imports in progress or recently finished. They are work this instance is doing, and their rows hold credentials in flight, which live on only as the mailboxes they created.",
-	"mailbox_import_rows":           "The rows of a mailbox import, with credentials sealed until each row is connected. They follow mailbox_imports, which does not travel.",
-	"contact_imports":               "Contact imports in progress or recently finished. They are work this instance is doing; the contacts they created travel with the contacts group.",
-	"contact_import_rows":           "The uploaded rows of a contact import and what became of each. They follow contact_imports, which does not travel.",
-	"placement_renders":             "The copy a tracking comparison is sending to each seed, sealed so both halves send the same words. It lives only while the comparison runs, and a copy that had not been sent stays behind with its task.",
-	"inbox_follow_up_sweeps":        "This instance's hourly follow-up sweep state for the workspace: where its cycle stopped (by this instance's mailbox and message row ids), how far it has checked changed conversations, and which walker holds it. The destination starts its own cycle at the newest conversation.",
-	"slack_user_links":              "Which Slack member speaks for which Warmbly member. Slack delivers that member's messages to the instance whose Slack app the workspace installed, so each member links again after the workspace reconnects Slack on the destination.",
-	"slack_link_codes":              "In-flight Slack account links, valid for minutes.",
-	"slack_agent_threads":           "Which Slack thread the assistant answers in for which conversation. The Slack install they belong to does not travel; the conversations themselves do, with agent_sessions.",
-	"slack_inbox_threads":           "Which Slack thread mirrors which inbox conversation. The Slack install and its channel do not travel; the conversations themselves do, with the unified inbox.",
-	"user_view_preferences":         "Each member's own column layout and sort for the dashboard's lists, and their unibox scope rail arrangement. It belongs to the person rather than the workspace: members are matched by account on import and a layout names custom fields the destination may not hold yet, so everyone starts from the default view and picks their columns again.",
-	"campaign_send_plan_snapshots":  "Today's precomputed send plan for a campaign, derived from the campaign, its leads, its mailboxes and this instance's limits, which all travel. Keyed to this instance's budget day, and naming mailboxes and workers. The destination's own background snapshotter recomputes it.",
+	"email_account_transport_recovery": "Source-instance sync and provider-confirmed-send recovery clocks cannot authorize destination recovery. Full instance database backups retain them.",
+	"sync_arrival_outbox":              "Encrypted, org-key-owned arrival delivery queue bound to this instance's provider handles and body storage. Pending maps are excluded too so destination sync retries them; no queue secrets or blob references travel. Full instance backups retain queue, org keys and bodies together.",
+	"send_result_effects":              "Source-instance reconciliation delivery queue. Pending webhook and notification effects must drain on the source; imports must not replay customer notifications. Full instance backups retain the durable outbox.",
+	"warmup_received":                  "Raw receiving-mailbox observations and provider thread handles are source-instance evidence, not portable send authority. Aggregated warmup placement history travels; imported threads cannot continue without new verified observations.",
+	"diagnostic_auth_verifications":    "Bounded DKIM observations and grants bind source-instance workers, provider messages and cross-workspace diagnostic parents. They cannot authorize imported mail; destination verification starts unknown. Full instance database backups retain them.",
+	"warmup_pending_filings":           "Provider filing awaiting acknowledgement on this instance. The destination resyncs mailbox messages.",
+	"unibox_pending_emails":            "Unverified mailbox-sync events awaiting this instance's warmup checks. The destination resyncs provider mail with its own warmup and cloud-link state.",
+	"organization_encrypted_keys":      "The organization's data key, wrapped by the source instance's KMS. The destination cannot unwrap it, and shipping it would put every org secret behind one exported blob.",
+	"api_idempotency_keys":             "A short-lived replay cache for in-flight API requests.",
+	"realtime_events":                  "The websocket outbox. Every row is already delivered or expired.",
+	"integration_oauth_states":         "In-flight OAuth handshakes, valid for minutes and bound to the source instance's redirect URL.",
+	"crm_sync_jobs":                    "The outbox of pending CRM writes on this instance; the destination's own events feed its outbox.",
+	"crm_sync_cursors":                 "Pull checkpoints for this instance; the destination starts its own pull.",
+	"salesforce_record_links":          "Which Salesforce record each contact is, with a cached copy of it. The destination links contacts again by address the first time it syncs or shows them, and reads the record fresh.",
+	"salesforce_activity_queue":        "Activity waiting to be logged in Salesforce, and the recent outcome of what was. What was logged is already in Salesforce; what was waiting belongs to this instance's drain.",
+	"salesforce_sync_state":            "Where this instance's pull loop got to in each Salesforce org, and the API calls it counted today. The destination starts its own cursor when the connection first syncs.",
+	"oauth_authorization_codes":        "Single-use authorization codes, valid for seconds.",
+	"oauth_developer_blocks":           "An operator's decision on the source instance about who may build apps there; the destination's operators decide for theirs.",
+	"app_directory_listings":           "A publication on the source instance's community directory, featured or hidden by its team. Publish again on the destination, where its own team decides.",
+	"scheduled_deletions":              "Instance lifecycle state. Importing a pending deletion would schedule the destination workspace for destruction.",
+	"dedicated_worker_assignments":     "Worker topology, which is a property of the instance rather than the workspace.",
+	"warmup_spam_moves":                "Per-message attribution evidence for warmup mail this instance synced, kept only to decide recent tampering; the destination judges its own.",
+	"mailbox_owner_activity":           "Five-minute buckets of sync-observed owner activity on this instance, read only to attribute recent spam moves.",
+	"warmup_pools":                     "Instance-global pool definitions shared by every workspace on the instance.",
+	"pool_link_codes":                  "In-flight link handshakes between a self-hosted instance and this cloud, valid for minutes.",
+	"cli_auth_codes":                   "In-flight `warmbly auth login` handshakes, valid for minutes. The API key an approval mints does travel, with the api_keys rows.",
+	"pool_link_instances":              "Self-hosted instances linked to this workspace's pool allowance. The token hash only authenticates against this instance, and the enrolled mailboxes are mirrors of mailboxes that live elsewhere.",
+	"pool_link_mailboxes":              "Which mailbox rows are warmup-only mirrors for a linked instance. They follow pool_link_instances, which does not travel.",
+	"cloud_link":                       "Workspace connections to Warmbly Cloud and legacy instance links: their encrypted tokens only work on this installation and do not travel.",
+	"cloud_link_mailboxes":             "Which local mailboxes Warmbly Cloud warms for this instance. The enrollment belongs to the link, which does not travel.",
+	"warmup_conversations":             "The instance's shared warmup content library, not workspace data.",
+	"copy_judgments":                   "A cache of copy judgments keyed by the hash of the words judged. The destination re-reads a step the first time its Advisor runs.",
+	"warmup_thread_messages":           "Message identifiers this instance recognised as turns of a warmup conversation, so the reply to each is recognised too. The destination syncs provider mail afresh and rebuilds it from the warmup tokens, which do travel.",
+	"sessions":                         "Live login sessions. They are bound to the source instance's signing key and must not survive a move.",
+	"mailbox_erasures":                 "Erasure still owed for a mailbox this instance deleted: a grant to revoke at the provider, and message bodies to remove from this instance's blob store. Both name work on the instance that wrote the row, and the mailboxes are already gone.",
+	"login_history":                    "Where people signed in from, kept only to compare a new sign-in against recent ones. It belongs to the person rather than the workspace, and a destination must build its own baseline before it can call anything anomalous.",
+	"mailbox_imports":                  "Mailbox imports in progress or recently finished. They are work this instance is doing, and their rows hold credentials in flight, which live on only as the mailboxes they created.",
+	"mailbox_import_rows":              "The rows of a mailbox import, with credentials sealed until each row is connected. They follow mailbox_imports, which does not travel.",
+	"contact_imports":                  "Contact imports in progress or recently finished. They are work this instance is doing; the contacts they created travel with the contacts group.",
+	"contact_import_rows":              "The uploaded rows of a contact import and what became of each. They follow contact_imports, which does not travel.",
+	"placement_renders":                "The copy a tracking comparison is sending to each seed, sealed so both halves send the same words. It lives only while the comparison runs, and a copy that had not been sent stays behind with its task.",
+	"inbox_follow_up_sweeps":           "This instance's hourly follow-up sweep state for the workspace: where its cycle stopped (by this instance's mailbox and message row ids), how far it has checked changed conversations, and which walker holds it. The destination starts its own cycle at the newest conversation.",
+	"slack_user_links":                 "Which Slack member speaks for which Warmbly member. Slack delivers that member's messages to the instance whose Slack app the workspace installed, so each member links again after the workspace reconnects Slack on the destination.",
+	"slack_link_codes":                 "In-flight Slack account links, valid for minutes.",
+	"slack_agent_threads":              "Which Slack thread the assistant answers in for which conversation. The Slack install they belong to does not travel; the conversations themselves do, with agent_sessions.",
+	"slack_inbox_threads":              "Which Slack thread mirrors which inbox conversation. The Slack install and its channel do not travel; the conversations themselves do, with the unified inbox.",
+	"user_view_preferences":            "Each member's own column layout and sort for the dashboard's lists, and their unibox scope rail arrangement. It belongs to the person rather than the workspace: members are matched by account on import and a layout names custom fields the destination may not hold yet, so everyone starts from the default view and picks their columns again.",
+	"campaign_send_plan_snapshots":     "Today's precomputed send plan for a campaign, derived from the campaign, its leads, its mailboxes and this instance's limits, which all travel. Keyed to this instance's budget day, and naming mailboxes and workers. The destination's own background snapshotter recomputes it.",
 }
 
 // TableByName indexes Tables for lookup during import.
@@ -1087,9 +1123,14 @@ func GroupTables(groups []models.OrgDataGroup) []*Table {
 	return out
 }
 
-// NormalizeGroups validates a requested group list, adds core (which every
-// archive needs to be importable at all), and closes over the catalog's
-// dependencies so a selection can never be one that fails on a foreign key.
+func mailboxCredentialInvalidations() []repository.ImportInvalidation {
+	return []repository.ImportInvalidation{
+		{Table: "email_accounts", Column: "id", Key: "email_account_id", ResetColumns: []string{"transport_generation"}, LockNamespaces: []int64{repository.SendResultMailboxLockNamespace, repository.MailTransportLockNamespace}},
+		{Table: "email_account_transport_recovery", Column: "email_account_id", Key: "email_account_id"},
+	}
+}
+
+// NormalizeGroups validates the selection and closes over group dependencies.
 func NormalizeGroups(groups []models.OrgDataGroup) []models.OrgDataGroup {
 	if len(groups) == 0 {
 		return append([]models.OrgDataGroup(nil), models.AllOrgDataGroups...)

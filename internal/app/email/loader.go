@@ -328,6 +328,26 @@ func (s *emailService) releaseDeadWorker(ctx context.Context, accountID uuid.UUI
 // left zero: it is avro-excluded and the worker rebuilds it locally from its own
 // oauth config.
 func (s *emailService) buildAddWorkerEmail(ctx context.Context, acc *models.Email) (*models.AddWorkerEmail, error) {
+	if snapshots, ok := s.emailRepository.(repository.EmailTransportSnapshot); ok {
+		var payload *models.AddWorkerEmail
+		err := snapshots.WithTransportSnapshot(ctx, func(repo repository.EmailRepository) error {
+			current, xerr := repo.GetByID(ctx, acc.ID)
+			if xerr != nil {
+				return xerr
+			}
+			if current == nil || current.Status != "active" {
+				return nil
+			}
+			var err error
+			payload, err = s.buildAddWorkerEmailSnapshot(ctx, current, repo)
+			return err
+		})
+		return payload, err
+	}
+	return s.buildAddWorkerEmailSnapshot(ctx, acc, s.emailRepository)
+}
+
+func (s *emailService) buildAddWorkerEmailSnapshot(ctx context.Context, acc *models.Email, repo repository.EmailRepository) (*models.AddWorkerEmail, error) {
 	userID, err := uuid.Parse(acc.UserID)
 	if err != nil {
 		return nil, err
@@ -341,14 +361,15 @@ func (s *emailService) buildAddWorkerEmail(ctx context.Context, acc *models.Emai
 		return nil, err
 	}
 	out := &models.AddWorkerEmail{
-		ID:             acc.ID,
-		UserID:         userID,
-		OrganizationID: acc.OrganizationID,
-		Email:          acc.Email,
-		FirstName:      first,
-		LastName:       last,
-		Type:           provider,
-		Sync:           sync,
+		TransportGeneration: acc.TransportGeneration,
+		ID:                  acc.ID,
+		UserID:              userID,
+		OrganizationID:      acc.OrganizationID,
+		Email:               acc.Email,
+		FirstName:           first,
+		LastName:            last,
+		Type:                provider,
+		Sync:                sync,
 		// Only SMTP/IMAP acts on this; Gmail and Graph file their own copy.
 		SaveToSent: &saveToSent,
 	}
@@ -363,7 +384,7 @@ func (s *emailService) buildAddWorkerEmail(ctx context.Context, acc *models.Emai
 	// A mailbox under an administrator's grant has no stored credential
 	// either; the worker draws tokens the control plane mints per use.
 	if acc.AuthMethod == models.MailAuthDelegated {
-		d, xerr := s.emailRepository.GetDelegation(ctx, acc.ID)
+		d, xerr := repo.GetDelegation(ctx, acc.ID)
 		if xerr != nil {
 			return nil, xerr
 		}
@@ -400,7 +421,7 @@ func (s *emailService) buildAddWorkerEmail(ctx context.Context, acc *models.Emai
 
 	switch provider {
 	case models.InboxProviderGoogle:
-		creds, cerr := s.emailRepository.GetOAuthCredentials(ctx, acc.ID)
+		creds, cerr := repo.GetOAuthCredentials(ctx, acc.ID)
 		if cerr != nil {
 			return nil, cerr
 		}
@@ -409,13 +430,13 @@ func (s *emailService) buildAddWorkerEmail(ctx context.Context, acc *models.Emai
 			LastHistoryID: s.lastHistoryFor(ctx, userID, acc.ID, acc.LastID),
 		}
 	case models.InboxProviderOutlook:
-		creds, cerr := s.emailRepository.GetOAuthCredentials(ctx, acc.ID)
+		creds, cerr := repo.GetOAuthCredentials(ctx, acc.ID)
 		if cerr != nil {
 			return nil, cerr
 		}
 		out.Graph.Token = oauthToken(creds)
 	case models.InboxProviderSMTPIMAP:
-		creds, cerr := s.emailRepository.GetSMTPCredentials(ctx, acc.ID)
+		creds, cerr := repo.GetSMTPCredentials(ctx, acc.ID)
 		if cerr != nil {
 			return nil, cerr
 		}
