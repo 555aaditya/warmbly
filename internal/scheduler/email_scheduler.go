@@ -52,12 +52,12 @@ func (s *schedulerService) CalculateNextEmailTime(ctx context.Context, accountID
 	jitter := randomJitter(-10, 10)
 	candidateTime = notBefore(candidateTime.Add(time.Minute * time.Duration(jitter)))
 
-	// STEP 5: Resolve conflicts with scheduled tasks
-	scheduledTasks, err := s.taskRepo.GetScheduledTasksForAccount(ctx, accountID, candidateTime)
+	// STEP 5: Resolve conflicts with sends booked on this account
+	booked, err := s.taskRepo.GetBookedSendsForAccount(ctx, accountID, candidateTime)
 	if err != nil {
 		return time.Time{}, err
 	}
-	candidateTime = resolveConflicts(candidateTime, scheduledTasks, gapSeconds)
+	candidateTime = resolveConflicts(candidateTime, booked, gapSeconds)
 
 	// STEP 6: Apply distribution curve. Skipped when a profile owns the day.
 	if !bhv.Enabled {
