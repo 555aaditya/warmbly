@@ -219,6 +219,13 @@ func Capabilities() map[IntegrationProvider]ProviderCapability {
 		IntegrationZapier: automationCapability(IntegrationZapier),
 		IntegrationMake:   automationCapability(IntegrationMake),
 		IntegrationN8N:    automationCapability(IntegrationN8N),
+		IntegrationClay: {
+			Provider: IntegrationClay, Directions: []SyncDirection{SyncDirectionPush},
+			Actions: []CapabilityAction{{
+				ID: IntegrationActionClaySendRow, Label: "Send a row to Clay",
+				Description: "Add the event as a row in a Clay table, through the table's webhook URL.",
+			}},
+		},
 		IntegrationCalendly: {
 			Provider: IntegrationCalendly, Directions: pushOnly, SupportsBookingLink: true,
 		},

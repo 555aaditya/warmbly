@@ -42,6 +42,15 @@ interface FieldDef {
 
 // Credential fields for non-OAuth providers only. OAuth providers never paste.
 const FIELDS_BY_PROVIDER: Record<string, FieldDef[]> = {
+    apollo: [
+        {
+            key: "api_key",
+            label: "Apollo API key",
+            type: "password",
+            required: true,
+            helper: "Settings → Integrations → API in Apollo. Use a master key, or one with access to lists, contact search and people enrichment. It is checked before it is saved.",
+        },
+    ],
     cleanmylist: [
         {
             key: "api_key",
@@ -88,6 +97,7 @@ const NEXT_STEP: Record<string, string> = {
     hubspot: "Finish the CRM setup: what syncs, and in which direction.",
     pipedrive: "Finish the CRM setup: what syncs, and in which direction.",
     salesforce: "Finish the setup: sync rules, field mapping and the first import.",
+    apollo: "Import your first Apollo list, or enrich contacts you already have.",
     discord: "Choose which Warmbly events post to the channel.",
 };
 
@@ -159,7 +169,7 @@ export default function ConnectDialog({
     }, []);
 
     const isOAuth = entry.auth_method === "oauth";
-    const isInbound = entry.provider === "calendly" || entry.provider === "cal_com";
+    const isInbound = entry.provider === "calendly" || entry.provider === "cal_com" || entry.provider === "clay";
     const isAutomation = entry.provider === "zapier" || entry.provider === "make" || entry.provider === "n8n";
     const isSalesforce = entry.provider === "salesforce";
     const fields = FIELDS_BY_PROVIDER[entry.provider] ?? [];

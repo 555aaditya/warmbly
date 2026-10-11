@@ -39,6 +39,7 @@ import type {
     IntegrationConnection,
     IntegrationProvider,
 } from "@/lib/api/models/app/integrations/Integration";
+import { stashInboundUrl } from "@/lib/integrations/freshInboundUrl";
 import { hrefTarget } from "@/lib/routerSearch";
 import { cn } from "@/lib/utils";
 
@@ -94,6 +95,7 @@ function parseRoute(splat: string): Route | null {
 // The gaps a recommendation fills, in the order they are offered.
 const GAPS: { category: IntegrationCategory; prefer?: IntegrationProvider }[] = [
     { category: "crm" },
+    { category: "data", prefer: "apollo" },
     { category: "notifications", prefer: "slack" },
     { category: "meetings" },
     { category: "verification" },
@@ -481,13 +483,19 @@ function IntegrationsStore({ route, routeKey }: { route: Route; routeKey: string
                         onClose={() => setConnectTarget(null)}
                         onConnected={() => void connectionsQuery.refetch()}
                         onSetup={(conn) => {
-                            if (conn.inbound_webhook_url) {
+                            if (conn.provider === "clay") {
+                                // The Clay page shows the new URL with the column setup next to it.
+                                if (conn.inbound_webhook_url) stashInboundUrl(conn.id, conn.inbound_webhook_url);
+                                navigate({ to: "/app/integrations/clay/$id", params: { id: conn.id } });
+                            } else if (conn.provider === "apollo") {
+                                navigate({ to: "/app/integrations/apollo/$id", params: { id: conn.id } });
+                            } else if (conn.inbound_webhook_url) {
                                 setInboundUrl({ provider: conn.provider, url: conn.inbound_webhook_url });
                             } else if (CRM_HOMES.has(conn.provider)) {
                                 go(`${STORE_BASE}/${conn.provider}`);
                             } else if (conn.provider === "salesforce") {
                                 // Setup continues on the Salesforce page: rules, mapping, imports.
-                                go(`${STORE_BASE}/salesforce/${conn.id}`);
+                                navigate({ to: "/app/integrations/salesforce/$id", params: { id: conn.id } });
                             } else {
                                 setManageTarget(conn);
                             }

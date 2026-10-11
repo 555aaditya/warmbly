@@ -15,6 +15,8 @@ export type IntegrationProvider =
     | "calendly"
     | "cal_com"
     | "google_sheets"
+    | "apollo"
+    | "clay"
     | "millionverifier"
     | "cleanmylist";
 
@@ -166,6 +168,7 @@ export type IntegrationAction =
     | "salesforce.upsert_contact"
     | "close.upsert_lead"
     | "webhook.ping"
+    | "clay.send_row"
     // Native (Warmbly built-in) automation actions — no external connection.
     | "warmbly.add_tag"
     | "warmbly.remove_tag"
@@ -341,6 +344,8 @@ export function defaultActionForProvider(provider: IntegrationProvider): Integra
             return "salesforce.upsert_contact";
         case "close":
             return "close.upsert_lead";
+        case "clay":
+            return "clay.send_row";
         default:
             return "webhook.ping";
     }
@@ -368,6 +373,8 @@ export const PROVIDER_LABELS: Record<IntegrationProvider, string> = {
     calendly: "Calendly",
     cal_com: "Cal.com",
     google_sheets: "Google Sheets",
+    apollo: "Apollo",
+    clay: "Clay",
     millionverifier: "MillionVerifier",
     cleanmylist: "CleanMyList",
 };

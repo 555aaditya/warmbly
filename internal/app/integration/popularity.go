@@ -19,7 +19,9 @@ const (
 var curatedOrder = []models.IntegrationProvider{
 	models.IntegrationHubSpot,
 	models.IntegrationSlack,
+	models.IntegrationApollo,
 	models.IntegrationCalendly,
+	models.IntegrationClay,
 	models.IntegrationZapier,
 	models.IntegrationSalesforce,
 	models.IntegrationPipedrive,

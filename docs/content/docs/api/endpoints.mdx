@@ -461,10 +461,20 @@ The `listing` routes publish an app to the [community directory](/api/oauth/#pub
 | GET | `/contacts/:id/salesforce` | `READ_CRM` |
 | POST | `/contacts/:id/salesforce/sync` | `INTEGRATIONS` |
 | DELETE | `/contacts/:id/salesforce/links/:linkId` | `INTEGRATIONS` |
+| GET | `/integrations/apollo/:id`, `/lists` | `INTEGRATIONS` |
+| PUT | `/integrations/apollo/:id/key` | `INTEGRATIONS` |
+| POST | `/integrations/apollo/:id/import/preview` | `INTEGRATIONS` |
+| GET/POST/PATCH/DELETE | `/integrations/apollo/:id/import-sources[/:sourceId]` | `INTEGRATIONS` |
+| POST | `/integrations/apollo/:id/import-sources/:sourceId/run` | `INTEGRATIONS` |
+| GET | `/integrations/apollo/:id/enrichments[/:runId]` | `INTEGRATIONS` |
+| POST | `/integrations/apollo/:id/enrichments` | `INTEGRATIONS` and `BULK_CONTACTS` |
+| GET/PATCH | `/integrations/clay/:id` | `INTEGRATIONS` |
 | GET/POST/PATCH/DELETE | `/automations[/:id]` | `INTEGRATIONS` |
 | PATCH | `/automations/:id/layout` | `INTEGRATIONS` |
 
 A signed-in member needs `manage_settings` to create, edit, enable or delete an automation, because a flow runs as the workspace; `use_integrations` is enough to list, open, test and read the run history.
+
+Starting an [Apollo](/guides/apollo/) enrichment writes contacts and spends the workspace's Apollo credits, so it needs `BULK_CONTACTS` as well as `INTEGRATIONS` (for a member, `use_integrations` and `manage_contacts`). Saving the key, imports and Clay settings need `manage_settings`; previewing and running an import need `use_integrations`. `POST /integrations/inbound/clay/:secret` is the URL a [Clay](/guides/clay/) table posts rows to. It takes no API key, because the secret in its path is the credential.
 | GET/POST/PATCH/DELETE | `/warmup/routing[/:id]` | `WARMUP_ROUTING` |
 
 ### Retry safety

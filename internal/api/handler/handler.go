@@ -10,12 +10,14 @@ import (
 	"github.com/warmbly/warmbly/internal/app/aitools"
 	"github.com/warmbly/warmbly/internal/app/analytics"
 	"github.com/warmbly/warmbly/internal/app/apikey"
+	"github.com/warmbly/warmbly/internal/app/apollo"
 	"github.com/warmbly/warmbly/internal/app/appdirectory"
 	"github.com/warmbly/warmbly/internal/app/audit"
 	"github.com/warmbly/warmbly/internal/app/auth"
 	"github.com/warmbly/warmbly/internal/app/behavior"
 	"github.com/warmbly/warmbly/internal/app/bootstrap"
 	"github.com/warmbly/warmbly/internal/app/campaign"
+	"github.com/warmbly/warmbly/internal/app/clay"
 	"github.com/warmbly/warmbly/internal/app/cliauth"
 	"github.com/warmbly/warmbly/internal/app/cloudlink"
 	"github.com/warmbly/warmbly/internal/app/compose"
@@ -320,6 +322,11 @@ type Handler struct {
 	// SalesforceService is the native Salesforce sync: settings, imports, the
 	// activity log and the contact panel.
 	SalesforceService *salesforce.Service
+
+	// ApolloService imports Apollo lists and enriches contacts through Apollo.
+	ApolloService *apollo.Service
+	// ClayService takes rows from Clay tables and sends events back to them.
+	ClayService *clay.Service
 
 	// Public websocket URL used by frontend clients
 	WebsocketURI string

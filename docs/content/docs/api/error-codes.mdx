@@ -376,8 +376,22 @@ The [Salesforce](/guides/salesforce/) endpoints answer with their own codes. Whe
 | `salesforce_unreachable` | 400 | Salesforce did not answer. Retry later |
 | `salesforce_sync_off` | 400 | `POST /integrations/salesforce/:id/sync-now` on a connection with sync turned off |
 | `salesforce_reconnect_required` | 409 | The Salesforce session ended (a revoked app, a password reset, a deactivated user). Reconnect the integration |
-| `import_running` | 409 | `POST /integrations/salesforce/:id/import-sources/:sourceId/run` while that import is already running |
+| `import_running` | 409 | `POST /integrations/salesforce/:id/import-sources/:sourceId/run` or `POST /integrations/apollo/:id/import-sources/:sourceId/run` while that import is already running |
 | `salesforce_rate_limited` | 429 | The Salesforce org has used its API requests for today |
+
+#### Apollo and Clay refusals
+
+The [Apollo](/guides/apollo/) and [Clay](/guides/clay/) endpoints answer with their own codes.
+
+| `code` | Status | Meaning |
+|--------|--------|---------|
+| `apollo_enrich_too_many` | 400 | `POST /integrations/apollo/:id/enrichments` selected more than 5,000 contacts |
+| `clay_webhook_url` | 400 | `PATCH /integrations/clay/:id` set a `webhook_url` that is not a Clay table webhook |
+| `clay_webhook_missing` | 400 | `PATCH /integrations/clay/:id` chose events to send with no table webhook saved |
+| `apollo_key_rejected` | 422 | Apollo refused the saved API key. Replace it with `PUT /integrations/apollo/:id/key` |
+| `apollo_key_forbidden` | 422 | The API key works but cannot reach an endpoint the integration uses. Use a master key, or one with lists, contact search and people enrichment |
+| `apollo_key_missing` | 422 | The Apollo connection has no API key |
+| `apollo_rate_limited` | 429 | Apollo's rate limit for the account was reached. Retry later |
 
 #### Automation refusals
 
