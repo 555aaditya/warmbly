@@ -786,6 +786,28 @@ On the tracking service (the `TRACKING_DOMAIN` host, not the API), also public a
 - `GET /tracking.js` (the website tracking snippet), `POST /p` (page-view ingest; JSON body up to 8 KB, `429` over budget, `204` otherwise. Nothing in the request can name a contact)
 - A visit to a [sending domain's root](/guides/sending-domains/#root-redirects) (or its `www`) that a workspace pointed here. On a verified domain every path except `/health` answers `302` to its website with `Cache-Control: public, max-age=300`, before any route above; an unknown host is a `404`. The forms service answers a verified redirect domain the same way
 
+## Scheduled jobs
+
+`GET /admin/jobs` requires admin `view_analytics` and returns registered loops
+and retained retired records in `data`. Each row includes its service, interval,
+last recorded status and error, execution counters and recorded schedule.
+`retired_at`, when present, is the timestamp of explicit retirement
+classification, not proof of when the last process stopped. Retired records
+remain visible in Jobs with their historical values; they are not current
+running, overdue, failed or successful jobs in operational monitoring.
+
+`POST /admin/jobs/:name/run` requires admin `manage_settings`. It requests a
+registered loop to run at its next poll; it does not execute the job itself.
+Missing and explicitly retired records return `404 not_found`. Retired loops
+cannot claim new scheduled slots or take manual requests. Retirement does not
+interrupt an already admitted run or erase its completion evidence.
+
+Migration 286 classifies only the backend `fleet_quarantine` loop, which was
+removed from the application, as retired. Other old or stalled jobs remain
+active and retain their monitoring warnings. There is no age-based automatic
+retirement. Registering a loop again reactivates its record and clears any
+old pending run request, without resetting its execution counters or errors.
+
 ## Platform node diagnostics
 
 Backend-origin routes outside `/v1` require a normal bearer session, live admin

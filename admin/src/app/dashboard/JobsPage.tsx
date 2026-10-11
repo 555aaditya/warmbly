@@ -86,7 +86,7 @@ export default function JobsPage() {
                             {relative(j.last_started_at)}
                         </div>
                         <div className="text-[11.5px] text-muted-foreground tabular-nums">
-                            {j.last_status === "running" ? "still running" : `took ${humanDuration(j.last_duration_ms)}`}
+                            {j.last_status === "running" ? (j.retired_at ? "recorded running" : "still running") : `took ${humanDuration(j.last_duration_ms)}`}
                         </div>
                     </div>
                 ) : (
@@ -98,17 +98,24 @@ export default function JobsPage() {
             id: "status",
             header: "Status",
             cell: (j) => (
-                <StatusBadge tone={STATUS_TONE[j.last_status] ?? "neutral"} dot={j.last_status !== "running"}>
-                    {j.last_status === "running" && <Loader2 className="size-3 animate-spin" />}
-                    {j.last_status || "idle"}
-                </StatusBadge>
+                <div className="space-y-1">
+                    <StatusBadge tone={j.retired_at ? "neutral" : STATUS_TONE[j.last_status] ?? "neutral"} dot={!j.retired_at && j.last_status !== "running"}>
+                        {!j.retired_at && j.last_status === "running" && <Loader2 className="size-3 animate-spin" />}
+                        {j.retired_at ? "retired" : j.last_status || "idle"}
+                    </StatusBadge>
+                    {j.retired_at && <div className="text-xs text-muted-foreground">Last recorded: {j.last_status || "idle"}</div>}
+                </div>
             ),
-            csv: (j) => j.last_status,
+            csv: (j) => j.retired_at ? `retired (last recorded: ${j.last_status})` : j.last_status,
         },
         {
             id: "next_run",
             header: "Next run",
-            cell: (j) => (
+            cell: (j) => j.retired_at ? (
+                <span className="text-xs text-muted-foreground" title={`Retirement recorded ${absolute(j.retired_at)}; last schedule ${absolute(j.next_run_at)}`}>
+                    Not scheduled
+                </span>
+            ) : (
                 <div className="flex items-center gap-1.5 whitespace-nowrap">
                     <span className="text-xs text-muted-foreground tabular-nums" title={absolute(j.next_run_at)}>
                         {relative(j.next_run_at, "—")}
@@ -123,7 +130,7 @@ export default function JobsPage() {
                     )}
                 </div>
             ),
-            csv: (j) => j.next_run_at || "",
+            csv: (j) => j.retired_at ? `retired; last schedule: ${j.next_run_at || "unknown"}` : j.next_run_at || "",
         },
         {
             id: "counts",
@@ -157,12 +164,12 @@ export default function JobsPage() {
                     <Button
                         size="xs"
                         variant="outline"
-                        disabled={pending || !!j.run_requested_at}
+                        disabled={pending || !!j.run_requested_at || !!j.retired_at}
                         onClick={(e) => {
                             e.stopPropagation();
                             run.mutate(j.name);
                         }}
-                        title={j.run_requested_at ? "A run is already requested" : `Ask the ${j.service} to run this loop now`}
+                        title={j.retired_at ? "Retired jobs do not accept run requests" : j.run_requested_at ? "A run is already requested" : `Ask the ${j.service} to run this loop now`}
                     >
                         <Play /> {pending ? "Requesting…" : "Run now"}
                     </Button>
@@ -173,7 +180,7 @@ export default function JobsPage() {
 
     const empty = !isLoading && !error && groups.length === 0;
     const total = data?.data?.length ?? 0;
-    const failing = (data?.data ?? []).filter((j) => j.last_status === "error").length;
+    const failing = (data?.data ?? []).filter((j) => !j.retired_at && j.last_status === "error").length;
 
     return (
         <div>
@@ -191,7 +198,7 @@ export default function JobsPage() {
                         </>
                     ) : undefined
                 }
-                description="Every background loop on this instance. A job runs in the process named in its service column, and Run now is picked up by that process at its next poll."
+                description="Registered background loops and retained retired history. Active jobs run in their named process and pick up Run now at its next poll. Retired jobs retain their last recorded status but are not scheduled."
             />
 
             {error ? (

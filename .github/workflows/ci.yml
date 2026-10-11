@@ -213,6 +213,13 @@ jobs:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
         run: go test -race ./internal/repository -run '^TestLiveInvitedSignup$' -count=1
 
+      - name: Scheduled-job retirement regressions (PostgreSQL)
+        env:
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+        run: |
+          go test -race -p 1 ./internal/repository -run '^TestLiveJobRun' -count=1
+          go test -race -p 1 ./internal/infrastructure/db -run '^TestLiveScheduledJobRetirementUpgradePreservesExecutionHistory$' -count=1
+
       - name: Warmup dispatch, upgrade and admin-send regressions (PostgreSQL)
         env:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
