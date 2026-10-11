@@ -139,18 +139,19 @@ func (w *WorkerService) reportLoadFailure(e *models.AddWorkerEmail, err error) {
 	}
 	info := mailErr.GetUserErrorInfo()
 	event := models.EmailErrorEvent{
-		Operation:      models.MailTransportUnknown,
-		EmailAccountID: e.ID.String(),
-		UserID:         e.UserID.String(),
-		ErrorCode:      string(mailErr.Code),
-		ErrorType:      string(mailErr.Type),
-		ResolveMethod:  string(mailErr.ResolveMethod),
-		Message:        mailErr.Message,
-		UserVisible:    mailErr.IsUserVisible(),
-		UserTitle:      info.Title,
-		UserMessage:    info.Message,
-		ActionRequired: info.ActionRequired,
-		Timestamp:      wmail.ErrorObservedTimestamp(mailErr),
+		TransportGeneration: e.TransportGeneration,
+		Operation:           models.MailTransportUnknown,
+		EmailAccountID:      e.ID.String(),
+		UserID:              e.UserID.String(),
+		ErrorCode:           string(mailErr.Code),
+		ErrorType:           string(mailErr.Type),
+		ResolveMethod:       string(mailErr.ResolveMethod),
+		Message:             mailErr.Message,
+		UserVisible:         mailErr.IsUserVisible(),
+		UserTitle:           info.Title,
+		UserMessage:         info.Message,
+		ActionRequired:      info.ActionRequired,
+		Timestamp:           wmail.ErrorObservedTimestamp(mailErr),
 	}
 	if perr := w.mailManager.OnEvent(eventType, e.ID.String(), event); perr != nil {
 		log.Error().Err(perr).Str("email_id", e.ID.String()).Msg("failed to report a mailbox that did not load")

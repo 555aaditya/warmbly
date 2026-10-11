@@ -91,14 +91,14 @@ func (r *emailAccountErrorRepository) CreateOnce(ctx context.Context, data *Crea
 		return nil, errx.InternalError()
 	}
 	operation := data.Operation.Conservative()
-	if operation.Known() {
-		var matches bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM email_accounts WHERE id=$1 AND transport_generation=$2)`, data.EmailAccountID, data.TransportGeneration).Scan(&matches); err != nil {
+	currentGeneration := false
+	if data.TransportGeneration != uuid.Nil {
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM email_accounts WHERE id=$1 AND transport_generation=$2)`, data.EmailAccountID, data.TransportGeneration).Scan(&currentGeneration); err != nil {
 			return nil, errx.InternalError()
 		}
-		if !matches {
-			operation = models.MailTransportUnknown
-		}
+	}
+	if operation.Known() && !currentGeneration {
+		operation = models.MailTransportUnknown
 	}
 	if operation == models.MailTransportSync && data.TaskID != nil || operation == models.MailTransportSend && (data.TaskID == nil || *data.TaskID == uuid.Nil) {
 		operation = models.MailTransportUnknown
@@ -122,7 +122,12 @@ func (r *emailAccountErrorRepository) CreateOnce(ctx context.Context, data *Crea
 			title, message, user_message, action_required, task_id, created_at,
 			operation,observation_source,received_at,resolved_at,resolved_by
 		)
-		SELECT $12,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,at,$13,source,NOW(),recovered_at,
+		SELECT $12,$1,$2,$3,$4,$5,$6,
+		    CASE WHEN $3='SERVER_UNREACHABLE' AND $17::boolean
+		        AND (NOT $14::boolean OR source<>'worker') THEN $15 ELSE $7 END,
+		    CASE WHEN $3='SERVER_UNREACHABLE' AND $17::boolean AND $8=$7
+		        AND (NOT $14::boolean OR source<>'worker') THEN $15 ELSE $8 END,
+		    $9,$10,at,$13,source,NOW(),recovered_at,
 		    CASE WHEN recovered_at IS NOT NULL THEN $13 || ' recovered' END
 		FROM candidate
 		WHERE EXISTS(SELECT 1 FROM email_accounts WHERE id=$1 AND user_id=$2)
@@ -146,7 +151,35 @@ func (r *emailAccountErrorRepository) CreateOnce(ctx context.Context, data *Crea
 		    AND existing.error_code IN ('SERVER_UNREACHABLE','CONNECTION_LOST','RESOURCE_NOT_FOUND','IMAP_UNKNOWN')
 		    THEN EXCLUDED.observation_source ELSE existing.observation_source END,
 		    received_at=CASE WHEN existing.user_id=EXCLUDED.user_id
-		    THEN GREATEST(existing.received_at,EXCLUDED.received_at) ELSE existing.received_at END
+		    THEN GREATEST(existing.received_at,EXCLUDED.received_at) ELSE existing.received_at END,
+		    message=CASE WHEN existing.user_id=EXCLUDED.user_id
+		        AND $14::boolean AND EXCLUDED.observation_source='worker'
+		        AND EXCLUDED.created_at>existing.created_at
+		        AND existing.error_code='SERVER_UNREACHABLE'
+		        AND (existing.message LIKE $16 OR $17::boolean)
+		    THEN CASE WHEN $17::boolean THEN EXCLUDED.message ELSE $15 END
+		    WHEN existing.user_id=EXCLUDED.user_id
+		        AND EXCLUDED.created_at>existing.created_at
+		        AND existing.error_code='SERVER_UNREACHABLE'
+		        AND existing.message LIKE $16
+		        AND (NOT $14::boolean OR EXCLUDED.observation_source<>'worker')
+		    THEN $15
+		    ELSE existing.message END,
+		    user_message=CASE WHEN existing.user_message=existing.message THEN
+		        CASE WHEN existing.user_id=EXCLUDED.user_id
+		            AND $14::boolean AND EXCLUDED.observation_source='worker'
+		            AND EXCLUDED.created_at>existing.created_at
+		            AND existing.error_code='SERVER_UNREACHABLE'
+		            AND (existing.message LIKE $16 OR $17::boolean)
+		        THEN CASE WHEN $17::boolean THEN EXCLUDED.message ELSE $15 END
+		        WHEN existing.user_id=EXCLUDED.user_id
+		            AND EXCLUDED.created_at>existing.created_at
+		            AND existing.error_code='SERVER_UNREACHABLE'
+		            AND existing.message LIKE $16
+		            AND (NOT $14::boolean OR EXCLUDED.observation_source<>'worker')
+		        THEN $15
+		        ELSE existing.user_message END
+		    ELSE existing.user_message END
 		RETURNING id, email_account_id, user_id, error_code, severity, resolve_method,
 		          title, message, user_message, action_required, task_id,
 		          resolved_at, resolved_by, created_at,operation,observation_source,received_at
@@ -166,6 +199,10 @@ func (r *emailAccountErrorRepository) CreateOnce(ctx context.Context, data *Crea
 		data.ObservedAt,
 		recordID,
 		operation,
+		currentGeneration,
+		errx.ErrMailServerUnreachable.Message,
+		"The connection to the mail server could not be established (IMAP %",
+		errx.IsKnownIMAPConnectionMessage(data.Message),
 	}
 
 	var e EmailAccountError

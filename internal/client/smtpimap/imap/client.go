@@ -255,7 +255,7 @@ func (c *Client) connectLocked() *errx.MailError {
 	}()
 	raw, err := netbind.Dialer(c.BindIP).DialContext(setupCtx, "tcp", addr)
 	if err != nil {
-		return errx.ErrMailServerUnreachable
+		return errx.ErrMailServerUnreachableAt(errx.MailConnectionStageIMAPDial, errors.New(connectionFailureReason(err)))
 	}
 	if resolved == models.MailSecurityNone && !netbind.LoopbackPeer(raw) {
 		_ = raw.Close()
@@ -286,14 +286,14 @@ func (c *Client) connectLocked() *errx.MailError {
 		// itself when the upgrade fails.
 		client, err = imapclient.NewStartTLS(conn, &imapclient.Options{TLSConfig: tlsConf})
 		if err != nil {
-			return errx.ErrMailServerUnreachable
+			return errx.ErrMailServerUnreachableAt(errx.MailConnectionStageIMAPSTARTTLS, errors.New(connectionFailureReason(err)))
 		}
 	default:
 		tconn := tls.Client(conn, tlsConf)
 		err = tconn.HandshakeContext(setupCtx)
 		if err != nil {
 			_ = tconn.Close()
-			return errx.ErrMailServerUnreachable
+			return errx.ErrMailServerUnreachableAt(errx.MailConnectionStageIMAPTLS, errors.New(connectionFailureReason(err)))
 		}
 		client = imapclient.New(tconn, nil)
 	}

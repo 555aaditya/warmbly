@@ -274,6 +274,7 @@ func (s *JobsService) HandleEmailServerError(ctx context.Context, event models.E
 	// failure would otherwise fill the mailbox's error list with a row a
 	// minute for as long as the server keeps refusing (issue #405).
 	recorded := true
+	warningMessage := event.UserMessage
 	if s.EmailAccountErrorRepository != nil {
 		errorRecord := &repository.CreateEmailAccountError{
 			EmailAccountID:      emailAccountID,
@@ -297,6 +298,9 @@ func (s *JobsService) HandleEmailServerError(ctx context.Context, event models.E
 			return xerr
 		}
 		recorded = xerr == nil && row != nil
+		if row != nil && row.UserMessage != nil {
+			warningMessage = *row.UserMessage
+		}
 	}
 
 	// Server errors are temporary - don't change account status
@@ -310,7 +314,7 @@ func (s *JobsService) HandleEmailServerError(ctx context.Context, event models.E
 			event.UserID,
 			emailAccountID,
 			event.UserTitle,
-			event.UserMessage,
+			warningMessage,
 		)
 	}
 

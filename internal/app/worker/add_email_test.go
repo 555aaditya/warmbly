@@ -93,7 +93,8 @@ func TestAddEmailReportsAMailboxThatCannotLoad(t *testing.T) {
 	c := &capturedEvents{}
 	w := newLoadingWorker(c)
 	id := uuid.New()
-	if err := w.HandleAddEmail(context.Background(), &models.AddWorkerEmail{ID: id, UserID: uuid.New(), Type: models.InboxProviderSMTPIMAP}); err != nil {
+	generation := uuid.New()
+	if err := w.HandleAddEmail(context.Background(), &models.AddWorkerEmail{ID: id, UserID: uuid.New(), Type: models.InboxProviderSMTPIMAP, TransportGeneration: generation}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -106,7 +107,7 @@ func TestAddEmailReportsAMailboxThatCannotLoad(t *testing.T) {
 	if len(c.events) != 1 || c.events[0] != models.JobEventTypeEmailAuthError {
 		t.Fatalf("events = %v, want one auth error so the mailbox shows it and stops", c.events)
 	}
-	if ev, ok := c.bodies[0].(models.EmailErrorEvent); !ok || ev.EmailAccountID != id.String() {
+	if ev, ok := c.bodies[0].(models.EmailErrorEvent); !ok || ev.EmailAccountID != id.String() || ev.TransportGeneration != generation || ev.Operation != models.MailTransportUnknown {
 		t.Fatalf("event body = %+v", c.bodies[0])
 	}
 }
