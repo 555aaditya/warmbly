@@ -143,6 +143,8 @@ The error says which step failed and what the server or the network answered, so
 
 Worker-side IMAP connection warnings identify `IMAP dial`, `IMAP TLS` or `IMAP STARTTLS` and a broad, sanitized reason such as a DNS failure, timeout, refused connection or certificate validation failure. Those details omit hostnames, credentials and raw server replies. A specific reason requires a valid worker observation for the current mailbox record, including when the warning is first saved and notified. An existing warning takes a recognized fixed reason only from a strictly later observation. Older or equal-time reports cannot replace it; a newer unrecognized or unverified observation returns to a general warning rather than presenting an earlier specific cause as fresh. Automatic retries are unchanged, and the warning neither proves recovery nor clears a protected uncertain send.
 
+When the saved warning is general but its user-facing text is missing, the notification uses that general warning rather than a blank message. Other historical transport details are not substituted into notifications.
+
 When a mail server goes down or stops answering, the mailbox is not deactivated. Warmbly says so once in the drawer, retries on a widening interval, and picks up where it left off when the server comes back. Nothing that arrived meanwhile is skipped, and the error clears itself on the first pass that reaches the server again.
 
 The same holds for a server that answers but refuses what Warmbly asked. The drawer shows one row carrying the server's own wording, not one row per retry, and it clears on the first pass that completes.

@@ -300,6 +300,8 @@ func (s *JobsService) HandleEmailServerError(ctx context.Context, event models.E
 		recorded = xerr == nil && row != nil
 		if row != nil && row.UserMessage != nil {
 			warningMessage = *row.UserMessage
+		} else if row != nil && row.Message == errx.ErrMailServerUnreachable.Message {
+			warningMessage = row.Message
 		}
 	}
 
