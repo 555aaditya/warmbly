@@ -93,6 +93,12 @@ func (w *WMail) syncOnce(ctx context.Context) (result *errx.MailError) {
 		}
 	}()
 	if err := w.SyncMail(ctx); err != nil {
+		w.lifecycleMu.Lock()
+		stopped := w.stopped
+		w.lifecycleMu.Unlock()
+		if stopped || ctx.Err() != nil {
+			return err
+		}
 		switch err.Code {
 		case errx.MailErrorCodeServerUnreachable, errx.MailErrorCodeConnectionLost:
 			nodeevidence.Emit(nodeevidence.ProviderUnreachable, w.ID, 0, 1)
