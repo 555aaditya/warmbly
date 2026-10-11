@@ -119,6 +119,7 @@ func (f *outboundStartFixture) snapshot(t *testing.T) string {
 
 func (f *outboundStartFixture) importPendingSnapshot(t *testing.T, status string) {
 	t.Helper()
+	before := f.snapshot(t)
 	rows := map[string][]map[string]any{
 		"tasks":         {{"id": f.task, "task_type": "warmup", "email_account_id": f.sender, "status": status, "message_id": "", "send_result_state": "unknown"}},
 		"warmup_tasks":  {{"task_id": f.task, "target_account_id": f.recipient, "subject": f.source.Subject}},
@@ -159,8 +160,35 @@ func (f *outboundStartFixture) importPendingSnapshot(t *testing.T, status string
 	}
 	svc := orgtransfer.NewService(repository.NewOrgTransferRepository(f.db), nil, nil, nil, orgtransfer.InstanceInfo{})
 	result, err := svc.ImportFrom(t.Context(), f.org, bytes.NewReader(buf.Bytes()), orgtransfer.ImportOptions{Conflict: models.OrgImportConflictOverwrite, ActorUserID: f.user}, nil)
-	if err != nil || result.RowCounts["tasks"] != 1 || result.RowCounts["warmup_tasks"] != 1 || result.RowCounts["warmup_tokens"] != 1 {
+	if err != nil || result == nil || result.RowCounts["tasks"] != 0 || result.RowCounts["warmup_tasks"] != 0 || result.RowCounts["warmup_tokens"] != 0 {
 		t.Fatalf("real partial archive import: result=%+v error=%v", result, err)
+	}
+	if after := f.snapshot(t); after != before {
+		t.Fatalf("protected partial import changed local authority/history\nbefore=%s\nafter=%s", before, after)
+	}
+}
+
+func (f *outboundStartFixture) prepareDeferredWarmup(t *testing.T) {
+	t.Helper()
+	lineage := f.repo.(repository.WarmupLineageRepository)
+	if err := lineage.RescheduleWarmupTask(t.Context(), f.task, time.Now().Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := lineage.ClaimWarmupTask(t.Context(), f.task, time.Now()); err != nil || !claimed {
+		t.Fatalf("claim deferred warmup: claimed=%v error=%v", claimed, err)
+	}
+	if err := lineage.SaveWarmupLineage(t.Context(), f.task, repository.WarmupLineage{
+		Subject: f.source.Subject, ScenarioVersion: f.source.Version,
+		RenderingVersion: generation.CanonicalRenderingVersion, MaxTurns: len(f.source.Messages) + 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.NewWarmupRepository(f.db.Pool).CreateWarmupToken(t.Context(), &models.WarmupToken{
+		Token: uuid.New(), TaskID: f.task, SenderAccountID: f.sender, RecipientAccountID: f.recipient,
+		Subject: f.source.Subject, ContentSource: "static", ConversationID: &f.source.ID,
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -250,6 +278,7 @@ func TestLiveWarmupGenericStartAfterPartialImport(t *testing.T) {
 				status = "active"
 			}
 			f.importPendingSnapshot(t, status)
+			f.prepareDeferredWarmup(t)
 			if mode == "replacement_nonce" || mode == "cancel_replacement_nonce" {
 				nonce, err := f.dispatch.AuthorizeWarmupDispatch(t.Context(), f.task, f.sender, f.worker)
 				if err != nil || nonce == f.nonce {
@@ -265,7 +294,7 @@ func TestLiveWarmupGenericStartAfterPartialImport(t *testing.T) {
 				ValidateOutboundExecution(context.Context, uuid.UUID) error
 			})
 			if err := validator.ValidateOutboundExecution(t.Context(), f.task); err != nil {
-				t.Fatalf("imported warmup token is not executable: %v", err)
+				t.Fatalf("fresh local warmup preparation is not executable: %v", err)
 			}
 			if pause.refuse {
 				if err := warmupapp.NewService(repository.NewWarmupRepository(f.db.Pool)).RemoveFromAllPools(t.Context(), f.recipient); err != nil {
@@ -379,6 +408,99 @@ func TestLiveWarmupGenericStartAfterCompatibleOverwrite(t *testing.T) {
 	response, _ = f.request(t, f.svc, false, &result)
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("matching started reservation lost correlated result: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestLiveWarmupGenericStartAfterMailboxArchiveImport(t *testing.T) {
+	for _, sourceOnly := range []bool{false, true} {
+		name := "local_mailbox_rotation"
+		if sourceOnly {
+			name = "source_history"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newOutboundStartFixture(t)
+			enc, err := encrypt.NewEncrypter([]byte("0123456789abcdef0123456789abcdef"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			svc := orgtransfer.NewService(repository.NewOrgTransferRepository(f.db), nil, enc, nil, orgtransfer.InstanceInfo{})
+			const passphrase = "synthetic-mailbox-import-control"
+			var buf bytes.Buffer
+			if _, err := svc.ExportTo(t.Context(), f.org, orgtransfer.ExportOptions{Groups: []models.OrgDataGroup{models.OrgDataGroupSending}, Passphrase: passphrase}, &buf, nil); err != nil {
+				t.Fatal(err)
+			}
+			var generationBefore uuid.UUID
+			if err := f.db.QueryRow(t.Context(), `SELECT transport_generation FROM email_accounts WHERE id=$1`, f.sender).Scan(&generationBefore); err != nil {
+				t.Fatal(err)
+			}
+			if sourceOnly {
+				f.exec(t, `DELETE FROM tasks WHERE id=$1`, f.task)
+			}
+			result, err := svc.ImportFrom(t.Context(), f.org, bytes.NewReader(buf.Bytes()), orgtransfer.ImportOptions{Conflict: models.OrgImportConflictOverwrite, ActorUserID: f.user, Passphrase: passphrase}, nil)
+			if err != nil || result == nil {
+				t.Fatalf("mailbox archive import: result=%+v error=%v", result, err)
+			}
+			var count int64
+			if sourceOnly {
+				count = 1
+			}
+			for _, table := range []string{"tasks", "warmup_tasks", "warmup_tokens"} {
+				if result.RowCounts[table] != count {
+					t.Fatalf("mailbox archive %s count=%d want=%d", table, result.RowCounts[table], count)
+				}
+			}
+			var generationAfter uuid.UUID
+			var worker *uuid.UUID
+			if err := f.db.QueryRow(t.Context(), `SELECT transport_generation,worker_id FROM email_accounts WHERE id=$1`, f.sender).Scan(&generationAfter, &worker); err != nil || generationAfter == generationBefore || worker == nil || *worker != f.worker {
+				t.Fatalf("mailbox import failed to rotate generation or preserve destination placement: before=%s after=%s worker=%v error=%v", generationBefore, generationAfter, worker, err)
+			}
+			var generic, dispatch *uuid.UUID
+			var lineage *int
+			if err := f.db.QueryRow(t.Context(), `SELECT t.send_executor_nonce,w.dispatch_nonce,w.lineage_version FROM tasks t JOIN warmup_tasks w ON w.task_id=t.id WHERE t.id=$1`, f.task).Scan(&generic, &dispatch, &lineage); err != nil {
+				t.Fatal(err)
+			}
+			if sourceOnly {
+				if generic != nil || dispatch != nil || lineage != nil {
+					t.Fatalf("imported history retained source execution authority: generic=%v dispatch=%v lineage=%v", generic, dispatch, lineage)
+				}
+				var unknown bool
+				if err := f.db.QueryRow(t.Context(), `SELECT ea.send_recovery_hold AND t.send_result_state='unknown' AND t.send_result_applied_at IS NULL FROM tasks t JOIN email_accounts ea ON ea.id=t.email_account_id WHERE t.id=$1`, f.task).Scan(&unknown); err != nil || !unknown {
+					t.Fatalf("imported uncertainty was cleared: unknown=%v error=%v", unknown, err)
+				}
+			} else if generic == nil || *generic != f.nonce || dispatch == nil || *dispatch != f.nonce || lineage == nil || *lineage != 1 {
+				t.Fatalf("mailbox rotation erased local identity: generic=%v dispatch=%v lineage=%v", generic, dispatch, lineage)
+			}
+			oldWorker := f.worker
+			before := f.snapshot(t)
+			f.worker = uuid.New()
+			status, state := f.request(t, f.svc, true, nil)
+			f.worker = oldWorker
+			wantStatus := http.StatusOK
+			if sourceOnly {
+				wantStatus = http.StatusServiceUnavailable
+			}
+			if status.Code != wantStatus || state == "execute" || state == "started" || f.snapshot(t) != before {
+				t.Fatalf("foreign worker acquired imported/local authority: status=%d state=%s", status.Code, state)
+			}
+			status, state = f.request(t, f.svc, true, nil)
+			t.Logf("sourceOnly=%v old command: status=%d state=%s", sourceOnly, status.Code, state)
+			if sourceOnly {
+				if status.Code != wantStatus || state == "execute" || state == "started" || f.snapshot(t) != before {
+					t.Fatalf("source history acquired execution authority: status=%d state=%s", status.Code, state)
+				}
+				result := models.SendEmailResult{TaskID: f.task, Success: true, MessageID: "<unstarted-source@example.test>"}
+				response, _ := f.request(t, f.svc, false, &result)
+				if response.Code != http.StatusConflict || f.snapshot(t) != before {
+					t.Fatal("unstarted source history gained result authority", response.Code)
+				}
+			} else if status.Code != http.StatusOK || state != "execute" {
+				t.Fatalf("preserved local command lost execution authority: status=%d state=%s", status.Code, state)
+			}
+			var started bool
+			if err := f.db.QueryRow(t.Context(), `SELECT t.send_executor_started_at IS NOT NULL OR w.dispatch_started_at IS NOT NULL OR EXISTS(SELECT 1 FROM outbound_attempts WHERE task_id=t.id) FROM tasks t JOIN warmup_tasks w ON w.task_id=t.id WHERE t.id=$1`, f.task).Scan(&started); err != nil || started == sourceOnly {
+				t.Fatalf("execution markers disagree with local/source authority: started=%v sourceOnly=%v error=%v", started, sourceOnly, err)
+			}
+		})
 	}
 }
 
