@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -16,12 +17,13 @@ var syncTestGeneration = uuid.New()
 // stubSyncStateRepo accepts what the worker relays.
 type stubSyncStateRepo struct {
 	repository.EmailSyncStateRepository
-	put   *models.SyncState
-	saved *models.SyncState
+	put    *models.SyncState
+	saved  *models.SyncState
+	getErr error
 }
 
 func (s *stubSyncStateRepo) Get(context.Context, uuid.UUID) (*models.SyncState, error) {
-	return s.saved, nil
+	return s.saved, s.getErr
 }
 
 func (s *stubSyncStateRepo) Put(_ context.Context, _, _ uuid.UUID, st *models.SyncState) error {
@@ -193,5 +195,32 @@ func TestSyncStateRecoveryRetriesBeforeStateIsStored(t *testing.T) {
 	}
 	if errRepo.calls != 2 {
 		t.Fatal("recovery failure suppressed retry")
+	}
+}
+
+func TestSyncStateUnreadablePreviousStateRetriesWithoutRecovery(t *testing.T) {
+	at := time.Now().Add(-time.Minute)
+	lookupErr := errors.New("previous state unavailable")
+	stateRepo := &stubSyncStateRepo{saved: &models.SyncState{LastSyncedAt: &at}, getErr: lookupErr}
+	errRepo := &stubErrorRepo{}
+	s := &JobsService{EmailSyncStateRepository: stateRepo, EmailAccountErrorRepository: errRepo}
+	event := &models.JobEventSyncState{EmailID: uuid.New(), State: models.SyncState{TransportGeneration: syncTestGeneration, LastSyncedAt: &at}}
+	if err := s.HandleSyncState(t.Context(), event); !errors.Is(err, lookupErr) {
+		t.Fatalf("previous-state failure was not retried: %v", err)
+	}
+	if stateRepo.put != nil || errRepo.calls != 0 {
+		t.Fatal("unreadable previous state acquired recovery or stored the relay")
+	}
+	stateRepo.getErr = nil
+	if err := s.HandleSyncState(t.Context(), event); err != nil {
+		t.Fatal(err)
+	}
+	if stateRepo.put == nil || errRepo.calls != 0 {
+		t.Fatal("equal-timestamp retry acquired recovery")
+	}
+	fresh := at.Add(time.Second)
+	event.State.LastSyncedAt = &fresh
+	if err := s.HandleSyncState(t.Context(), event); err != nil || errRepo.calls != 1 {
+		t.Fatal("fresh typed pass did not recover after the lookup recovered", err)
 	}
 }

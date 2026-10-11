@@ -21,9 +21,9 @@ func (s *JobsService) HandleSyncState(ctx context.Context, e *models.JobEventSyn
 		return nil
 	}
 
-	var prev *models.SyncState
-	if saved, err := s.EmailSyncStateRepository.Get(ctx, e.EmailID); err == nil {
-		prev = saved
+	prev, err := s.EmailSyncStateRepository.Get(ctx, e.EmailID)
+	if err != nil {
+		return err
 	}
 
 	// Persist recovery before state, so a failed proof write remains retryable.

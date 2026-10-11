@@ -73,3 +73,62 @@ func TestLiveMailTransportConfirmedSendReconcilesOnlySend(t *testing.T) {
 		})
 	}
 }
+
+func TestLiveMailTransportUnreadableSyncStateCannotAcquireRecovery(t *testing.T) {
+	d := liveDB(t)
+	f := newSendResultFixture(t, d)
+	stateRepo := repository.NewEmailSyncStateRepository(d)
+	errRepo := repository.NewEmailAccountErrorRepository(d)
+	s := &JobsService{EmailSyncStateRepository: stateRepo, EmailAccountErrorRepository: errRepo}
+	var generation uuid.UUID
+	if err := d.QueryRow(t.Context(), `SELECT transport_generation FROM email_accounts WHERE id=$1`, f.mailbox).Scan(&generation); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().Add(-time.Minute).UTC().Truncate(time.Microsecond)
+	if err := stateRepo.Put(t.Context(), f.user, f.mailbox, &models.SyncState{LastSyncedAt: &at}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(t.Context(), `UPDATE email_sync_state SET backfill_cursor='{"google_recovery":"unreadable"}' WHERE email_id=$1`, f.mailbox); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stateRepo.Get(t.Context(), f.mailbox); err == nil {
+		t.Fatal("fixture did not fail the native previous-state read")
+	}
+	observed := at.Add(-time.Minute)
+	if _, err := errRepo.CreateOnce(t.Context(), &repository.CreateEmailAccountError{EmailAccountID: f.mailbox, UserID: f.user, Operation: models.MailTransportSync, TransportGeneration: generation, ObservedAt: &observed, ErrorCode: "SERVER_UNREACHABLE", Severity: "WARNING", ResolveMethod: "RETRY", Title: "Transport", Message: "Transport report"}); err != nil {
+		t.Fatal(err)
+	}
+	counts := func() (int, int) {
+		t.Helper()
+		var recovery, unresolved int
+		if err := d.QueryRow(t.Context(), `SELECT (SELECT count(*) FROM email_account_transport_recovery WHERE email_account_id=$1),(SELECT count(*) FROM email_account_errors WHERE email_account_id=$1 AND resolved_at IS NULL)`, f.mailbox).Scan(&recovery, &unresolved); err != nil {
+			t.Fatal(err)
+		}
+		return recovery, unresolved
+	}
+	event := &models.JobEventSyncState{EmailID: f.mailbox, UserID: f.user, State: models.SyncState{TransportGeneration: generation, LastSyncedAt: &at}}
+	err := s.HandleSyncState(t.Context(), event)
+	if recovery, unresolved := counts(); err == nil || recovery != 0 || unresolved != 1 {
+		t.Fatalf("unreadable equal-timestamp relay was accepted: err=%v recovery=%d unresolved=%d", err, recovery, unresolved)
+	}
+	if _, err := stateRepo.Get(t.Context(), f.mailbox); err == nil {
+		t.Fatal("failed relay overwrote unreadable previous state")
+	}
+	if _, err := d.Exec(t.Context(), `UPDATE email_sync_state SET backfill_cursor='{}' WHERE email_id=$1`, f.mailbox); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.HandleSyncState(t.Context(), event); err != nil {
+		t.Fatal(err)
+	}
+	if recovery, unresolved := counts(); recovery != 0 || unresolved != 1 {
+		t.Fatal("readable equal-timestamp retry acquired recovery")
+	}
+	fresh := at.Add(10 * time.Second)
+	event.State.LastSyncedAt = &fresh
+	if err := s.HandleSyncState(t.Context(), event); err != nil {
+		t.Fatal(err)
+	}
+	if recovery, unresolved := counts(); recovery != 1 || unresolved != 0 {
+		t.Fatal("fresh typed completed pass failed to recover")
+	}
+}
