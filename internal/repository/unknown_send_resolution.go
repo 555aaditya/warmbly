@@ -73,11 +73,11 @@ func queueUnknownSendResolution(ctx context.Context, tx pgx.Tx, org, mailbox str
 		return errx.InternalError()
 	}
 	// Keep admission held until the normal result consumer commits all accounting effects.
-	tag, err := tx.Exec(ctx, `INSERT INTO send_recovery_resolutions(organization_id,email_account_id,recovery_task_id,previous_reason,evidence_type,confirmation_reference,confirmed_result)
-	 SELECT ea.organization_id,ea.id,t.id,'unknown',$4,$5,$6 FROM email_accounts ea JOIN tasks t ON t.email_account_id=ea.id
+	tag, err := tx.Exec(ctx, `INSERT INTO send_recovery_resolutions(organization_id,email_account_id,recovery_task_id,previous_reason,evidence_type,confirmation_reference,confirmed_result,recorded_locally_at)
+	 SELECT ea.organization_id,ea.id,t.id,'unknown',$4,$5,$6,clock_timestamp() FROM email_accounts ea JOIN tasks t ON t.email_account_id=ea.id
 	 WHERE ea.organization_id=$1 AND ea.id=$2 AND ea.status='active' AND ea.send_recovery_hold AND ea.send_recovery_reason='unknown'
 	 AND ea.send_recovery_task_id=$3 AND t.id=$3 AND t.send_result_state='unknown' AND t.send_result_applied_at IS NULL
-	 AND NOT EXISTS(SELECT 1 FROM send_recovery_resolutions r WHERE r.recovery_task_id=t.id AND r.previous_reason='unknown')`,
+	 AND NOT EXISTS(SELECT 1 FROM send_recovery_resolutions r WHERE r.recovery_task_id=t.id AND r.previous_reason='unknown' AND r.recorded_locally_at IS NOT NULL)`,
 		org, mailbox, resolution.HeldTaskID, resolution.EvidenceType, strings.TrimSpace(resolution.ConfirmationReference), raw)
 	if err != nil {
 		return errx.InternalError()
@@ -107,7 +107,8 @@ func (r *taskRepository) ListUnappliedSendResults(ctx context.Context, limit int
 	 AND w.dispatch_result IS NOT NULL AND t.send_result_applied_at IS NOT NULL AND t.status<>'cancelled'
 	 UNION ALL
 	 SELECT t.id,t.created_at,t.send_result_state,t.send_result_applied_at,r.confirmed_result,2 FROM send_recovery_resolutions r JOIN tasks t ON t.id=r.recovery_task_id
-	 WHERE r.confirmed_result IS NOT NULL AND (t.send_result_applied_at IS NULL OR (`+repairableSendDeadLetterPredicate+`)) AND t.status<>'cancelled'
+	 WHERE r.confirmed_result IS NOT NULL AND r.recorded_locally_at IS NOT NULL
+	 AND (t.send_result_applied_at IS NULL OR (`+repairableSendDeadLetterPredicate+`)) AND t.status<>'cancelled'
 	 ),
 	 definitive AS (SELECT *,CASE WHEN result->>'success'='true' THEN 'sent' ELSE 'failed' END AS outcome FROM recorded
 	 WHERE result->>'success'='true' OR result->'error'->'failure'->>'disposition' IN('retry','throttle','permanent','authentication')

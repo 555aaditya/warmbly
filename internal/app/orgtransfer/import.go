@@ -252,6 +252,14 @@ func (s *service) importTable(
 	for _, c := range t.ResetOnImport {
 		reset[c] = true
 	}
+	var resetOnOverwrite []string
+	if t.ResetOnOverwrite {
+		for _, c := range t.ResetOnImport {
+			if writable[c] {
+				resetOnOverwrite = append(resetOnOverwrite, c)
+			}
+		}
+	}
 
 	insertCols := make([]string, 0, len(mt.Columns))
 	unknown := 0
@@ -320,7 +328,7 @@ func (s *service) importTable(
 		if foreign > 0 {
 			return fmt.Errorf("%s: %w", t.Name, ErrForeignRows)
 		}
-		n, err := s.repo.InsertBatch(ctx, tx, t.Name, insertCols, batch, ic.conflict, pk, t.OwnerScope(), orgID)
+		n, err := s.repo.InsertBatch(ctx, tx, t.Name, insertCols, batch, ic.conflict, pk, t.OwnerScope(), orgID, resetOnOverwrite)
 		if err != nil {
 			return err
 		}

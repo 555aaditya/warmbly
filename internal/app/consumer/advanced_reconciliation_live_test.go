@@ -27,6 +27,10 @@ func (d *resultDispatcher) Dispatch(context.Context, uuid.UUID, models.WebhookEv
 func TestLiveAdvancedBounceReconciliationRollbackAndReplayWithOneConnection(t *testing.T) {
 	h := liveDB(t)
 	f := newSendResultFixture(t, h)
+	if _, err := h.Pool.Exec(t.Context(), `INSERT INTO organization_members(organization_id,user_id,role,permissions,accepted_at)
+		SELECT id,owner_user_id,'owner',$2,NOW() FROM organizations WHERE id=$1`, f.org, models.PermViewAnalytics); err != nil {
+		t.Fatal(err)
+	}
 	s := liveJobsService(h)
 	task := f.stampSend(t, s)
 	cfg := h.Pool.Config()
@@ -51,7 +55,9 @@ func TestLiveAdvancedBounceReconciliationRollbackAndReplayWithOneConnection(t *t
 	svc.(interface {
 		WireDispatcher(advanced.EventDispatcher)
 	}).WireDispatcher(dispatcher)
-	svc.WireNotifier(notification.NewService(repository.NewNotificationRepository(pool), nil))
+	notifier := notification.NewService(repository.NewNotificationRepository(pool), nil)
+	notifier.WireDelivery(nil, nil, nil, repository.NewOrganizationRepository(pool))
+	svc.WireNotifier(notifier)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	request := &models.IngestDeliverabilityEventRequest{CampaignID: &f.campaign, TaskID: &task, ContactID: &f.contact, EventType: models.DeliverabilityEventBounce, Provider: "smtp_reject", RecipientEmail: "lead-" + f.contact.String()[:8] + "@test.local", Reason: "unknown recipient", IdempotencyKey: "refusal-" + task.String()}

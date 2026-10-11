@@ -87,6 +87,9 @@ type Table struct {
 	// works for a NOT NULL column (writing NULL into one aborts the import).
 	ResetOnImport []string
 
+	// ResetOnOverwrite also defaults reset columns when replacing destination rows.
+	ResetOnOverwrite bool
+
 	// ImportSkip exports the table for the record but never writes it back.
 	ImportSkip bool
 
@@ -789,9 +792,11 @@ var Tables = []Table{
 	},
 	{
 		Name: "send_recovery_resolutions", Group: models.OrgDataGroupSending,
-		Scope: scopeOrg,
-		Owner: scopeOrg,
-		Note:  "Evidence and operator confirmation used to lift a durable mailbox send hold. Unknown sends cannot be resolved through this history and remain restrictive after import.",
+		Scope:            scopeOrg,
+		Owner:            scopeOrg,
+		ResetOnImport:    []string{"recorded_locally_at", "conflict_resolved_at"},
+		ResetOnOverwrite: true,
+		Note:             "Recovery evidence travels as history. Source-instance results and resolutions cannot execute or release a conflict hold after import; fresh local confirmation or independent authoritative worker evidence is required.",
 	},
 	{
 		// An AI-group table, but it sits here because task_id points at tasks.

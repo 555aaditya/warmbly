@@ -127,6 +127,24 @@ The source-instance reconciliation outbox is excluded from organization archives
 
 Rollback refuses unresolved reservations, explicit participation state, diagnostic authorization/proof, pending outbox effects and repair history instead of discarding them. Earlier component migrations also refuse restrictive dispatch or managed consent history. Restore or complete a reviewed reconciliation; do not delete negative evidence simply to make downgrade succeed. Legacy deployments remain readable, but do not resume a mixed-old executor fleet assuming new guarantees.
 
+### Conflict-audit upgrade ordering
+
+The conflict-audit extension adds typed automatic contradiction evidence, local-record provenance and an explicit conflict-resolution projection. All historical rows remain intact, with no inferred provenance backfill. A historical confirmation without trustworthy local origin is history, not permission to apply an outcome or clear an unknown/conflict hold. Independent authoritative worker/provider results continue to reconcile unknown sends automatically. A genuine contradiction between definitive results preserves the original accounting and hold until a validated provider confirmation resolves the known conflict; arrival order and duplicate delivery do not decide the outcome.
+
+Normal customer sending, connection and authentication steps do not change. Exceptional uncertain history is an administrator recovery workflow using the existing `PATCH /emails/:id` recovery payload, workspace boundary and `manage_emails`/`WRITE_EMAILS` permissions. It does not add a customer log-reading or confirmation form. These are existing workspace/API permissions, not a new platform-admin-only authorization gate. Confirming an unknown outcome keeps admission held until the normal result reconciler commits accounting and hold transfer together. Authentication repair cannot resolve an unrelated outcome conflict.
+
+An additive schema alone is **not** a safe active mixed-version rollout. Old readers can still execute historical confirmations without checking provenance; old hold-clearing code cannot recognize automatic conflict rows. New binaries also require the added columns before using these paths. Use this ordering for a separately approved rollout:
+
+1. Preserve the database and audit evidence. Finish all predecessor migrations and review the allocated extension's up/down tests. Do not allocate a colliding migration or delete history to force rollback.
+2. Quiesce old dispatch/scheduling and all old processes that can apply send outcomes, mutate recovery holds, accept recovery confirmations or import workspace data. Preserve queued results and durable evidence. Merely disabling the admin confirmation screen or stopping one result consumer is insufficient.
+3. Apply the reviewed additive extension, then start only compatible backend, result-consumer, scheduler and import/repair binaries. Verify every control-plane replica, including Cloud and independently running consumers, before resuming these operations. Worker message/result formats are unchanged by this extension; it needs no new worker capability, credentials or customer configuration.
+4. Resume automatic stored-result reconciliation first, without resending tasks. Check task-scoped outcome, accounting, dead-letter and hold evidence. Remaining historical confirmations without local provenance require fresh administrator/provider confirmation only when independent authoritative evidence cannot resolve the unknown. Unknown outcomes and genuine conflicts remain restrictive.
+5. Keep the new schema and roll forward if a binary rollout fails. Recovery-audit down refuses whenever audit rows remain, including historical rows; older binaries must not resume recovery mutation against retained new evidence. A validated empty-audit downgrade still requires its matching compatible binaries.
+
+A refused downgrade preserves recovery rows, columns, constraints and indexes, but `golang-migrate` records the attempted down target as dirty before executing SQL. This is not a successful downgrade. Keep mutators quiesced and have an operator verify the retained schema and migration state before a reviewed roll-forward; do not blindly force a version, restart older binaries or delete evidence to bypass the refusal.
+
+This ordering is an operator deployment requirement, not permission to merge, deploy, replay, retire uncertain tasks or manually clear holds. A later applied send or failed/cancelled task is not recovery proof for a different held-task cohort. Local tests cannot establish that a provider executed a send.
+
 ## Verification and limits
 
 ### Research coverage and external gates

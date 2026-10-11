@@ -66,7 +66,7 @@ type OrgTransferRepository interface {
 	CountForeignRows(ctx context.Context, tx pgx.Tx, table, owner string, pk []string, refs []TenantReference, orgID uuid.UUID, rows []json.RawMessage) (int64, error)
 	// InsertBatch writes rows into table, honouring the conflict strategy. An
 	// overwrite only updates an existing row that owner selects for orgID.
-	InsertBatch(ctx context.Context, tx pgx.Tx, table string, cols []string, rows []json.RawMessage, conflict models.OrgImportConflict, pk []string, owner string, orgID uuid.UUID) (int64, error)
+	InsertBatch(ctx context.Context, tx pgx.Tx, table string, cols []string, rows []json.RawMessage, conflict models.OrgImportConflict, pk []string, owner string, orgID uuid.UUID, resetOnOverwrite []string) (int64, error)
 	// DeveloperBlocked reports an operator's block on building apps for this
 	// workspace or person.
 	DeveloperBlocked(ctx context.Context, tx pgx.Tx, orgID, userID uuid.UUID) (bool, error)
@@ -475,6 +475,7 @@ func (r *orgTransferRepository) InsertBatch(
 	pk []string,
 	owner string,
 	orgID uuid.UUID,
+	resetOnOverwrite []string,
 ) (int64, error) {
 	if len(rows) == 0 || len(cols) == 0 {
 		return 0, nil
@@ -502,6 +503,9 @@ func (r *orgTransferRepository) InsertBatch(
 				continue
 			}
 			sets = append(sets, quoteIdent(c)+" = EXCLUDED."+quoteIdent(c))
+		}
+		for _, c := range resetOnOverwrite {
+			sets = append(sets, quoteIdent(c)+" = DEFAULT")
 		}
 		if len(sets) == 0 {
 			// Every column is part of the key, so there is nothing to update.
