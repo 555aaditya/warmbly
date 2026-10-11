@@ -356,7 +356,7 @@ func (r *taskRepository) BeginOutbound(ctx context.Context, task, mailbox, worke
 	var current *uuid.UUID
 	var started *time.Time
 	err = tx.QueryRow(ctx, `SELECT ea.organization_id,ea.provider::text,t.send_recipients,t.send_executor_nonce,t.send_executor_started_at FROM tasks t JOIN email_accounts ea ON ea.id=t.email_account_id
-	 WHERE t.id=$1 AND ea.id=$2 AND t.send_executor_worker=$3 AND t.send_released_at IS NULL`, task, mailbox, worker).Scan(&org, &provider, &recipients, &current, &started)
+	 WHERE t.id=$1 AND ea.id=$2 AND t.send_executor_worker=$3 AND t.send_released_at IS NULL FOR UPDATE OF t`, task, mailbox, worker).Scan(&org, &provider, &recipients, &current, &started)
 	if err != nil {
 		return nil, err
 	}
@@ -408,8 +408,13 @@ func (r *taskRepository) BeginOutbound(ctx context.Context, task, mailbox, worke
 			}
 			return &WarmupDispatchState{State: "denied"}, nil
 		}
-		if _, err = tx.Exec(ctx, `UPDATE warmup_tasks SET dispatch_started_at=NOW() WHERE task_id=$1 AND dispatch_nonce=$2`, task, nonce); err != nil {
+		tag, err := tx.Exec(ctx, `UPDATE warmup_tasks SET dispatch_started_at=NOW() WHERE task_id=$1 AND dispatch_nonce=$2
+		 AND dispatch_worker_id=$3 AND dispatch_started_at IS NULL AND dispatch_result IS NULL`, task, nonce, worker)
+		if err != nil {
 			return nil, err
+		}
+		if tag.RowsAffected() != 1 {
+			return &WarmupDispatchState{State: "denied"}, nil
 		}
 	}
 	_, err = tx.Exec(ctx, `UPDATE tasks SET send_executor_started_at=NOW() WHERE id=$1`, task)
@@ -466,7 +471,9 @@ func (r *taskRepository) cancelOutbound(ctx context.Context, task, mailbox, work
 	}
 	var lane string
 	err = tx.QueryRow(ctx, `UPDATE tasks SET send_released_at=NOW(),send_result_state='failed',send_result_applied_at=NOW(),status='cancelled'
-	 WHERE id=$1 AND email_account_id=$2 AND send_executor_worker=$3 AND send_executor_nonce=$4 AND send_executor_started_at IS NULL AND send_released_at IS NULL RETURNING task_type`, task, mailbox, worker, nonce).Scan(&lane)
+	 WHERE id=$1 AND email_account_id=$2 AND send_executor_worker=$3 AND send_executor_nonce=$4 AND send_executor_started_at IS NULL AND send_released_at IS NULL
+	 AND (task_type<>'warmup' OR EXISTS(SELECT 1 FROM warmup_tasks w WHERE w.task_id=tasks.id AND w.dispatch_nonce=$4
+	 AND w.dispatch_worker_id=$3 AND w.dispatch_started_at IS NULL AND w.dispatch_result IS NULL)) RETURNING task_type`, task, mailbox, worker, nonce).Scan(&lane)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
