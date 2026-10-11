@@ -250,6 +250,8 @@ jobs:
           go test -race -v -p 1 ./internal/infrastructure/db -run '^TestLiveSendRecoveryConflict(CLIStartup|UpgradePreservesHistoricalEvidence|Production284UpgradePreservesHistoricalEvidence|HistoricalOnlyDownRefuses|EmptyDownUp)$' -count=1
           go test -race -v -p 1 ./internal/repository ./internal/app/orgtransfer -run '^TestLive(DefinitiveConflictDirectionsDuplicatesAndRestrictiveHolds|PriorDefinitiveConflictWithoutOperatorResolution|AuthenticationRepairRetainsUnresolvedOutcomeConflict|ConcurrentAuthenticationRepairRetainsNewOutcomeConflict|UnstartedDispatchRetainsDeferredOutcomeConflict|HistoricalConfirmationRequiresFreshOrIndependentAuthority|ExpandedConflictSchemaRequiresUpgradedReadersAndWriters|OrdinarySendResultsNeedNoRecoveryConfirmation|ImportSendRecoveryHistoryCannotReconcileUnknownOutcome|ArchiveSendRecoveryLocalOriginResets)$' -count=1
 
+          go test -race -v -p 1 ./internal/app/consumer -run '^TestLiveAdvancedBounceReconciliationRollbackAndReplayWithOneConnection$' -count=1
+
       - name: Mailbox sync admission, replay, truthful state and upgrade regressions (PostgreSQL)
         env:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
