@@ -97,7 +97,9 @@ func (s *Service) runEnrichment(ctx context.Context, id uuid.UUID) {
 		}
 		log.Warn().Err(err).Str("run", id.String()).Msg("apollo: enrichment run failed")
 	}
-	if ferr := s.Repo.FinishEnrichmentRun(context.WithoutCancel(ctx), run); ferr != nil {
+	fin, cancel := finishContext(ctx)
+	defer cancel()
+	if ferr := s.Repo.FinishEnrichmentRun(fin, run); ferr != nil {
 		log.Warn().Err(ferr).Str("run", id.String()).Msg("apollo: could not finish enrichment run")
 	}
 }

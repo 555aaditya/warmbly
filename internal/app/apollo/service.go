@@ -33,6 +33,8 @@ const (
 	// running is treated as interrupted, and must stay above runTimeout.
 	runTimeout = 25 * time.Minute
 	staleAfter = 30 * time.Minute
+	// finishTimeout bounds the write that records a run's outcome.
+	finishTimeout = 15 * time.Second
 )
 
 // Deps is everything the Apollo integration talks to.
@@ -432,9 +434,17 @@ func (s *Service) runSource(ctx context.Context, src models.ApolloImportSource) 
 		log.Warn().Err(err).Str("source", src.ID.String()).Msg("apollo: import run failed")
 	}
 	// The outcome is recorded even when the run's own context has ended.
-	if err := s.Repo.FinishSource(context.WithoutCancel(ctx), src.ID, res, msg); err != nil {
+	fin, cancel := finishContext(ctx)
+	defer cancel()
+	if err := s.Repo.FinishSource(fin, src.ID, res, msg); err != nil {
 		log.Warn().Err(err).Str("source", src.ID.String()).Msg("apollo: could not record import result")
 	}
+}
+
+// finishContext outlives the run's context but is bounded on its own, so a
+// stalled final write cannot hold up the loop.
+func finishContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), finishTimeout)
 }
 
 // importOnce reads the list, imports people it has not brought in before and
