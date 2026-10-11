@@ -61,7 +61,7 @@ struct OrgPickerView: View {
             .foregroundStyle(WTheme.onSky.opacity(0.9))
             .padding(.horizontal, 14)
             .frame(height: 34)
-            .background(WTheme.skyTile(0.16), in: Capsule())
+            .glassEffect(.regular.interactive(), in: Capsule())
             .buttonStyle(PressableButtonStyle())
         }
         .padding(.horizontal, 16)
@@ -73,14 +73,11 @@ struct OrgPickerView: View {
             HeroFlightScene()
 
             VStack(spacing: 12) {
-                ZStack {
-                    Circle().fill(WTheme.skyTile(0.16))
-                    Circle().strokeBorder(WTheme.skyEdge(0.3), lineWidth: 1)
-                    Image(systemName: "person.2.fill")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(WTheme.onSky)
-                }
-                .frame(width: 54, height: 54)
+                Image(systemName: "person.2.fill")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(WTheme.onSky)
+                    .frame(width: 54, height: 54)
+                    .glassEffect(.regular, in: Circle())
 
                 Text("Choose a workspace")
                     .font(.system(size: 15.5, weight: .bold))

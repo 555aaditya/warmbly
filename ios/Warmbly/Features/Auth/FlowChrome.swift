@@ -64,8 +64,7 @@ struct FlowSkyButton: View {
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(WTheme.onSky)
                 .frame(width: 40, height: 40)
-                .background(WTheme.skyTile(0.12), in: Circle())
-                .overlay(Circle().strokeBorder(WTheme.skyEdge(0.16), lineWidth: 1))
+                .glassEffect(.regular.interactive(), in: Circle())
         }
         .buttonStyle(PressableButtonStyle())
         .accessibilityLabel(label)
@@ -83,8 +82,7 @@ struct FlowSkyPill: View {
             .foregroundStyle(WTheme.onSky)
             .padding(.horizontal, 15)
             .frame(height: 36)
-            .background(WTheme.skyTile(0.12), in: Capsule())
-            .overlay(Capsule().strokeBorder(WTheme.skyEdge(0.16), lineWidth: 1))
+            .glassEffect(.regular.interactive(), in: Capsule())
             .buttonStyle(PressableButtonStyle())
     }
 }
@@ -152,8 +150,7 @@ struct FlowSkyStage: View {
                 .foregroundStyle(WTheme.onSky)
                 .contentTransition(.symbolEffect(.replace))
                 .frame(width: 56, height: 56)
-                .background(WTheme.skyTile(0.16), in: Circle())
-                .overlay(Circle().strokeBorder(WTheme.skyEdge(0.3), lineWidth: 1))
+                .glassEffect(.regular, in: Circle())
             Text(title)
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(WTheme.onSky)

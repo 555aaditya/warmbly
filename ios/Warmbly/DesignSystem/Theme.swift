@@ -57,13 +57,6 @@ enum WTheme {
             : UIColor.white.withAlphaComponent(min(0.8, 0.35 + opacity * 2.5)) })
     }
 
-    /// A tile's edge on the sky: white on the night, a faint ink line on the photo.
-    static func skyEdge(_ opacity: Double) -> Color {
-        Color(UIColor { $0.userInterfaceStyle == .dark
-            ? UIColor.white.withAlphaComponent(opacity)
-            : UIColor(red: 0.07, green: 0.09, blue: 0.15, alpha: 0.08) })
-    }
-
     // Accent (sky)
     static let accent = Color.dynamic(light: 0x0A8DE6, dark: 0x3DB8FF)
     static let accentDeep = Color.dynamic(light: 0x0670C2, dark: 0x0EA5E9)

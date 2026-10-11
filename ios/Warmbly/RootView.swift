@@ -82,7 +82,7 @@ struct UnreachableView: View {
                         .foregroundStyle(WTheme.onSky)
                         .padding(.horizontal, 18)
                         .padding(.vertical, 9)
-                        .background(WTheme.skyTile(0.18), in: Capsule())
+                        .glassEffect(.regular.interactive(), in: Capsule())
                 }
                 .buttonStyle(TapScaleStyle())
             }

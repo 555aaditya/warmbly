@@ -926,22 +926,7 @@ struct FeatureShowcase: View {
         }
         .padding(22)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(WTheme.skyTile(0.045))
-                .background(.ultraThinMaterial.opacity(0.25), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .strokeBorder(
-                            LinearGradient(
-                                colors: [.white.opacity(0.22), .white.opacity(0.05)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            ),
-                            lineWidth: 1
-                        )
-                )
-        }
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
     @ViewBuilder
@@ -979,8 +964,7 @@ struct FeatureTicker: View {
             .foregroundStyle(WTheme.onSky)
             .padding(.horizontal, 15)
             .frame(height: 36)
-            .background(WTheme.skyTile(0.14), in: Capsule())
-            .overlay(Capsule().strokeBorder(WTheme.skyEdge(0.25), lineWidth: 1))
+            .glassEffect(.regular, in: Capsule())
             .id(index)
             .transition(.blurReplace)
         }
