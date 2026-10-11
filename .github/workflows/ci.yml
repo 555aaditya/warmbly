@@ -259,6 +259,11 @@ jobs:
         run: |
           go test -race -p 1 ./internal/repository ./internal/app/consumer ./internal/app/orgtransfer ./internal/infrastructure/db -run '^TestLive(SyncArrival|SyncTruth|EmailErrorDedupe)' -count=1
 
+      - name: Payload-free arrival delivery diagnostics regressions (PostgreSQL)
+        env:
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+        run: go test -race -v -p 1 ./internal/observability/arrivaldiag ./internal/repository ./internal/app/consumer -run '^Test(ArrivalDiagnostics|LiveArrivalDiagnostics)' -count=1
+
       - name: Restricted member summary, inbox and notification regressions (PostgreSQL)
         env:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
