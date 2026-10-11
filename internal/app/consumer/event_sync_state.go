@@ -28,7 +28,7 @@ func (s *JobsService) HandleSyncState(ctx context.Context, e *models.JobEventSyn
 
 	// Persist recovery before state, so a failed proof write remains retryable.
 	if e.State.LastSyncedAt != nil && e.State.Deferred == 0 && e.State.BackfillCursor.GoogleRecovery == nil &&
-		(prev == nil || prev.LastSyncedAt == nil || e.State.TransportGeneration != prev.TransportGeneration || !models.ValidMailTransportTime(*prev.LastSyncedAt, time.Now()) || e.State.LastSyncedAt.After(*prev.LastSyncedAt)) {
+		(prev == nil || prev.LastSyncedAt == nil || !models.ValidMailTransportTime(*prev.LastSyncedAt, time.Now()) || e.State.LastSyncedAt.After(*prev.LastSyncedAt)) {
 		if err := s.resolveTransientMailErrors(ctx, e.EmailID, e.State.LastSyncedAt, e.State.TransportGeneration); err != nil {
 			return err
 		}

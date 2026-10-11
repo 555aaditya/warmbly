@@ -2834,7 +2834,7 @@ func (r *emailRepository) UpdateTrackDirectMail(ctx context.Context, orgID, emai
 func (r *emailRepository) GetSyncSkipFolders(ctx context.Context, emailAccountID uuid.UUID) ([]string, *errx.Error) {
 	query := `SELECT sync_skip_folders FROM email_accounts WHERE id = $1`
 	var folders []string
-	if err := r.DB.QueryRow(ctx, query, emailAccountID).Scan(&folders); err != nil {
+	if err := r.transportQueryRow(ctx, query, emailAccountID).Scan(&folders); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errx.ErrNotFound
 		}
