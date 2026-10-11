@@ -64,6 +64,8 @@ Relative ages use your browser's current clock when a snapshot arrives, with per
 | **Fleet** | Capacity per worker with utilization, the control loops' decision log (what the placement and rotation loops did and why), and isolated-egress reservations, with reserve and release |
 | **Mailboxes** | Every connected mailbox across every workspace, with its state and the worker it sits on |
 | **Sync** | The platform copy of each mailbox's backfill progress and fair-use throttle, with clear-throttle and restart-backfill. The budgets it enforces are the four `sync.*` values under [Configuration > Settings](/development/configuration/#settings-stored-in-the-database); the worker-side engine is the sync governor described under [anti-abuse layers](/development/architecture/#anti-abuse-layers) |
+
+The Sync page's **Stalled** filter, row indicator and summary count only active mailboxes with a running backfill unchanged for over an hour and no active fair-use hold. Inactive and revoked backfill states remain in the **Backfilling** history count, without a current stalled warning. Reactivating a mailbox does not reset its backfill state.
 | **Warmup** | The pools, the blocked list, and the block and unblock history |
 | **Warmup appeals** | Appeals from blocked mailboxes, to approve or reject |
 | **Warmup content** | The generated and reviewed [diagnostic conversation bank](/development/warmup-generation/), effective generation controls, library and generation jobs. Changing effective controls requires `manage_settings`; existing library reads still require `view_warmup_pool` |

@@ -55,7 +55,7 @@ type AdminSyncRow struct {
 	ThrottledUntil *time.Time `json:"throttled_until,omitempty"`
 	ThrottleReason string     `json:"throttle_reason"`
 	Deferred       int        `json:"deferred"`
-	// Stalled is a running backfill whose state has not moved for an hour.
+	// Stalled is an active, unheld running backfill with no state update for an hour.
 	Stalled      bool       `json:"stalled"`
 	LastSyncedAt *time.Time `json:"last_synced_at,omitempty"`
 	UpdatedAt    time.Time  `json:"updated_at"`

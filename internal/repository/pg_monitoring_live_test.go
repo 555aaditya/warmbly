@@ -178,6 +178,100 @@ func TestLiveMonitoringProviderEvidenceHoldsAndDispatch(t *testing.T) {
 	}
 }
 
+func TestLiveMonitoringInactiveBackfillRetainsHistoryWithoutWarning(t *testing.T) {
+	_, pool := liveContactDB(t)
+	requireSchemaVersion(t, pool, 277)
+	f := newWarmupUsageFixture(t, pool)
+	r := NewMonitoringRepository(monitoringReadOnlyPool(t, pool))
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	baseline := collectMonitoring(t, r, "sync", now)
+	baseWarning := *measuredMonitoring(t, baseline, "backfill_stale_running").Count
+	baseHistory := *measuredMonitoring(t, baseline, "backfill_running").Count
+	f.exec(`INSERT INTO email_sync_state(email_id,user_id,backfill_status,backfill_synced,last_synced_at,updated_at) VALUES($1,$2,'running',0,$3,$3)`, f.account, f.user, now.Add(-2*time.Hour))
+	for _, item := range []struct {
+		name, status string
+		warning      int64
+	}{
+		{"active", "active", 1},
+		{"inactive", "inactive", 0},
+		{"revoked", "revoked", 0},
+		{"reactivated", "active", 1},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			f.exec(`UPDATE email_accounts SET status=$2 WHERE id=$1`, f.account, item.status)
+			source := collectMonitoring(t, r, "sync", now)
+			if got := *measuredMonitoring(t, source, "backfill_stale_running").Count; got != baseWarning+item.warning {
+				t.Fatalf("stale backfill warning count=%d, want %d", got, baseWarning+item.warning)
+			}
+			if got := *measuredMonitoring(t, source, "backfill_running").Count; got != baseHistory+1 {
+				t.Fatalf("stored backfill history count=%d, want %d", got, baseHistory+1)
+			}
+		})
+	}
+}
+
+func TestLiveMonitoringAdminSyncStalledRequiresActiveUnheldMailbox(t *testing.T) {
+	handle, pool := liveContactDB(t)
+	requireSchemaVersion(t, pool, 277)
+	f := newWarmupUsageFixture(t, pool)
+	address := "stalled-" + uuid.NewString() + "@example.test"
+	f.exec(`UPDATE email_accounts SET email=$2 WHERE id=$1`, f.account, address)
+	r := NewAdminSyncRepository(handle)
+	baseline, err := r.Search(t.Context(), &models.AdminSyncSearch{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	f.exec(`INSERT INTO email_sync_state(email_id,user_id,backfill_status,backfill_synced,last_synced_at,updated_at) VALUES($1,$2,'running',0,$3,$3)`, f.account, f.user, now.Add(-2*time.Hour))
+	for _, item := range []struct {
+		name, status  string
+		held, stalled bool
+	}{
+		{"active", "active", false, true},
+		{"held", "active", true, false},
+		{"inactive", "inactive", false, false},
+		{"revoked", "revoked", false, false},
+		{"reactivated", "active", false, true},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			f.exec(`UPDATE email_accounts SET status=$2 WHERE id=$1`, f.account, item.status)
+			var until any
+			if item.held {
+				until = now.Add(time.Hour)
+			}
+			f.exec(`UPDATE email_sync_state SET throttled_until=$2 WHERE email_id=$1`, f.account, until)
+			all, err := r.Search(t.Context(), &models.AdminSyncSearch{Q: address})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(all.Data) != 1 || all.Data[0].EmailID != f.account || all.Data[0].Stalled != item.stalled || all.Summary.Backfilling != baseline.Summary.Backfilling+1 {
+				t.Fatal("running backfill history or stalled row indication disagrees with mailbox state", all)
+			}
+			wantStalled := 0
+			if item.stalled {
+				wantStalled = 1
+			}
+			if all.Summary.Stalled != baseline.Summary.Stalled+wantStalled {
+				t.Fatal("stalled summary disagrees with mailbox state", all.Summary)
+			}
+			stalled, err := r.Search(t.Context(), &models.AdminSyncSearch{State: "stalled", Q: address})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(stalled.Data) != wantStalled || stalled.Summary.Stalled != all.Summary.Stalled {
+				t.Fatal("stalled filter disagrees with summary", stalled)
+			}
+			backfilling, err := r.Search(t.Context(), &models.AdminSyncSearch{State: "backfilling", Q: address})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(backfilling.Data) != 1 || backfilling.Data[0].EmailID != f.account {
+				t.Fatal("historical running state disappeared", backfilling)
+			}
+		})
+	}
+}
+
 func TestLiveMonitoringSyncAuthAndDomainPolicy(t *testing.T) {
 	_, pool := liveContactDB(t)
 	requireSchemaVersion(t, pool, 277)

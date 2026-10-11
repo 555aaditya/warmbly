@@ -58,7 +58,7 @@ func adminSyncStateWhere(state string) (string, error) {
 	case "backfilling":
 		return "s.backfill_status = 'running'", nil
 	case "stalled":
-		return "s.backfill_status = 'running' AND s.updated_at < now() - interval '1 hour'", nil
+		return "s.backfill_status = 'running' AND s.updated_at < now() - interval '1 hour' AND ea.status = 'active' AND (s.throttled_until IS NULL OR s.throttled_until <= now())", nil
 	case "pending":
 		return "s.backfill_status = 'pending'", nil
 	case "complete":
@@ -112,7 +112,8 @@ func (r *adminSyncRepository) Search(ctx context.Context, search *models.AdminSy
 		       CASE WHEN s.throttled_until > now() THEN s.throttled_until END,
 		       CASE WHEN s.throttled_until > now() THEN s.throttle_reason ELSE '' END,
 		       s.deferred,
-		       (s.backfill_status = 'running' AND s.updated_at < now() - interval '1 hour'),
+		       (s.backfill_status = 'running' AND s.updated_at < now() - interval '1 hour'
+		           AND ea.status = 'active' AND (s.throttled_until IS NULL OR s.throttled_until <= now())),
 		       s.last_synced_at, s.updated_at
 		FROM email_sync_state s
 		JOIN email_accounts ea ON ea.id = s.email_id
@@ -158,13 +159,15 @@ func (r *adminSyncRepository) Search(ctx context.Context, search *models.AdminSy
 
 	const summary = `
 		SELECT COUNT(*),
-		       COUNT(*) FILTER (WHERE throttled_until > now()),
-		       COUNT(*) FILTER (WHERE backfill_status = 'running'),
-		       COUNT(*) FILTER (WHERE backfill_status = 'running' AND updated_at < now() - interval '1 hour'),
-		       COUNT(*) FILTER (WHERE backfill_status = 'pending'),
-		       COUNT(*) FILTER (WHERE backfill_status = 'complete'),
-		       COALESCE(SUM(deferred), 0)
-		FROM email_sync_state
+		       COUNT(*) FILTER (WHERE s.throttled_until > now()),
+		       COUNT(*) FILTER (WHERE s.backfill_status = 'running'),
+		       COUNT(*) FILTER (WHERE s.backfill_status = 'running' AND s.updated_at < now() - interval '1 hour'
+		           AND ea.status = 'active' AND (s.throttled_until IS NULL OR s.throttled_until <= now())),
+		       COUNT(*) FILTER (WHERE s.backfill_status = 'pending'),
+		       COUNT(*) FILTER (WHERE s.backfill_status = 'complete'),
+		       COALESCE(SUM(s.deferred), 0)
+		FROM email_sync_state s
+		LEFT JOIN email_accounts ea ON ea.id = s.email_id
 	`
 	var total, throttled, backfilling, stalled, pending, complete, deferred int64
 	if err := r.db.QueryRow(ctx, summary).Scan(&total, &throttled, &backfilling, &stalled, &pending, &complete, &deferred); err != nil {
