@@ -144,8 +144,7 @@ type TaskRepository interface {
 	// GetLastSendTimes is the batch form, for rotation across a campaign's
 	// whole sender pool. Accounts that have never sent are absent from the map.
 	GetLastSendTimes(ctx context.Context, accountIDs []uuid.UUID, taskType string) (map[uuid.UUID]time.Time, error)
-	GetScheduledTasksForAccount(ctx context.Context, accountID uuid.UUID, date time.Time) ([]Task, error)
-	GetScheduledTasksToday(ctx context.Context, accountID uuid.UUID) ([]Task, error)
+	GetBookedSendsForAccount(ctx context.Context, accountID uuid.UUID, around time.Time) ([]Task, error)
 	// ListDuePendingTaskIDs returns pending tasks whose scheduled_at has passed,
 	// oldest first, capped at limit. Drives the in-process (TASKS_PROVIDER=local)
 	// dispatcher, which fires each due task by id.
@@ -521,13 +520,17 @@ func (r *taskRepository) GetLastEmailTimes(ctx context.Context, accountIDs []uui
 		return out, nil
 	}
 	query := `
-		SELECT t.email_account_id, MAX(t.completed_at)
-		FROM tasks t
-		WHERE t.email_account_id = ANY($1)
-		  AND t.status = 'completed'
-		  AND t.completed_at IS NOT NULL
-		  AND ` + taskDispatchedEmail + `
-		GROUP BY t.email_account_id
+		SELECT id, MAX(at) FROM (
+			SELECT t.email_account_id AS id, t.completed_at AS at
+			FROM tasks t
+			WHERE t.email_account_id = ANY($1)
+			  AND t.status = 'completed'
+			  AND t.completed_at IS NOT NULL
+			  AND ` + taskDispatchedEmail + `
+			UNION ALL
+			` + sendClaimClock + `
+		) last
+		GROUP BY id
 	`
 	rows, err := r.db.Query(ctx, query, accountIDs)
 	if err != nil {
@@ -736,14 +739,17 @@ func (r *taskRepository) CountWarmupEmailsSentToday(ctx context.Context, account
 }
 
 // GetLastEmailTime gets the last email send time for an account. It is the
-// min-gap clock, so it reads real sends only.
+// min-gap clock, so it reads real sends and campaign sends claimed but not yet
+// handed off.
 func (r *taskRepository) GetLastEmailTime(ctx context.Context, accountID uuid.UUID) (*time.Time, error) {
 	query := `
-		SELECT MAX(t.completed_at)
-		FROM tasks t
-		WHERE t.email_account_id = $1
-		  AND t.status = 'completed'
-		  AND ` + taskDispatchedEmail + `
+		SELECT GREATEST(
+			(SELECT MAX(t.completed_at)
+			 FROM tasks t
+			 WHERE t.email_account_id = $1
+			   AND t.status = 'completed'
+			   AND ` + taskDispatchedEmail + `),
+			(SELECT send_claimed_at FROM email_accounts WHERE id = $1))
 	`
 
 	var lastTime *time.Time
@@ -799,19 +805,23 @@ func (r *taskRepository) GetLastSendTimes(ctx context.Context, accountIDs []uuid
 	return out, rows.Err()
 }
 
-// GetScheduledTasksForAccount gets scheduled tasks for an account on a specific date
-func (r *taskRepository) GetScheduledTasksForAccount(ctx context.Context, accountID uuid.UUID, date time.Time) ([]Task, error) {
+// GetBookedSendsForAccount returns the pending sends booked on a mailbox within
+// a day either side of `around`. A pending campaign task is a chain wake-up,
+// not a send: it picks its mailbox again when it fires, so it is left out.
+func (r *taskRepository) GetBookedSendsForAccount(ctx context.Context, accountID uuid.UUID, around time.Time) ([]Task, error) {
 	query := `
 		SELECT id, task_type, email_account_id, status, message_id,
 		       scheduled_at, completed_at, cloud_task_name, created_at, updated_at
 		FROM tasks
 		WHERE email_account_id = $1
 		  AND status = 'pending'
-		  AND DATE(scheduled_at) = DATE($2)
+		  AND task_type <> 'campaign'
+		  AND scheduled_at > $2::timestamptz - INTERVAL '1 day'
+		  AND scheduled_at < $2::timestamptz + INTERVAL '1 day'
 		ORDER BY scheduled_at ASC
 	`
 
-	rows, err := r.db.Query(ctx, query, accountID, date)
+	rows, err := r.db.Query(ctx, query, accountID, around)
 	if err != nil {
 		return nil, err
 	}
@@ -839,11 +849,6 @@ func (r *taskRepository) GetScheduledTasksForAccount(ctx context.Context, accoun
 	}
 
 	return tasks, rows.Err()
-}
-
-// GetScheduledTasksToday gets scheduled tasks for an account today
-func (r *taskRepository) GetScheduledTasksToday(ctx context.Context, accountID uuid.UUID) ([]Task, error) {
-	return r.GetScheduledTasksForAccount(ctx, accountID, time.Now())
 }
 
 // UpdateTaskStatus updates the status of a task

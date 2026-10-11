@@ -330,13 +330,13 @@ func (s *schedulerService) CalculateNextWarmupTime(ctx context.Context, accountI
 	// STEP 10: Ensure within configured warmup time window
 	candidateTime = ensureTimeWindow(candidateTime, warmupStart, warmupEnd, loadLocation(account.ClockTimezone()))
 
-	// STEP 11: Check conflicts with other tasks on this account
-	scheduledTasks, err := s.taskRepo.GetScheduledTasksToday(ctx, accountID)
+	// STEP 11: Check conflicts with other sends booked on this account
+	booked, err := s.taskRepo.GetBookedSendsForAccount(ctx, accountID, candidateTime)
 	if err != nil {
 		return time.Time{}, err
 	}
 
-	candidateTime = resolveConflicts(candidateTime, scheduledTasks, minWaitSeconds)
+	candidateTime = resolveConflicts(candidateTime, booked, minWaitSeconds)
 
 	// STEP 12: Apply human-like distribution curve. Skipped when a behaviour
 	// profile is driving the day — it already carries this mailbox's own peak

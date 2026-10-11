@@ -208,6 +208,12 @@ jobs:
           go run ./cmd/migrate
           go test -race ./internal/app/behavior ./internal/repository ./internal/tasks -run 'TestDefaultPlan|TestLiveMailboxPlan|TestLiveCampaignAdmission|TestLiveSharedAdmission|TestLiveDeferredTicksDoNotSpendTheDailyBudget|TestLiveCampaignAtDailyCapWaitsForTomorrow' -count=1
 
+      - name: Shared mailbox pool pacing and send claim regressions (PostgreSQL)
+        env:
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+        run: |
+          go test -race -p 1 ./internal/repository ./internal/scheduler ./internal/tasks -run '^TestLive(MailboxSendClaim(AdmitsOnePerGap|WaitsOutAReservedSend)|BookedSendsLeaveOutCampaignWakeups|ParkedCampaignDoesNotThrottleItsPoolMate|BookedSendsStillSpaceTheCampaign|ClaimedMailboxIsPassedOver|CampaignsSharingAMailboxSendOncePerGap|LostMailboxClaimReschedulesWithoutSending)$' -count=1
+
       - name: Invited signup atomic provisioning regressions (PostgreSQL)
         env:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable

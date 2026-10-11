@@ -1,11 +1,13 @@
 package scheduler
 
 import (
+	"hash/fnv"
 	"math"
 	"math/rand"
 	"sort"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/app/behavior"
 	"github.com/warmbly/warmbly/internal/bitmask"
 	"github.com/warmbly/warmbly/internal/models"
@@ -492,38 +494,38 @@ func effectiveWeight(c AccountCandidate) float64 {
 
 // selectAccountLeastRecentlyUsed picks the viable candidate (Weight>0) whose
 // sender last_sent_at is oldest; a nil last_sent_at (never used) sorts first.
-// Ties broken by account id for determinism.
-func selectAccountLeastRecentlyUsed(candidates []AccountCandidate) *AccountCandidate {
+// Ties go to tieRank under the campaign's salt.
+func selectAccountLeastRecentlyUsed(candidates []AccountCandidate, salt uuid.UUID) *AccountCandidate {
 	var best *AccountCandidate
 	for i := range candidates {
 		if candidates[i].Weight <= 0 {
 			continue
 		}
-		if best == nil || lruLess(&candidates[i], best) {
+		if best == nil || lruLess(&candidates[i], best, salt) {
 			best = &candidates[i]
 		}
 	}
 	return best
 }
 
-func lruLess(a, b *AccountCandidate) bool {
+func lruLess(a, b *AccountCandidate, salt uuid.UUID) bool {
 	switch {
 	case a.SenderLastSentAt == nil && b.SenderLastSentAt == nil:
-		return a.Account.ID.String() < b.Account.ID.String()
+		return tieRank(salt, a.Account.ID) < tieRank(salt, b.Account.ID)
 	case a.SenderLastSentAt == nil:
 		return true
 	case b.SenderLastSentAt == nil:
 		return false
 	case a.SenderLastSentAt.Equal(*b.SenderLastSentAt):
-		return a.Account.ID.String() < b.Account.ID.String()
+		return tieRank(salt, a.Account.ID) < tieRank(salt, b.Account.ID)
 	default:
 		return a.SenderLastSentAt.Before(*b.SenderLastSentAt)
 	}
 }
 
 // selectAccountRoundRobin picks the viable candidate (Weight>0) with the lowest
-// rotation_position; ties broken by account id for determinism.
-func selectAccountRoundRobin(candidates []AccountCandidate) *AccountCandidate {
+// rotation_position; ties go to tieRank under the campaign's salt.
+func selectAccountRoundRobin(candidates []AccountCandidate, salt uuid.UUID) *AccountCandidate {
 	var best *AccountCandidate
 	for i := range candidates {
 		if candidates[i].Weight <= 0 {
@@ -532,11 +534,20 @@ func selectAccountRoundRobin(candidates []AccountCandidate) *AccountCandidate {
 		if best == nil ||
 			candidates[i].RotationPosition < best.RotationPosition ||
 			(candidates[i].RotationPosition == best.RotationPosition &&
-				candidates[i].Account.ID.String() < best.Account.ID.String()) {
+				tieRank(salt, candidates[i].Account.ID) < tieRank(salt, best.Account.ID)) {
 			best = &candidates[i]
 		}
 	}
 	return best
+}
+
+// tieRank orders tied mailboxes per campaign: stable for one campaign, but
+// different campaigns sharing a pool do not all reach for the same mailbox.
+func tieRank(salt, id uuid.UUID) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write(salt[:])
+	_, _ = h.Write(id[:])
+	return h.Sum64()
 }
 
 // needsRotationFallback reports whether a rotation mode depends on per-sender
@@ -548,13 +559,14 @@ func needsRotationFallback(rotationMode string) bool {
 
 // selectAccountByRotationMode dispatches to the chosen rotation strategy. For
 // explicit-strategy campaigns rotationMode is one of weighted / round_robin /
-// least_recently_used; anything else falls back to weighted.
-func selectAccountByRotationMode(rotationMode string, candidates []AccountCandidate) *AccountCandidate {
+// least_recently_used; anything else falls back to weighted. salt is the
+// campaign id, which decides ties.
+func selectAccountByRotationMode(rotationMode string, candidates []AccountCandidate, salt uuid.UUID) *AccountCandidate {
 	switch rotationMode {
 	case "round_robin":
-		return selectAccountRoundRobin(candidates)
+		return selectAccountRoundRobin(candidates, salt)
 	case "least_recently_used":
-		return selectAccountLeastRecentlyUsed(candidates)
+		return selectAccountLeastRecentlyUsed(candidates, salt)
 	default:
 		return selectAccountWeighted(candidates)
 	}
