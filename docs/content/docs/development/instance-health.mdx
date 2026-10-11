@@ -93,6 +93,8 @@ Worker heartbeat totals and up to 20 worker details share one PostgreSQL snapsho
 
 ### Reading a snapshot
 
+Aggregate sources collected in one database query, including sync and worker health samples, capture one database reference time for all their thresholds, windows and source/metric observations. A normal completion or receipt visible when the query starts is compared with that reference, not the earlier refresh request start. Genuinely future-dated evidence still warns, with no clock-skew tolerance. The snapshot's checked time and cache expiry keep their collection-start meaning; the database observation does not confirm provider recovery.
+
 - **Snapshot checked** and **Collection attempted** are collection clocks. They do not confirm delivery, sync or recovery. **Source observed** and **Observed** are the measurement clocks; **Evidence since**, **Latest evidence**, their ages and any window are distinct. The UI retains the original clocks after a failed refresh and marks retained measurements stale. A successful browser fetch of old data does not make it fresh.
 - `fresh`, `stale` and `unavailable` describe measurement availability. The UI also marks observations older than two minutes or implausibly future-dated as stale/unknown. Coverage can be complete only for the measured sources; it does not mean every customer operation succeeded.
 - A nullable count is **Not measured**, not zero. A successful zero means no matching rows in that metric's scope/window. Zero recent sends means **No matching recent evidence**, not healthy throughput. A completed task, heartbeat, low memory usage or sync tick does not prove delivery or recovery.

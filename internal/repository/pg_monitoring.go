@@ -69,14 +69,7 @@ func (r *MonitoringRepository) collect(ctx context.Context, at time.Time, id str
 			return out, nil
 		}
 	}
-	queries := ""
-	for _, q := range section.queries {
-		if queries != "" {
-			queries += " UNION ALL "
-		}
-		queries += strings.Replace(strings.ReplaceAll(q.query, "$1", "$1::timestamptz"), "SELECT ", "SELECT '"+q.id+"', ", 1) + " AND $1::timestamptz IS NOT NULL"
-	}
-	rows, err := r.pool.Query(ctx, queries, at)
+	rows, err := r.pool.Query(ctx, monitoringStatement(section))
 	if err != nil {
 		return out, err
 	}
@@ -87,14 +80,18 @@ func (r *MonitoringRepository) collect(ctx context.Context, at time.Time, id str
 			return out, errors.New("unexpected monitoring rows")
 		}
 		var id string
+		var observed time.Time
 		m := models.MonitoringMetric{}
-		if err := rows.Scan(&id, &m.Count, &m.AffectedMailboxes, &m.AffectedOrganizations, &m.UnknownOrganizationRows, &m.EvidenceAt, &m.LatestEvidenceAt, &m.NextEligibleAt); err != nil {
+		if err := rows.Scan(&id, &observed, &m.Count, &m.AffectedMailboxes, &m.AffectedOrganizations, &m.UnknownOrganizationRows, &m.EvidenceAt, &m.LatestEvidenceAt, &m.NextEligibleAt); err != nil {
 			return out, err
+		}
+		if index == 0 {
+			out.ObservedAt = &observed
 		}
 		found := false
 		for _, q := range section.queries {
 			if q.id == id {
-				v := monitoringMetric(q, at, section.investigate)
+				v := monitoringMetric(q, observed, section.investigate)
 				v.Count = m.Count
 				v.AffectedMailboxes = m.AffectedMailboxes
 				v.AffectedOrganizations = m.AffectedOrganizations
@@ -121,6 +118,16 @@ func (r *MonitoringRepository) collect(ctx context.Context, at time.Time, id str
 		return out, errors.New("incomplete monitoring rows")
 	}
 	return out, nil
+}
+
+func monitoringStatement(section monitoringSection) string {
+	queries := make([]string, 0, len(section.queries))
+	for _, q := range section.queries {
+		query := strings.ReplaceAll(q.query, "$1", "(SELECT at FROM observation)")
+		queries = append(queries, strings.Replace(query, "SELECT ", "SELECT '"+q.id+"', (SELECT at FROM observation), ", 1))
+	}
+	// One database reference for every predicate and observation in the statement snapshot.
+	return "WITH observation AS MATERIALIZED (SELECT clock_timestamp() AS at) " + strings.Join(queries, " UNION ALL ")
 }
 
 func monitoringMetric(q monitoringQuery, at time.Time, path string) models.MonitoringMetric {
