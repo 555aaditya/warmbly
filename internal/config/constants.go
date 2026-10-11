@@ -238,6 +238,10 @@ const (
 	// task every second, so a retry kept at its old slot would run in a loop.
 	CampaignTickRetrySeconds = 60
 
+	// CampaignSendClaimRetrySeconds is how soon a pass that lost its mailbox to
+	// another campaign looks again, plus up to as much again of spread.
+	CampaignSendClaimRetrySeconds = 10
+
 	// CampaignStaleParkHours is when the reconciler starts distrusting a parked
 	// wakeup. Even-distribution can only push a successor to the end of the
 	// mailbox's current day, so a pending tick further out than this was parked
