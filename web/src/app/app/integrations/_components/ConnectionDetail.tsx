@@ -237,6 +237,29 @@ export default function ConnectionDetail({
                         </div>
                     )}
 
+                    {conn.provider === "apollo" && (
+                        <div className="px-5 py-4">
+                            <HomeLink
+                                to={`/app/integrations/apollo/${conn.id}`}
+                                onNavigate={onClose}
+                                icon={<Settings2Icon className="w-4 h-4 text-sky-600" />}
+                                title="Apollo settings"
+                                body="Imports from your Apollo lists, enrichment runs and the API key."
+                            />
+                        </div>
+                    )}
+                    {conn.provider === "clay" && (
+                        <div className="px-5 py-4">
+                            <HomeLink
+                                to={`/app/integrations/clay/${conn.id}`}
+                                onNavigate={onClose}
+                                icon={<Settings2Icon className="w-4 h-4 text-sky-600" />}
+                                title="Clay settings"
+                                body="The inbound URL and column setup, where rows land, and which events go back to Clay."
+                            />
+                        </div>
+                    )}
+
                     {/* HubSpot and Pipedrive: CRM mode, field mapping and rules live on their own page */}
                     {crmHome && !onCrmHome && (
                         <div className="px-5 py-4">

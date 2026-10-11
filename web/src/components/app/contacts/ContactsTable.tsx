@@ -18,6 +18,7 @@ import {
     ArrowDownIcon,
     ArrowUpIcon,
     CableIcon,
+    DatabaseZapIcon,
     CheckIcon,
     CornerUpLeftIcon,
     DownloadIcon,
@@ -51,6 +52,7 @@ import { reverifyNotice } from "@/lib/api/client/app/contacts/verification";
 import { useBatchResearch } from "@/lib/api/hooks/app/contacts/useContactResearch";
 import useIntegrationConnections from "@/lib/api/hooks/app/integrations/useIntegrationConnections";
 import { usePushContacts } from "@/lib/api/hooks/app/integrations/usePushContacts";
+import { useStartApolloEnrichment } from "@/lib/api/hooks/app/integrations/useApollo";
 import {
     PROVIDER_LABELS,
     PUSHABLE_PROVIDERS,
@@ -130,6 +132,8 @@ type SubFilter = "all" | "subscribed" | "unsubscribed";
 // Mirrors maxIntegrationPushSize on the backend: one synchronous push is a
 // live call per contact against the CRM's API.
 const MAX_CRM_PUSH = 500;
+// The most contacts one Apollo enrichment run takes; the server refuses more.
+const MAX_APOLLO_ENRICH = 5000;
 // Mirrors research.MaxBatch: every contact is a metered AI run.
 const MAX_RESEARCH_BATCH = 500;
 
@@ -425,6 +429,40 @@ export default function ContactsTable({
             ),
         [connectionsQuery.data, isExternal, crm.id],
     );
+
+    // Connected Apollo accounts the "Enrich" bulk action can use.
+    const startEnrich = useStartApolloEnrichment();
+    const apolloTargets = React.useMemo<IntegrationConnection[]>(
+        () =>
+            (connectionsQuery.data?.connections ?? []).filter(
+                (c) => c.provider === "apollo" && (c.status === "connected" || c.status === "degraded"),
+            ),
+        [connectionsQuery.data],
+    );
+
+    function enrichWithApollo(connectionId: string, overwrite: boolean) {
+        if (selectionCount === 0 || startEnrich.isPending) return;
+        if (selectionCount > MAX_APOLLO_ENRICH) {
+            toast.error(`Apollo enrichment takes up to ${MAX_APOLLO_ENRICH.toLocaleString()} contacts at a time. Narrow the selection and try again.`);
+            return;
+        }
+        const n = selectionCount.toLocaleString();
+        confirm.show(
+            `Enrich ${n} contact${selectionCount === 1 ? "" : "s"} with Apollo? Apollo charges one credit for each person it finds. ${
+                overwrite ? "Fields that already have a value are replaced." : "Only empty fields are filled in."
+            }`,
+            async () => {
+                try {
+                    await startEnrich.mutateAsync({ connectionId, selection, overwrite });
+                    toast.success("Enrichment started. Progress is on the Apollo page.");
+                    clearSelection();
+                } catch (err) {
+                    toast.error(buildError(err as AppError));
+                    throw err;
+                }
+            },
+        );
+    }
 
     async function pushToCRM(connectionId: string, providerLabel: string) {
         if (selectionCount === 0 || pushContacts.isPending) return;
@@ -905,6 +943,9 @@ export default function ContactsTable({
                     pushTargets={pushTargets}
                     pushing={pushContacts.isPending}
                     onPush={pushToCRM}
+                    apolloTargets={apolloTargets}
+                    enriching={startEnrich.isPending}
+                    onEnrich={enrichWithApollo}
                     onBulkEdit={() => setBulkEdit(true)}
                     onResearch={bulkResearch}
                     researching={batchResearch.isPending}
@@ -1156,6 +1197,9 @@ export default function ContactsTable({
                 pushTargets={pushTargets}
                 pushing={pushContacts.isPending}
                 onPush={pushToCRM}
+                apolloTargets={apolloTargets}
+                enriching={startEnrich.isPending}
+                onEnrich={enrichWithApollo}
                 onBulkEdit={() => setBulkEdit(true)}
                 onResearch={bulkResearch}
                 researching={batchResearch.isPending}
@@ -1855,6 +1899,9 @@ function SelectionBar({
     pushTargets,
     pushing,
     onPush,
+    apolloTargets,
+    enriching,
+    onEnrich,
     onBulkEdit,
     onResearch,
     researching,
@@ -1876,6 +1923,9 @@ function SelectionBar({
     pushTargets: IntegrationConnection[];
     pushing: boolean;
     onPush: (connectionId: string, providerLabel: string) => void;
+    apolloTargets: IntegrationConnection[];
+    enriching: boolean;
+    onEnrich: (connectionId: string, overwrite: boolean) => void;
     onBulkEdit: () => void;
     onResearch: () => void;
     researching: boolean;
@@ -1929,6 +1979,32 @@ function SelectionBar({
                                     {label}
                                     {custom}
                                 </PopoverMenuItem>
+                            );
+                        })}
+                    </PopoverMenuContent>
+                </PopoverMenu>
+            )}
+            {apolloTargets.length > 0 && (
+                <PopoverMenu side="top" align="center">
+                    <PopoverMenuTrigger asChild>
+                        <button
+                            type="button"
+                            disabled={enriching}
+                            className="h-7 px-2.5 rounded text-[12px] text-slate-700 hover:text-slate-900 hover:bg-slate-100 font-medium inline-flex items-center gap-1.5 transition-colors disabled:opacity-60"
+                        >
+                            {enriching ? <Loader2Icon className="w-3 h-3 animate-spin" /> : <DatabaseZapIcon className="w-3 h-3" />}
+                            <span className="hidden sm:inline">Enrich</span>
+                        </button>
+                    </PopoverMenuTrigger>
+                    <PopoverMenuContent>
+                        <PopoverMenuLabel>Enrich {count.toLocaleString()} with Apollo</PopoverMenuLabel>
+                        {apolloTargets.map((t) => {
+                            const custom = apolloTargets.length > 1 ? ` · ${t.label}` : "";
+                            return (
+                                <React.Fragment key={t.id}>
+                                    <PopoverMenuItem onSelect={() => onEnrich(t.id, false)}>Fill empty fields{custom}</PopoverMenuItem>
+                                    <PopoverMenuItem onSelect={() => onEnrich(t.id, true)}>Replace with Apollo data{custom}</PopoverMenuItem>
+                                </React.Fragment>
                             );
                         })}
                     </PopoverMenuContent>

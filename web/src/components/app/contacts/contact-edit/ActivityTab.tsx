@@ -1569,6 +1569,10 @@ export function sourceLabel(source?: string | null): string {
             return "Submitted a form";
         case "automation":
             return "Created by an automation";
+        case "apollo":
+            return "Imported from Apollo";
+        case "clay":
+            return "Sent from Clay";
         case "unknown":
         case undefined:
         case null:
@@ -1644,6 +1648,10 @@ function createdLabel(source?: string | null): string {
             return "Submitted a form";
         case "automation":
             return "Created by automation";
+        case "apollo":
+            return "Imported from Apollo";
+        case "clay":
+            return "Sent from Clay";
         case "manual":
             return "Created manually";
         default:

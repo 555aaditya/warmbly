@@ -72,6 +72,7 @@ func Run(
 	// rotatable from the dashboard.
 	r.POST("/api/v1/integrations/inbound/calendly/:secret", h.InboundCalendly)
 	r.POST("/api/v1/integrations/inbound/cal-com/:secret", h.InboundCalCom)
+	r.POST("/api/v1/integrations/inbound/clay/:secret", h.InboundClay)
 	// Generic per-automation inbound trigger: the token in the path is the
 	// credential, resolving to one automation that runs with the JSON body.
 	r.POST("/api/v1/integrations/inbound/automation/:token", h.InboundAutomation)
@@ -1233,6 +1234,27 @@ func Run(
 				sf.GET("/activity", read, h.ListSalesforceActivity)
 				sf.POST("/activity/retry", write, h.RetrySalesforceActivity)
 				sf.POST("/sync-now", operate, h.SalesforceSyncNow)
+
+				// Apollo (:id is the connection). Enrichment writes contacts and
+				// spends the customer's Apollo credits, so it takes both gates.
+				ap := integrations.Group("/apollo/:id")
+				ap.GET("", read, h.ApolloOverview)
+				ap.PUT("/key", write, h.ReplaceApolloKey)
+				ap.GET("/lists", read, h.ApolloLists)
+				ap.POST("/import/preview", operate, h.PreviewApolloImport)
+				ap.GET("/import-sources", read, h.ListApolloImportSources)
+				ap.POST("/import-sources", write, h.CreateApolloImportSource)
+				ap.PATCH("/import-sources/:sourceId", write, h.UpdateApolloImportSource)
+				ap.POST("/import-sources/:sourceId/run", operate, h.RunApolloImportSource)
+				ap.DELETE("/import-sources/:sourceId", write, h.DeleteApolloImportSource)
+				ap.GET("/enrichments", read, h.ListApolloEnrichments)
+				ap.POST("/enrichments", operate, m.RequireAccess(models.PermManageContacts, models.APIPermBulkContacts), h.StartApolloEnrichment)
+				ap.GET("/enrichments/:runId", read, h.GetApolloEnrichment)
+
+				// Clay (:id is the connection).
+				cl := integrations.Group("/clay/:id")
+				cl.GET("", read, h.GetClaySettings)
+				cl.PATCH("", write, h.UpdateClaySettings)
 			}
 
 			// Meetings (org-scoped). Booked calls from connected scheduling

@@ -80,6 +80,8 @@ export const dashboardPages = {
     hubspot: () => import("./app/app/integrations/hubspot/page"),
     pipedrive: () => import("./app/app/integrations/pipedrive/page"),
     salesforce: () => import("./app/app/integrations/salesforce/[id]/page"),
+    apollo: () => import("./app/app/integrations/apollo/[id]/page"),
+    clay: () => import("./app/app/integrations/clay/[id]/page"),
     automations: () => import("./app/app/automations/page"),
     automation: () => import("./app/app/automations/[id]/page"),
     audit: () => import("./app/app/audit/page"),
@@ -346,6 +348,8 @@ const integrationsSplat = createRoute({ getParentRoute: () => integrationsRoute,
 const hubspotRoute = dash(appRoute, "integrations/hubspot", dashboardPages.hubspot, "HubSpot");
 const pipedriveRoute = dash(appRoute, "integrations/pipedrive", dashboardPages.pipedrive, "Pipedrive");
 const salesforceRoute = dash(appRoute, "integrations/salesforce/$id", dashboardPages.salesforce, "Salesforce");
+const apolloRoute = dash(appRoute, "integrations/apollo/$id", dashboardPages.apollo, "Apollo", loaders.apolloLoader);
+const clayRoute = dash(appRoute, "integrations/clay/$id", dashboardPages.clay, "Clay", loaders.clayLoader);
 
 const automationsRoute = dash(appRoute, "automations", dashboardPages.automations, "Automations", loaders.automationsLoader);
 const automationRoute = dash(appRoute, "automations/$id", dashboardPages.automation, "Automation", loaders.automationLoader);
@@ -442,6 +446,8 @@ const routeTree = rootRoute.addChildren([
         hubspotRoute,
         pipedriveRoute,
         salesforceRoute,
+        apolloRoute,
+        clayRoute,
         automationsRoute,
         automationRoute,
         auditRoute,

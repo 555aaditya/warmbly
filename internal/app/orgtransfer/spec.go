@@ -679,6 +679,17 @@ var Tables = []Table{
 		Scope: `source_id IN (SELECT id FROM salesforce_import_sources WHERE organization_id = $1)`,
 		Note:  "Which records each import already brought in, so a recurring import on the destination does not import them again.",
 	},
+	{
+		Name: "apollo_import_sources", Group: models.OrgDataGroupAutomations,
+		Scope:         scopeOrg,
+		ResetOnImport: []string{"status", "last_run_at", "last_result", "last_error"},
+		Note:          "Saved Apollo list imports. They read the same Apollo lists once the connection's key travels with it.",
+	},
+	{
+		Name: "apollo_import_members", Group: models.OrgDataGroupAutomations,
+		Scope: `source_id IN (SELECT id FROM apollo_import_sources WHERE organization_id = $1)`,
+		Note:  "Which Apollo people each import already brought in, so a recurring import on the destination does not import them again.",
+	},
 
 	// ---------- assistant ----------
 	{
@@ -1060,6 +1071,7 @@ var ExcludedTables = map[string]string{
 	"integration_oauth_states":         "In-flight OAuth handshakes, valid for minutes and bound to the source instance's redirect URL.",
 	"crm_sync_jobs":                    "The outbox of pending CRM writes on this instance; the destination's own events feed its outbox.",
 	"crm_sync_cursors":                 "Pull checkpoints for this instance; the destination starts its own pull.",
+	"apollo_enrichment_runs":           "The progress of enrichment requests run on this instance. What they found is already on the contacts, which travel.",
 	"salesforce_record_links":          "Which Salesforce record each contact is, with a cached copy of it. The destination links contacts again by address the first time it syncs or shows them, and reads the record fresh.",
 	"salesforce_activity_queue":        "Activity waiting to be logged in Salesforce, and the recent outcome of what was. What was logged is already in Salesforce; what was waiting belongs to this instance's drain.",
 	"salesforce_sync_state":            "Where this instance's pull loop got to in each Salesforce org, and the API calls it counted today. The destination starts its own cursor when the connection first syncs.",

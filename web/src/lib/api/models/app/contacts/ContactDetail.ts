@@ -54,7 +54,9 @@ export type ContactSource =
     | "api"
     | "ai_assistant"
     | "form"
-    | "automation";
+    | "automation"
+    | "apollo"
+    | "clay";
 
 // One observed fact about the mailbox. Silence is never recorded: a contact
 // who does not open or reply has said nothing about their address.

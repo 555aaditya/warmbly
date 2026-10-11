@@ -43,6 +43,7 @@ export const ACTION_LABELS: Record<string, string> = {
     "salesforce.upsert_contact": "Create / update Salesforce record",
     "close.upsert_lead": "Create / update Close lead",
     "webhook.ping": "Send a webhook",
+    "clay.send_row": "Send a row to Clay",
     // Native (Warmbly built-in) actions — no external connection needed.
     "warmbly.add_tag": "Add a label",
     "warmbly.remove_tag": "Remove a label",
@@ -170,6 +171,10 @@ export function actionNeedsChannel(action: string): boolean {
 }
 export function actionNeedsURL(action: string): boolean {
     return action === "webhook.ping";
+}
+// Clay posts to the table webhook saved on the connection unless the step names another.
+export function actionTakesClayURL(action: string): boolean {
+    return action === "clay.send_row";
 }
 // Notify-style actions accept an optional custom message template.
 export function actionSupportsTemplate(action: string): boolean {

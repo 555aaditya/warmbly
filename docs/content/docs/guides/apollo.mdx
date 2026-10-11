@@ -1,0 +1,92 @@
+---
+title: Apollo
+description: "Import saved Apollo lists into Warmbly, keep them in sync every hour, and enrich contacts from Apollo's people database with your own API key."
+---
+
+The Apollo integration brings people from your Apollo account into Warmbly and fills in what your contacts are missing. It acts with your own Apollo API key, so it uses your Apollo plan and credits.
+
+## Connect Apollo
+
+<Steps>
+
+<Step>
+
+In Apollo, open **Settings > Integrations > API** and create a key. A master key works. A restricted key needs access to lists, contact search and people enrichment.
+
+</Step>
+
+<Step>
+
+In Warmbly, open **Integrations > Apollo > Connect** and paste the key.
+
+</Step>
+
+<Step>
+
+Warmbly checks the key against everything the integration uses before saving it, and shows which Apollo account it acts as. A key that cannot read lists or search contacts is refused with the reason.
+
+</Step>
+
+</Steps>
+
+## Good to know
+
+- Reading a list spends no Apollo credits. Enrichment spends one credit for each person Apollo finds.
+- An import never creates a duplicate. Someone already in Warmbly is updated, and an update never blanks a field.
+- People on your suppression list are never imported.
+- The key is encrypted with your workspace's key and never shown again.
+
+## Import a list
+
+Save people to a list in Apollo, then on the Apollo page choose **Imports > New import**.
+
+<Steps>
+
+<Step>
+
+**List.** Pick one of your saved lists of people. Leave **Verified addresses only** on to skip people whose Apollo email status is guessed, unavailable or anything other than verified: unverified addresses bounce more and hurt your mailboxes.
+
+</Step>
+
+<Step>
+
+**Preview.** See how many people the list holds and a sample of them, with who is already a Warmbly contact and who will be left out (no address, unverified, or suppressed).
+
+</Step>
+
+<Step>
+
+**Options.** Name the import, optionally add everyone to a campaign and give them labels, and choose whether to keep the list in sync.
+
+</Step>
+
+</Steps>
+
+Each contact gets the source **Apollo**, so a [segment](/guides/segments/) can select them. Besides name, company and phone, an import fills these custom fields: `title`, `seniority`, `linkedin_url`, `city`, `state`, `country`, `website`, `company_domain`, `industry`, `apollo_id` and `apollo_email_status`. They are usable as [variables](/guides/sequences/) in your emails.
+
+### Keep in sync
+
+A synced import checks its list every hour and brings in people added since the last run. Each person is imported once per import, so someone you remove from Warmbly is not brought back by the next run.
+
+One run reads at most 10,000 people and imports at most 5,000. A longer list continues where it stopped on the next run, and the import shows that it stopped at the limit.
+
+From an import's menu you can run it now, pause or resume it, edit where people land, or delete it. Deleting an import keeps the contacts it brought in.
+
+## Enrich contacts
+
+Select contacts on the [Contacts](/guides/contacts-crm/) page and choose **Enrich** in the selection bar:
+
+- **Fill empty fields** writes only what a contact is missing.
+- **Replace with Apollo data** overwrites the fields Apollo has an answer for.
+
+Apollo matches each contact by address and name. Enrichment fills title, seniority, company, LinkedIn, location, website and industry. It never changes a contact's email address.
+
+A run takes up to 5,000 contacts and works in the background. Its progress, how many were enriched, how many Apollo did not find, and the credits used are on the Apollo page under **Enrichment**. Starting a run needs both the **Use integrations** and **Manage contacts** permissions, because it spends credits and writes contacts.
+
+## When the key stops working
+
+If Apollo refuses the key (it was deleted, or the plan changed), the connection shows **Reconnect required**, imports and enrichment pause, and the Apollo page asks for a new key under **API key**. A run that hits Apollo's rate limit stops and keeps what it already did; the next run continues from there.
+
+## What moves with a workspace export
+
+Saved imports move with a [workspace export](/guides/workspace-export-import/), along with the record of who each one already imported, so a moved import does not import the same people again. They arrive idle. The API key travels only in an archive that includes credentials; otherwise paste it again on the Apollo page before the imports run. Enrichment runs do not move: they are a history of work already done, and the contacts they enriched move with your contacts.

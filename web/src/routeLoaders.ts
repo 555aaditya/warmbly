@@ -28,6 +28,8 @@ import { contactsSearchQuery } from "./lib/api/hooks/app/contacts/useSearchConta
 import { customFieldKeysQuery } from "./lib/api/hooks/app/contacts/useCustomFieldKeys";
 import { readCachedView, viewPreferencesQuery } from "./lib/api/hooks/app/views/useViewPreferences";
 import { labelCountQuery, segmentFieldsQuery, segmentQuery, segmentsListQuery } from "./lib/api/hooks/app/segments";
+import { apolloOverviewQuery, apolloSourcesQuery } from "./lib/api/hooks/app/integrations/useApollo";
+import { claySettingsQuery } from "./lib/api/hooks/app/integrations/useClay";
 import { suppressionsListQuery } from "./lib/api/hooks/app/suppressions/useSuppressions";
 import { formQuery, formsListQuery } from "./lib/api/hooks/app/forms";
 import { campaignsListQuery } from "./lib/api/hooks/app/campaigns/useCampaigns";
@@ -310,6 +312,12 @@ export const automationLoader = pageLoader((qc, { params }) => [
     qc.prefetchQuery(integrationConnectionsQuery),
     qc.prefetchQuery(integrationCatalogQuery),
 ]);
+
+export const apolloLoader = pageLoader((qc, { params }) =>
+    params.id ? [qc.prefetchQuery(apolloOverviewQuery(params.id)), qc.prefetchQuery(apolloSourcesQuery(params.id))] : [],
+);
+
+export const clayLoader = pageLoader((qc, { params }) => [!!params.id && qc.prefetchQuery(claySettingsQuery(params.id))]);
 
 export const auditLoader = pageLoader((qc) => [canManageTeam() && qc.prefetchQuery(auditLogsQuery({ limit: 50 }))]);
 

@@ -36,6 +36,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/aitools"
 	"github.com/warmbly/warmbly/internal/app/analytics"
 	"github.com/warmbly/warmbly/internal/app/apikey"
+	"github.com/warmbly/warmbly/internal/app/apollo"
 	"github.com/warmbly/warmbly/internal/app/appdirectory"
 	"github.com/warmbly/warmbly/internal/app/audit"
 	"github.com/warmbly/warmbly/internal/app/auth"
@@ -43,6 +44,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/bootstrap"
 	"github.com/warmbly/warmbly/internal/app/campaign"
 	"github.com/warmbly/warmbly/internal/app/cipher"
+	"github.com/warmbly/warmbly/internal/app/clay"
 	"github.com/warmbly/warmbly/internal/app/cliauth"
 	"github.com/warmbly/warmbly/internal/app/cloudlink"
 	"github.com/warmbly/warmbly/internal/app/compose"
@@ -362,6 +364,8 @@ func main() {
 	var emailImageRepoForHandler repository.EmailImageRepository
 	var leadSyncServiceForHandler leadsync.Service
 	var salesforceServiceForHandler *salesforce.Service
+	var apolloServiceForHandler *apollo.Service
+	var clayServiceForHandler *clay.Service
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1650,6 +1654,21 @@ func main() {
 		go jobrun.Loop(ctx, "salesforce_pull", 5*time.Minute, false, salesforceServiceForHandler.Pull)
 		go jobrun.Loop(ctx, "salesforce_recurring_imports", 5*time.Minute, false, salesforceServiceForHandler.RunRecurring)
 		go jobrun.Loop(ctx, "salesforce_activity_prune", 24*time.Hour, false, salesforceServiceForHandler.Prune)
+
+		// Apollo list imports and enrichment, and Clay's inbound rows; both run
+		// through the contact importer.
+		apolloServiceForHandler = apollo.NewService(apollo.Deps{
+			Repo:         repository.NewApolloRepository(primaryDB.Pool),
+			Integrations: integrationServiceForHandler,
+			Contacts:     contactService,
+		})
+		go jobrun.Loop(ctx, "apollo_recurring_imports", 5*time.Minute, false, apolloServiceForHandler.RunRecurring)
+		go jobrun.Loop(ctx, "apollo_enrichment_runs", time.Minute, true, apolloServiceForHandler.RunPendingEnrichment)
+		clayServiceForHandler = clay.NewService(clay.Deps{
+			Repo:         repository.NewClayRepository(primaryDB.Pool),
+			Integrations: integrationServiceForHandler,
+			Contacts:     contactService,
+		})
 		// Port reply-classifier Layer 3 onto the platform provider (OpenAI-first,
 		// self-hostable). Platform-paid, never charged to org credits. Nil provider
 		// leaves Layer 3 disabled (the ambiguous middle resolves to "unknown").
@@ -2462,6 +2481,8 @@ func main() {
 
 		// Native Salesforce sync
 		SalesforceService: salesforceServiceForHandler,
+		ApolloService:     apolloServiceForHandler,
+		ClayService:       clayServiceForHandler,
 
 		WebsocketURI: websocketURI,
 
