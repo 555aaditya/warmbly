@@ -186,14 +186,27 @@ func (r *taskRepository) ApplySendResult(ctx context.Context, result models.Send
 	// Receipt stamping is idempotent; an already-applied failure cannot be refunded again.
 	repairDeadLetter := status == "dead_lettered" && previous != nil && *previous == state && state == "sent"
 	if !repairDeadLetter && (applied != nil || (previous != nil && *previous != "unknown")) {
-		if previous != nil && state != "unknown" && state != *previous {
-			if _, err = tx.Exec(ctx, `UPDATE send_recovery_resolutions SET conflict_detected_at=NOW()
-				WHERE recovery_task_id=$1 AND previous_reason='unknown' AND confirmed_result IS NOT NULL`, result.TaskID); err != nil {
+		if previous != nil && *previous != "unknown" && state != "unknown" && state != *previous {
+			tag, err := tx.Exec(ctx, `UPDATE send_recovery_resolutions
+				SET conflict_detected_at=COALESCE(conflict_detected_at,clock_timestamp()),conflicting_result_state=COALESCE(conflicting_result_state,$2)
+				WHERE recovery_task_id=$1 AND recorded_locally_at IS NOT NULL
+				AND (previous_reason='unknown' OR evidence_type='authoritative_result_conflict')`, result.TaskID, state)
+			if err != nil {
 				return err
 			}
-			_, err = tx.Exec(ctx, `UPDATE email_accounts SET send_recovery_hold = true, send_recovery_reason = 'conflict', send_recovery_task_id = $2
-				WHERE id = $1 AND (NOT send_recovery_hold OR (send_recovery_reason = 'unknown' AND send_recovery_task_id = $2))`, mailboxID, result.TaskID)
-			if err != nil {
+			if tag.RowsAffected() == 0 {
+				_, err = tx.Exec(ctx, `INSERT INTO send_recovery_resolutions
+					(organization_id,email_account_id,recovery_task_id,previous_reason,evidence_type,conflict_detected_at,conflicting_result_state,recorded_locally_at)
+					SELECT ea.organization_id,ea.id,t.id,'conflict','authoritative_result_conflict',clock_timestamp(),$2,clock_timestamp()
+					FROM tasks t JOIN email_accounts ea ON ea.id=t.email_account_id WHERE t.id=$1`, result.TaskID, state)
+				if err != nil {
+					return err
+				}
+			}
+			if err = refreshUnknownSendHold(ctx, tx, mailboxID, result.TaskID); err != nil {
+				return err
+			}
+			if err = refreshSendHold(ctx, tx, mailboxID, nil, nil); err != nil {
 				return err
 			}
 			return tx.Commit(ctx)
@@ -278,21 +291,33 @@ func resolveSendDeadLetter(ctx context.Context, tx pgx.Tx, taskID uuid.UUID) err
 	return err
 }
 
-func persistSendHold(ctx context.Context, tx pgx.Tx, mailboxID uuid.UUID, result models.SendEmailResult, state string) error {
-	if state != "unknown" {
-		_, err := tx.Exec(ctx, `WITH next_hold AS (
+func refreshUnknownSendHold(ctx context.Context, tx pgx.Tx, mailboxID, taskID uuid.UUID) error {
+	reason := "unknown"
+	return refreshSendHold(ctx, tx, mailboxID, &taskID, &reason)
+}
+
+func refreshSendHold(ctx context.Context, tx pgx.Tx, mailboxID uuid.UUID, taskID *uuid.UUID, reason *string) error {
+	_, err := tx.Exec(ctx, `WITH next_hold AS (
 			SELECT id,reason FROM (
 			 SELECT t.id,'unknown' AS reason,1 AS priority,t.created_at FROM tasks t
 			 WHERE t.email_account_id=$1 AND t.send_result_state='unknown'
 			 UNION ALL
 			 SELECT t.id,'conflict',2,t.created_at FROM send_recovery_resolutions r JOIN tasks t ON t.id=r.recovery_task_id
-			 WHERE t.email_account_id=$1 AND r.previous_reason='unknown' AND r.conflict_detected_at IS NOT NULL
-			 AND NOT EXISTS(SELECT 1 FROM send_recovery_resolutions resolved WHERE resolved.recovery_task_id=t.id AND resolved.previous_reason='conflict')
+			 WHERE t.email_account_id=$1 AND (r.previous_reason='unknown' OR r.evidence_type='authoritative_result_conflict')
+			 AND r.conflict_detected_at IS NOT NULL AND r.conflict_resolved_at IS NULL
 			) candidates ORDER BY priority,created_at,id LIMIT 1)
 			UPDATE email_accounts ea SET send_recovery_task_id=n.id,send_recovery_hold=n.id IS NOT NULL,send_recovery_reason=n.reason
 			FROM (SELECT 1) singleton LEFT JOIN next_hold n ON true
-			WHERE ea.id=$1 AND ea.send_recovery_task_id=$2 AND ea.send_recovery_reason='unknown'`, mailboxID, result.TaskID)
-		if err != nil {
+			WHERE ea.id=$1 AND (
+			 ($3::text IS NOT NULL AND ea.send_recovery_task_id IS NOT DISTINCT FROM $2::uuid
+			  AND ea.send_recovery_reason IS NOT DISTINCT FROM $3::text)
+			 OR ($2::uuid IS NULL AND $3::text IS NULL AND NOT ea.send_recovery_hold))`, mailboxID, taskID, reason)
+	return err
+}
+
+func persistSendHold(ctx context.Context, tx pgx.Tx, mailboxID uuid.UUID, result models.SendEmailResult, state string) error {
+	if state != "unknown" {
+		if err := refreshUnknownSendHold(ctx, tx, mailboxID, result.TaskID); err != nil {
 			return err
 		}
 	}

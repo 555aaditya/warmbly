@@ -192,8 +192,7 @@ func (r *taskRepository) DeferWarmupDispatch(ctx context.Context, task, mailbox,
 	if _, err = tx.Exec(ctx, `UPDATE tasks SET status='pending',completed_at=NULL,scheduled_at=$2,updated_at=NOW(),send_result_state=NULL,message_id='' WHERE id=$1`, task, at); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE email_accounts SET send_recovery_hold=false,send_recovery_reason=NULL,send_recovery_task_id=NULL
-        WHERE id=$1 AND send_recovery_reason='unknown' AND send_recovery_task_id=$2 AND NOT EXISTS(SELECT 1 FROM tasks WHERE email_account_id=$1 AND send_result_state='unknown')`, mailbox, task); err != nil {
+	if err = refreshUnknownSendHold(ctx, tx, mailbox, task); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

@@ -1649,6 +1649,20 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 		return nil, errx.InternalError()
 	}
 	defer tx.Rollback(ctx)
+	if resolution := udata.SendRecoveryResolution; resolution != nil {
+		mailboxID, parseErr := uuid.Parse(emailAccountID)
+		if parseErr != nil || resolution.HeldTaskID == uuid.Nil {
+			return nil, errx.ErrInvalid
+		}
+		if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,268))`, resolution.HeldTaskID.String()); err != nil {
+			db.CaptureError(err, "lock send recovery task", nil, "exec")
+			return nil, errx.InternalError()
+		}
+		if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,269))`, mailboxID.String()); err != nil {
+			db.CaptureError(err, "lock send recovery mailbox", nil, "exec")
+			return nil, errx.InternalError()
+		}
+	}
 	if udata.WarmupStartTime != nil || udata.WarmupEndTime != nil {
 		// Lock the stored half of a partial patch so concurrent changes cannot cross.
 		query := `SELECT warmup_start_time::text, warmup_end_time::text FROM email_accounts WHERE organization_id=$1 AND id=$2 FOR UPDATE`
@@ -1695,8 +1709,8 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 		 AND EXISTS(SELECT 1 FROM tasks e WHERE e.id=$4 AND e.email_account_id=held.id AND e.send_result_state='sent' AND e.send_result_applied_at>held.completed_at AND e.send_executor_started_at>held.completed_at))
 		 OR ($3='operator_provider_confirmation' AND held.send_recovery_reason IN('authentication','permanent','conflict') AND length($5)>0 AND $4::uuid IS NOT NULL
 		 AND EXISTS(SELECT 1 FROM tasks e WHERE e.id=$4 AND e.email_account_id=held.id AND e.send_result_state IN('sent','failed') AND e.send_result_applied_at IS NOT NULL)))),
-		 history AS(INSERT INTO send_recovery_resolutions(organization_id,email_account_id,recovery_task_id,evidence_task_id,previous_reason,evidence_type,confirmation_reference)
-		 SELECT organization_id,id,send_recovery_task_id,$4,send_recovery_reason,$3,$5 FROM valid RETURNING email_account_id)
+		 history AS(INSERT INTO send_recovery_resolutions(organization_id,email_account_id,recovery_task_id,evidence_task_id,previous_reason,evidence_type,confirmation_reference,recorded_locally_at)
+		 SELECT organization_id,id,send_recovery_task_id,$4,send_recovery_reason,$3,$5,clock_timestamp() FROM valid RETURNING email_account_id)
 		 UPDATE email_accounts ea SET send_recovery_hold=false,send_recovery_reason=NULL,send_recovery_task_id=NULL
 		 FROM history WHERE ea.id=history.email_account_id`, orgID, emailAccountID, resolution.EvidenceType, evidenceTask, strings.TrimSpace(resolution.ConfirmationReference), resolution.HeldTaskID, resolution.HeldReason)
 			if resolveErr != nil {
@@ -1705,6 +1719,23 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 			}
 			if tag.RowsAffected() != 1 {
 				return nil, errx.ErrInvalid
+			}
+			if resolution.HeldReason == "conflict" {
+				if _, resolveErr := tx.Exec(ctx, `UPDATE send_recovery_resolutions SET conflict_resolved_at=clock_timestamp()
+					WHERE organization_id=$1 AND email_account_id=$2 AND recovery_task_id=$3
+					AND conflict_detected_at IS NOT NULL AND conflict_resolved_at IS NULL
+					AND (previous_reason='unknown' OR evidence_type='authoritative_result_conflict')`, orgID, emailAccountID, resolution.HeldTaskID); resolveErr != nil {
+					db.CaptureError(resolveErr, "resolve outcome conflict", nil, "exec")
+					return nil, errx.InternalError()
+				}
+			}
+			mailboxID, parseErr := uuid.Parse(emailAccountID)
+			if parseErr != nil {
+				return nil, errx.ErrInvalid
+			}
+			if resolveErr := refreshSendHold(ctx, tx, mailboxID, nil, nil); resolveErr != nil {
+				db.CaptureError(resolveErr, "refresh send recovery", nil, "exec")
+				return nil, errx.InternalError()
 			}
 		}
 	}
