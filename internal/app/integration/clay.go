@@ -101,9 +101,10 @@ var ErrConnectionNotFound = errors.New("connection not found")
 
 // clayDeliver posts one flat row to a Clay table's webhook source.
 func (s *service) clayDeliver(ctx context.Context, sub models.IntegrationEventSubscription, secretCfg map[string]any, data map[string]any, msg eventMessage) error {
+	saved := stringFromMap(secretCfg, "webhook_url")
 	target := configString(sub.Config, "url")
 	if target == "" {
-		target = stringFromMap(secretCfg, "webhook_url")
+		target = saved
 	}
 	if target == "" {
 		return errors.New("add the Clay table's webhook URL on the Clay page first")
@@ -112,8 +113,9 @@ func (s *service) clayDeliver(ctx context.Context, sub models.IntegrationEventSu
 	if err != nil {
 		return err
 	}
+	// The connection's sealed token goes only to the connection's own table webhook.
 	token := configString(sub.Config, "auth_token")
-	if token == "" {
+	if token == "" && target == saved {
 		token = stringFromMap(secretCfg, "auth_token")
 	}
 	return clayPost(ctx, rendered, token, clayRow(sub.EventType, data, msg))

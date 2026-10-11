@@ -94,7 +94,7 @@ Clay can map the response into columns. A single-row request answers with that r
 
 `status` is `created`, `updated`, `skipped` (for example, already a contact with **Leave it alone** chosen, or suppressed) or `failed`. A skipped or failed row carries a `reason`. A request for many rows has the same counts and one entry per row in `results`.
 
-A URL Warmbly does not know answers `404`, a disconnected connection `403`, and more than 600 requests a minute on one connection `429` with `Retry-After`. Clay retries those on its own.
+A URL Warmbly does not know answers `404` and a disconnected connection `403`. Neither goes away on a retry: fix the URL in the column or reconnect Clay, then rerun the rows. More than 600 requests a minute on one connection answer `429` with `Retry-After`, and a Warmbly error answers `500`. Those are worth retrying, so turn on retries in the HTTP API column's settings and include `429` and `500` in the statuses it retries.
 
 ### What rows become
 
@@ -134,7 +134,7 @@ Choose the events to send, save, and use **Send a test row** to check that Clay 
 
 The events are: prospect replies, email sent, email opened, link clicked, email bounces, contact unsubscribes, meeting booked and meeting canceled. Each one adds a row with the event, the contact's email and name, the campaign, and the event's details as flat columns.
 
-To send to more than one Clay table, use an [automation](/guides/automations/) with the **Send a row to Clay** action. It sends to the connection's table unless the step names another table webhook.
+To send to more than one Clay table, use an [automation](/guides/automations/) with the **Send a row to Clay** action. It sends to the connection's table unless the step names another table webhook. The connection's auth token is only sent to its own table, so a table named on a step needs a webhook source without a token.
 
 **Stop sending** removes the webhook URL, the token and the chosen events.
 

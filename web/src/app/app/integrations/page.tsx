@@ -486,16 +486,16 @@ function IntegrationsStore({ route, routeKey }: { route: Route; routeKey: string
                             if (conn.provider === "clay") {
                                 // The Clay page shows the new URL with the column setup next to it.
                                 if (conn.inbound_webhook_url) stashInboundUrl(conn.id, conn.inbound_webhook_url);
-                                go(`${STORE_BASE}/clay/${conn.id}`);
+                                navigate({ to: "/app/integrations/clay/$id", params: { id: conn.id } });
                             } else if (conn.provider === "apollo") {
-                                go(`${STORE_BASE}/apollo/${conn.id}`);
+                                navigate({ to: "/app/integrations/apollo/$id", params: { id: conn.id } });
                             } else if (conn.inbound_webhook_url) {
                                 setInboundUrl({ provider: conn.provider, url: conn.inbound_webhook_url });
                             } else if (CRM_HOMES.has(conn.provider)) {
                                 go(`${STORE_BASE}/${conn.provider}`);
                             } else if (conn.provider === "salesforce") {
                                 // Setup continues on the Salesforce page: rules, mapping, imports.
-                                go(`${STORE_BASE}/salesforce/${conn.id}`);
+                                navigate({ to: "/app/integrations/salesforce/$id", params: { id: conn.id } });
                             } else {
                                 setManageTarget(conn);
                             }

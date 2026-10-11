@@ -29,6 +29,10 @@ const (
 	RecurringEvery = time.Hour
 	// enrichChunk is how many contacts an enrichment run loads and saves at once.
 	enrichChunk = 100
+	// runTimeout bounds one import run; staleAfter is when a run still marked
+	// running is treated as interrupted, and must stay above runTimeout.
+	runTimeout = 25 * time.Minute
+	staleAfter = 30 * time.Minute
 )
 
 // Deps is everything the Apollo integration talks to.
@@ -383,7 +387,7 @@ func (s *Service) StartRun(ctx context.Context, orgID, id uuid.UUID) (*models.Ap
 		return nil, errx.NewWithIdentifier(errx.Conflict, "import_running", "This import is already running.")
 	}
 	go func(src models.ApolloImportSource) {
-		bg, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
+		bg, cancel := context.WithTimeout(context.Background(), runTimeout)
 		defer cancel()
 		s.runSource(bg, src)
 	}(*src)
@@ -393,6 +397,9 @@ func (s *Service) StartRun(ctx context.Context, orgID, id uuid.UUID) (*models.Ap
 
 // RunRecurring runs every "keep in sync" source that is due.
 func (s *Service) RunRecurring(ctx context.Context) error {
+	if _, err := s.Repo.ReleaseStaleSources(ctx, staleAfter); err != nil {
+		log.Warn().Err(err).Msg("apollo: could not release interrupted imports")
+	}
 	due, err := s.Repo.DueRecurringSources(ctx, RecurringEvery)
 	if err != nil {
 		return err
@@ -405,7 +412,9 @@ func (s *Service) RunRecurring(ctx context.Context) error {
 		if err != nil || !claimed {
 			continue
 		}
-		s.runSource(ctx, src)
+		run, cancel := context.WithTimeout(ctx, runTimeout)
+		s.runSource(run, src)
+		cancel()
 	}
 	return nil
 }
@@ -422,7 +431,10 @@ func (s *Service) runSource(ctx context.Context, src models.ApolloImportSource) 
 		}
 		log.Warn().Err(err).Str("source", src.ID.String()).Msg("apollo: import run failed")
 	}
-	_ = s.Repo.FinishSource(ctx, src.ID, res, msg)
+	// The outcome is recorded even when the run's own context has ended.
+	if err := s.Repo.FinishSource(context.WithoutCancel(ctx), src.ID, res, msg); err != nil {
+		log.Warn().Err(err).Str("source", src.ID.String()).Msg("apollo: could not record import result")
+	}
 }
 
 // importOnce reads the list, imports people it has not brought in before and

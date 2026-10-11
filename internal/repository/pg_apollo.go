@@ -40,6 +40,7 @@ type ApolloRepository interface {
 	ClaimSource(ctx context.Context, id uuid.UUID) (bool, error)
 	FinishSource(ctx context.Context, id uuid.UUID, result *models.ApolloRunResult, errMsg string) error
 	DueRecurringSources(ctx context.Context, every time.Duration) ([]models.ApolloImportSource, error)
+	ReleaseStaleSources(ctx context.Context, after time.Duration) (int64, error)
 	SourceMembers(ctx context.Context, sourceID uuid.UUID, apolloIDs []string) (map[string]bool, error)
 	AddSourceMembers(ctx context.Context, sourceID uuid.UUID, members map[string]uuid.UUID) error
 
@@ -180,6 +181,19 @@ func (r *apolloRepository) ClaimSource(ctx context.Context, id uuid.UUID) (bool,
 	return tag.RowsAffected() > 0, nil
 }
 
+// ReleaseStaleSources marks runs that outlived any live run (a restart mid-import)
+// as interrupted, so they show an error, can be run again and sync on schedule.
+func (r *apolloRepository) ReleaseStaleSources(ctx context.Context, after time.Duration) (int64, error) {
+	tag, err := r.db.Exec(ctx, `
+		UPDATE apollo_import_sources
+		SET status = 'error', last_error = 'The last run was interrupted. It runs again on its next check, or choose Run now.', updated_at = NOW()
+		WHERE status = 'running' AND updated_at < NOW() - make_interval(secs => $1)`, after.Seconds())
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 func (r *apolloRepository) FinishSource(ctx context.Context, id uuid.UUID, result *models.ApolloRunResult, errMsg string) error {
 	var raw []byte
 	added := 0
@@ -206,7 +220,8 @@ func (r *apolloRepository) DueRecurringSources(ctx context.Context, every time.D
 			s.last_result, s.last_error, s.total_imported, s.created_at, s.updated_at
 		FROM apollo_import_sources s
 		JOIN integration_connections c ON c.id = s.connection_id
-		WHERE s.recurring AND s.enabled AND s.status <> 'running'
+		WHERE s.recurring AND s.enabled
+		  AND (s.status <> 'running' OR s.updated_at < NOW() - INTERVAL '30 minutes')
 		  AND c.status IN ('connected', 'degraded')
 		  AND (s.last_run_at IS NULL OR s.last_run_at < NOW() - make_interval(secs => $1))
 		ORDER BY s.last_run_at NULLS FIRST

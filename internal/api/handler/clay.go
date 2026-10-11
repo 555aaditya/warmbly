@@ -113,7 +113,7 @@ func (h *Handler) InboundClay(c *gin.Context) {
 			c.JSON(int(xe.Code), gin.H{"status": "failed", "error": xe.Message})
 		default:
 			log.Error().Err(err).Msg("clay inbound failed")
-			c.JSON(http.StatusInternalServerError, gin.H{"status": "failed", "error": "Warmbly could not save these rows. Clay will retry."})
+			c.JSON(http.StatusInternalServerError, gin.H{"status": "failed", "error": "Warmbly could not save these rows. Run them again."})
 		}
 		return
 	}
