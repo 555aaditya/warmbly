@@ -31,8 +31,10 @@ struct SocialSignInRow: View {
                     handleApple(result)
                 }
                 .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
-                .frame(height: 56)
-                .clipShape(RoundedRectangle(cornerRadius: 17))
+                // The UIKit button keeps the style it was built with; rebuild it when the theme lands.
+                .id(colorScheme)
+                .frame(height: 54)
+                .clipShape(Capsule())
                 .disabled(busy)
             }
 
@@ -48,12 +50,12 @@ struct SocialSignInRow: View {
                         GoogleGlyph()
                             .frame(width: 19, height: 19)
                         Text("Continue with Google")
-                            .font(.system(size: 17, weight: .medium))
+                            .font(.system(size: 16.5, weight: .medium))
                     }
                     .frame(maxWidth: .infinity)
-                    .frame(height: 56)
-                    .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 17))
-                    .overlay(RoundedRectangle(cornerRadius: 17).strokeBorder(Color(.separator).opacity(0.7), lineWidth: 1.2))
+                    .frame(height: 54)
+                    .background(WTheme.raised, in: Capsule())
+                    .overlay(Capsule().strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
                 }
                 .buttonStyle(PressableButtonStyle())
                 .disabled(busy)

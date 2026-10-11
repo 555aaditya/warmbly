@@ -51,6 +51,10 @@ final class PushManager: NSObject {
     }
 
     private func requestAndRegister() async {
+        #if DEBUG
+        // Scripted simulator runs have no one to answer the permission prompt.
+        if ProcessInfo.processInfo.environment["WARMBLY_DEBUG_TOKEN"] != nil { return }
+        #endif
         let center = UNUserNotificationCenter.current()
         var status = await center.notificationSettings().authorizationStatus
         if status == .notDetermined {

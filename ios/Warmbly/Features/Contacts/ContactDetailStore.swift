@@ -18,9 +18,14 @@ final class ContactDetailStore {
     /// GET /contacts/:id returns the ContactDetail (contact fields + engagement
     /// + suppression). Fold it into the header.
     func refreshHeader(_ api: APIClient) async {
-        if let detail: Contact = try? await api.get("contacts/\(contact.id)") {
+        do {
+            let detail: Contact = try await api.get("contacts/\(contact.id)")
             withAnimation(.snappy) { contact = detail }
             headerLoaded = true
+        } catch {
+            #if DEBUG
+            print("contact header:", error)
+            #endif
         }
     }
 

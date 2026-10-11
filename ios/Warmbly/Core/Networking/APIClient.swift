@@ -22,6 +22,12 @@ actor APIClient {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
         session = URLSession(configuration: config)
+        #if DEBUG
+        // Lets scripted simulator runs start signed in (SIMCTL_CHILD_WARMBLY_DEBUG_TOKEN).
+        if let raw = ProcessInfo.processInfo.environment["WARMBLY_DEBUG_TOKEN"], !raw.isEmpty {
+            KeychainStore.set(raw, for: Self.tokenKey)
+        }
+        #endif
         if let raw = KeychainStore.get(Self.tokenKey),
            let stored = try? Self.decoder.decode(AuthToken.self, from: Data(raw.utf8)) {
             token = stored
@@ -284,6 +290,41 @@ actor APIClient {
 
     func delete<T: Decodable, B: Encodable>(_ path: String, body: B) async throws -> T {
         try await request(.delete, path, bodyData: try Self.encoder.encode(body))
+    }
+
+    /// A file part of a multipart upload.
+    struct UploadFile {
+        var field: String
+        var filename: String
+        var mimeType: String
+        var data: Data
+    }
+
+    /// POSTs `multipart/form-data`: text fields plus an optional file.
+    func postMultipart<T: Decodable>(_ path: String, fields: [String: String], file: UploadFile? = nil, timeout: TimeInterval = 60) async throws -> T {
+        let boundary = "warmbly-\(UUID().uuidString)"
+        var body = Data()
+        func append(_ string: String) { body.append(Data(string.utf8)) }
+        for (name, value) in fields.sorted(by: { $0.key < $1.key }) {
+            append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n")
+        }
+        if let file {
+            append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(file.field)\"; filename=\"\(file.filename)\"\r\nContent-Type: \(file.mimeType)\r\n\r\n")
+            body.append(file.data)
+            append("\r\n")
+        }
+        append("--\(boundary)--\r\n")
+
+        var request = try buildRequest(.post, path, query: [:], body: body, idempotencyKey: nil)
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = timeout
+        let (data, http) = try await execute(request, authorized: true)
+        try validate(data, http)
+        do {
+            return try Self.decoder.decode(T.self, from: data)
+        } catch {
+            throw APIError.decoding(error)
+        }
     }
 
     // MARK: - Server-sent events

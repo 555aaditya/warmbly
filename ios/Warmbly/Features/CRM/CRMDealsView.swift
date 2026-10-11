@@ -30,6 +30,8 @@ private enum CRMDealScope: String, CaseIterable, Identifiable {
         }
     }
 
+    var shortTitle: String { self == .all ? "All" : title }
+
     var icon: String {
         switch self {
         case .all: "tray.full.fill"
@@ -46,6 +48,9 @@ struct CRMDealsView: View {
     @State private var store = CRMDealsStore()
     @State private var editing: CRMDeal?
     @State private var sidebarOpen = false
+    @State private var shown = false
+    @State private var celebrate = 0
+    @FocusState private var searchFocused: Bool
 
     private var canWrite: Bool { env.session.can(.manageContacts) }
     private var isSearching: Bool { !store.query.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -95,9 +100,9 @@ struct CRMDealsView: View {
         withAnimation(CRMBrowser.spring) { sidebarOpen = true }
     }
 
-    private func selectStatus(_ status: String?) {
+    private func selectStatus(_ status: String?, close: Bool = true) {
         withAnimation(.spring(response: 0.38, dampingFraction: 0.8)) { store.statusFilter = status }
-        closeSidebarSoon()
+        if close { closeSidebarSoon() }
     }
 
     private func selectPipeline(_ id: String) {
@@ -117,54 +122,115 @@ struct CRMDealsView: View {
     private var mainPane: some View {
         @Bindable var store = store
         return VStack(spacing: 0) {
-            CRMSearchBar(
+            GlassHeaderBar(
+                title: "Deals",
+                subtitle: Text(store.selectedPipeline?.name ?? "Pipeline"),
                 query: $store.query,
-                prompt: "Search deals",
-                onMenu: { openSidebar() },
-                menuLabel: "Open deals menu"
+                searchPrompt: "Search deals",
+                searchFocused: $searchFocused,
+                menuLabel: "Open deals menu",
+                onMenu: openSidebar
             ) {
-                CRMCircleButton(symbol: "xmark", label: "Close deals", weight: .semibold, size: 15) {
-                    dismiss()
-                }
+                GlassCircleButton(symbol: "xmark", label: "Close deals") { dismiss() }
             }
-            scopeCaption
             list
         }
-        .background(Color(.systemBackground))
+        .background(WTheme.groupedPage)
+        .overlay { ConfettiBurst(trigger: celebrate) }
+        .sensoryFeedback(.success, trigger: celebrate)
     }
 
-    // MARK: Caption
+    // MARK: Pipeline card
 
-    private var scopeCaption: some View {
-        HStack(spacing: 6) {
-            Text(captionTitle)
-                .font(.caption.weight(.semibold))
-                .tracking(0.9)
-                .foregroundStyle(.secondary)
-            if !isSearching, let count = store.statusCount(store.statusFilter), count > 0 {
-                Text(WFormat.compact(count))
-                    .font(.caption.weight(.semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(.tertiary)
-                    .contentTransition(.numericText())
+    private var currency: String? { store.displayCurrency }
+
+    private var pipelineCard: some View {
+        let summary = store.summary
+        let openValue = summary?.openValue ?? 0
+        let openCount = summary?.openCount ?? 0
+        let won = summary?.wonCount ?? 0
+        let lost = summary?.lostCount ?? 0
+        let stages = store.orderedStages
+        // Open deals only; terminal stages hold closed deals and read as $0 here.
+        let values: [(CRMStage, Double)] = stages.compactMap { stage in
+            let open = store.deals(inStage: stage.id)
+            guard !open.isEmpty else { return nil }
+            return (stage, open.compactMap(\.value).reduce(0, +))
+        }
+        let total = max(1, values.reduce(0) { $0 + $1.1 })
+        return VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .center, spacing: 14) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Open pipeline")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(WTheme.inkSecondary)
+                    CountUpText(value: shown ? openValue : 0, format: { CRMFormat.compactCurrency($0.rounded(), code: currency) })
+                        .font(.system(size: 38, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(WTheme.ink)
+                        .animation(.easeOut(duration: 1.1), value: shown)
+                        .animation(.snappy, value: openValue)
+                    Text("\(openCount) open \(openCount == 1 ? "deal" : "deals")  ·  \(CRMFormat.compactCurrency(summary?.wonValue ?? 0, code: currency)) won")
+                        .font(.system(size: 13.5))
+                        .monospacedDigit()
+                        .foregroundStyle(WTheme.inkTertiary)
+                }
+                Spacer(minLength: 8)
+                if won + lost > 0 {
+                    let rate = Double(won) / Double(won + lost)
+                    SweepRing(fraction: rate, color: WTheme.positive, shown: shown, lineWidth: 8) {
+                        VStack(spacing: -1) {
+                            Text("\(Int((rate * 100).rounded()))%")
+                                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                                .monospacedDigit()
+                                .foregroundStyle(WTheme.ink)
+                            Text("win rate")
+                                .font(.system(size: 10.5, weight: .medium))
+                                .foregroundStyle(WTheme.inkTertiary)
+                        }
+                    }
+                    .frame(width: 84, height: 84)
+                }
             }
-            Spacer()
-            if isSearching, store.hasLoaded, let count = store.totalCount {
-                Text("\(count) found")
-                    .font(.caption.weight(.semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .contentTransition(.numericText())
+            if !values.isEmpty {
+                GeometryReader { proxy in
+                    HStack(spacing: 3) {
+                        ForEach(Array(values.enumerated()), id: \.offset) { index, item in
+                            if item.1 > 0 {
+                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                    .fill(CRMHex.color(item.0.color) ?? WTheme.paused)
+                                    .frame(width: shown ? max(8, (proxy.size.width - CGFloat(values.count) * 3) * CGFloat(item.1 / total)) : 0)
+                                    .animation(.spring(response: 0.85, dampingFraction: 0.8).delay(0.2 + Double(index) * 0.08), value: shown)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                    }
+                }
+                .frame(height: 10)
+                VStack(spacing: 9) {
+                    ForEach(Array(values.enumerated()), id: \.offset) { _, item in
+                        let count = store.deals(inStage: item.0.id).count
+                        HStack(spacing: 8) {
+                            Circle().fill(CRMHex.color(item.0.color) ?? WTheme.paused).frame(width: 8, height: 8)
+                            Text(item.0.name)
+                                .font(.system(size: 14))
+                                .foregroundStyle(WTheme.inkSecondary)
+                                .lineLimit(1)
+                            Text("\(count)")
+                                .font(.system(size: 13))
+                                .monospacedDigit()
+                                .foregroundStyle(WTheme.inkTertiary)
+                            Spacer(minLength: 4)
+                            Text(CRMFormat.compactCurrency(item.1, code: currency))
+                                .font(.system(size: 14, weight: .semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(WTheme.ink)
+                        }
+                    }
+                }
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 8)
-        .padding(.bottom, 2)
-    }
-
-    private var captionTitle: String {
-        if isSearching { return "SEARCH RESULTS" }
-        return scope.title.uppercased()
+        .coverCard()
     }
 
     // MARK: List
@@ -172,28 +238,59 @@ struct CRMDealsView: View {
     @ViewBuilder
     private var list: some View {
         if store.isLoading, !store.hasLoaded {
-            ScrollView { SkeletonRows(rows: 10) }
+            ScrollView { AnalyticsLoadingCards().padding(16) }
         } else if let error = store.errorMessage, store.deals.isEmpty {
             ErrorStateView(title: "Couldn't load deals", message: error) {
                 await store.load(env.api)
             }
-        } else if store.deals.isEmpty {
-            emptyState
         } else {
             List {
-                if store.statusFilter == nil, !store.orderedStages.isEmpty {
+                Section {
+                    VStack(spacing: 14) {
+                        if !isSearching {
+                            pipelineCard
+                        }
+                        PillSwitcher(
+                            options: CRMDealScope.allCases,
+                            selection: Binding(get: { scope }, set: { selectStatus($0.status, close: false) }),
+                            label: \.shortTitle
+                        )
+                    }
+                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 0, trailing: 0))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                }
+                if store.deals.isEmpty {
+                    Section {
+                        emptyState
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                    }
+                } else if store.statusFilter == nil, !isSearching, !store.orderedStages.isEmpty {
                     groupedByStage
                 } else {
-                    // The scope caption above already names the filter.
-                    ForEach(store.deals) { deal in
-                        row(deal)
+                    Section {
+                        ForEach(store.deals) { deal in
+                            row(deal)
+                        }
+                    } header: {
+                        CoverSectionHeader(title: isSearching ? "Results" : scope.title, count: store.deals.count)
                     }
                 }
-                CRMEndMarker(store.totalCount ?? store.deals.count, "deal")
+                Section {
+                    CRMEndMarker(store.totalCount ?? store.deals.count, "deal")
+                        .listRowBackground(Color.clear)
+                }
             }
-            .listStyle(.plain)
+            .listStyle(.insetGrouped)
+            .listSectionSpacing(18)
+            .contentMargins(.horizontal, 16, for: .scrollContent)
+            .contentMargins(.top, 0, for: .scrollContent)
+            .scrollContentBackground(.hidden)
             .scrollDismissesKeyboard(.immediately)
+            .defaultScrollAnchor(SettingsDebug.anchor)
             .refreshable { await store.load(env.api) }
+            .onAppear { shown = true }
         }
     }
 
@@ -202,22 +299,28 @@ struct CRMDealsView: View {
         ForEach(store.orderedStages) { stage in
             let stageDeals = store.deals(inStage: stage.id)
             if !stageDeals.isEmpty {
-                CRMListCaption(
-                    title: stage.name,
-                    count: stageDeals.count,
-                    dotColor: CRMHex.color(stage.color) ?? WTheme.paused
-                )
-                ForEach(stageDeals) { deal in
-                    // The eyebrow already names the stage; skip the row chip.
-                    row(deal, showsStage: false)
+                Section {
+                    ForEach(stageDeals) { deal in
+                        row(deal, showsStage: false)
+                    }
+                } header: {
+                    CoverSectionHeader(
+                        title: stage.name,
+                        count: stageDeals.count,
+                        color: CRMHex.color(stage.color) ?? WTheme.paused,
+                        trailing: CRMFormat.compactCurrency(stageDeals.compactMap(\.value).reduce(0, +), code: currency)
+                    )
                 }
             }
         }
         let closed = store.closedDeals
         if !closed.isEmpty {
-            CRMListCaption(title: "Closed", count: closed.count, tone: .slate)
-            ForEach(closed) { deal in
-                row(deal)
+            Section {
+                ForEach(closed) { deal in
+                    row(deal)
+                }
+            } header: {
+                CoverSectionHeader(title: "Closed", count: closed.count, color: WTheme.paused)
             }
         }
     }
@@ -225,20 +328,17 @@ struct CRMDealsView: View {
     @ViewBuilder
     private var emptyState: some View {
         if isSearching {
-            EmptyStateView(title: "No matching deals", message: "Try a different search.")
+            CoverEmptyState(symbol: "magnifyingglass", color: WTheme.inkSecondary, title: "No matching deals", message: "Try a different search.")
         } else {
             switch scope {
             case .all:
-                EmptyStateView(
-                    title: "No deals yet",
-                    message: "Deals created from campaigns or the web dashboard show up here."
-                )
+                CoverEmptyState(symbol: "briefcase.fill", color: Tone.orange.color, title: "No deals yet", message: "Deals created from replies, campaigns or the web dashboard show up here.")
             case .open:
-                EmptyStateView(title: "No open deals", message: "Deals still in play show up here.")
+                CoverEmptyState(symbol: "circle.lefthalf.filled", color: WTheme.accent, title: "No open deals", message: "Deals still in play show up here.")
             case .won:
-                EmptyStateView(title: "No won deals yet", message: "Deals marked won land here.")
+                CoverEmptyState(symbol: "trophy.fill", color: WTheme.positive, title: "No wins yet", message: "Deals you mark won land here. The first one is worth celebrating.")
             case .lost:
-                EmptyStateView(title: "No lost deals", message: "Deals marked lost show up here.")
+                CoverEmptyState(symbol: "xmark.seal.fill", color: WTheme.inkSecondary, title: "Nothing lost", message: "Deals marked lost show up here.")
             }
         }
     }
@@ -247,43 +347,74 @@ struct CRMDealsView: View {
 
     private func row(_ deal: CRMDeal, showsStage: Bool = true) -> some View {
         let stage = deal.stage ?? store.stage(deal.stageID)
+        let status = deal.status ?? "open"
+        let person = deal.contact?.displayName
+        var details: [String] = []
+        if let person { details.append(person) }
+        if status == "open", let close = deal.expectedCloseDate {
+            details.append("closes \(close.formatted(.dateTime.month(.abbreviated).day()))")
+        } else if status == "won", let wonAt = deal.wonAt {
+            details.append("won \(WFormat.ago(wonAt)) ago")
+        }
         return HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
+            WAvatar(name: person ?? deal.name, seed: deal.contactID ?? deal.id, size: 40)
+                .overlay(alignment: .bottomTrailing) {
+                    if status != "open" {
+                        Image(systemName: status == "won" ? "checkmark" : "xmark")
+                            .font(.system(size: 8, weight: .heavy))
+                            .foregroundStyle(.white)
+                            .frame(width: 17, height: 17)
+                            .background(status == "won" ? WTheme.positive : WTheme.paused, in: Circle())
+                            .overlay(Circle().stroke(WTheme.groupedCard, lineWidth: 2))
+                            .offset(x: 3, y: 3)
+                            .transition(.scale.combined(with: .opacity))
+                    }
+                }
+            VStack(alignment: .leading, spacing: 3) {
                 Text(deal.name)
-                    .font(.body.weight(.medium))
+                    .font(.system(size: 15.5, weight: .medium))
+                    .foregroundStyle(status == "lost" ? WTheme.inkSecondary : WTheme.ink)
+                    .strikethrough(status == "lost", color: WTheme.inkTertiary)
                     .lineLimit(1)
-                HStack(spacing: 6) {
-                    if let contact = deal.contact {
-                        Text(contact.displayName)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    if showsStage, let stage {
-                        CRMColorChip(text: stage.name, hex: stage.color)
-                    }
+                if !details.isEmpty {
+                    Text(details.joined(separator: "  ·  "))
+                        .font(.system(size: 13))
+                        .foregroundStyle(WTheme.inkSecondary)
+                        .lineLimit(1)
                 }
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 4) {
                 if let value = deal.value {
                     Text(CRMFormat.currency(value, code: deal.currency))
-                        .font(.subheadline.weight(.semibold))
+                        .font(.system(size: 16, weight: .semibold, design: .rounded))
                         .monospacedDigit()
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(status == "won" ? WTheme.positive : status == "lost" ? WTheme.inkTertiary : WTheme.ink)
+                        .contentTransition(.numericText())
                 }
-                if (deal.status ?? "open") != "open" {
-                    StatusPill(text: deal.status ?? "open", tone: deal.statusTone)
+                if showsStage, status == "open", let stage {
+                    CRMColorChip(text: stage.name, hex: stage.color)
                 }
             }
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 4)
         .contentShape(Rectangle())
         .onTapGesture {
             if canWrite { editing = deal }
         }
-        .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 16))
-        .listRowBackground(Color(.systemBackground))
+        .animation(.snappy, value: status)
+        .listRowBackground(WTheme.groupedCard)
+        .alignmentGuide(.listRowSeparatorLeading) { _ in 52 }
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            if canWrite, status == "open" {
+                Button {
+                    Task { await setStatus(deal, status: "won") }
+                } label: {
+                    Label("Won", systemImage: "trophy.fill")
+                }
+                .tint(WTheme.positive)
+            }
+        }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             if canWrite {
                 Button {
@@ -297,16 +428,22 @@ struct CRMDealsView: View {
         .contextMenu {
             if canWrite {
                 stageMoveMenu(deal)
-                if (deal.status ?? "open") == "open" {
+                if status == "open" {
                     Button {
                         Task { await setStatus(deal, status: "won") }
                     } label: {
-                        Label("Mark won", systemImage: "checkmark.seal")
+                        Label("Mark won", systemImage: "trophy")
                     }
                     Button(role: .destructive) {
                         Task { await setStatus(deal, status: "lost") }
                     } label: {
                         Label("Mark lost", systemImage: "xmark.seal")
+                    }
+                } else {
+                    Button {
+                        Task { await setStatus(deal, status: "open") }
+                    } label: {
+                        Label("Reopen", systemImage: "arrow.uturn.backward")
                     }
                 }
             }
@@ -345,7 +482,11 @@ struct CRMDealsView: View {
     private func setStatus(_ deal: CRMDeal, status: String) async {
         var body = CRMDealUpdateBody()
         body.status = status
-        try? await store.update(env.api, deal: deal, body: body)
+        do {
+            try await store.update(env.api, deal: deal, body: body)
+            if status == "won" { celebrate += 1 }
+            await store.load(env.api)
+        } catch {}
     }
 }
 

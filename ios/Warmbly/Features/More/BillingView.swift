@@ -1,20 +1,28 @@
 import SwiftUI
 
-/// Read-only billing surface, flattened: plan header with pill + renewal,
-/// usage as thin accent bars on hairline tracks, and the manage-on-web
-/// handoff. Changing plans stays on the web dashboard.
+/// The plan you are on and what it includes, usage against what the server
+/// enforces, AI credits, the other plans, the referral code, and the way to
+/// change any of it on the web.
 struct BillingView: View {
     @Environment(AppEnvironment.self) private var env
 
     @State private var subscription: SubscriptionInfo?
     @State private var trial: TrialInfo?
+    @State private var usage: OrgUsageSnapshot?
+    @State private var credits: CreditBalance?
+    @State private var creditUsage: CreditUsage?
+    @State private var referral: ReferralSummary?
+    @State private var plans: [MorePlan] = []
     @State private var loaded = false
     @State private var errorMessage: String?
+    @State private var shown = false
+    @State private var copied = false
 
     var body: some View {
         Group {
             if !loaded, subscription == nil, errorMessage == nil {
-                loadingPlaceholder
+                SkeletonRows(rows: 5)
+                    .padding(.top, 8)
             } else if let errorMessage, subscription == nil {
                 ErrorStateView(title: "Couldn't load billing", message: errorMessage) {
                     await load()
@@ -28,202 +36,823 @@ struct BillingView: View {
         .task {
             if !loaded { await load() }
         }
-        .refreshable { await load() }
         .onChange(of: env.realtime.pulse(for: .billing)) { _, _ in
             Task { await load() }
         }
     }
 
-    // MARK: - Content
+    // MARK: Content
 
     private var content: some View {
-        List {
-            planSection
-            if let trial, isTrialing {
-                trialSection(trial)
+        SettingsPage(title: "Billing") {
+            planCard
+            if let notice {
+                noticeView(notice)
             }
             usageSection
+            if credits != nil || creditUsage != nil {
+                creditsSection
+            }
+            if catalog.count > 1 {
+                plansSection
+            }
+            if referral?.code != nil {
+                referralSection
+            }
             manageSection
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .background(Color(.systemBackground))
-        .environment(\.defaultMinListRowHeight, 0)
+        .refreshable { await load() }
+        .onAppear { shown = true }
     }
 
-    // MARK: Plan
+    // MARK: Plan card
 
-    @ViewBuilder
-    private var planSection: some View {
-        MoreFlatSectionHeader("Plan", top: 8)
-        HStack(spacing: 12) {
-            IconTile(symbol: "creditcard.fill", tone: .indigo, size: 34)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(planName)
-                    .font(.body.weight(.semibold))
-                if let period = renewalText {
-                    Text(period)
-                        .font(.footnote)
+    private var planCard: some View {
+        let style = PlanStyle(subscription?.plan?.name, trialing: isTrialing)
+        return VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .center, spacing: 14) {
+                    SettingsIcon(symbol: style.symbol, color: style.color, size: 48)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Your plan")
+                            .font(.system(size: 13))
+                            .foregroundStyle(WTheme.inkSecondary)
+                        Text(planName)
+                            .displayFont(26, weight: .semibold)
+                            .foregroundStyle(WTheme.ink)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                    }
+                    Spacer(minLength: 8)
+                    if let status = statusChip {
+                        chip(status.label, tone: status.tone)
+                    }
+                }
+                Text(style.tagline)
+                    .font(.system(size: 14.5))
+                    .foregroundStyle(WTheme.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 14)
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(priceAmount)
+                        .font(.system(size: 34, weight: .semibold, design: .rounded))
                         .monospacedDigit()
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(WTheme.ink)
+                        .contentTransition(.numericText())
+                    if let unit = priceUnit {
+                        Text(unit)
+                            .font(.system(size: 15))
+                            .foregroundStyle(WTheme.inkSecondary)
+                    }
+                    if let savings = priceSavings {
+                        Text(savings)
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(WTheme.positive)
+                            .padding(.leading, 4)
+                    }
+                }
+                .padding(.top, 12)
+            }
+            .padding(18)
+            Hairline()
+            HStack(spacing: 0) {
+                ForEach(Array(facts.enumerated()), id: \.offset) { index, fact in
+                    if index > 0 {
+                        Rectangle().fill(WTheme.hairline).frame(width: 1).padding(.vertical, 12)
+                    }
+                    factCell(fact.caption, fact.value)
                 }
             }
-            Spacer(minLength: 8)
-            MorePlanPill(subscription: subscription)
+            .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.vertical, 10)
-        .moreFlatRow(textLeading: MoreFlatMetrics.tileTextLeading)
-        if let price = subscription?.plan?.price, price > 0 {
-            HStack {
-                Text("Price")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text(priceText(price))
-                    .font(.subheadline.weight(.medium))
-                    .monospacedDigit()
-            }
-            .padding(.vertical, 11)
-            .moreFlatRow(separator: .hidden)
-        }
-        if subscription?.cancelAtPeriodEnd == true {
-            Label("Cancels at the end of the current period", systemImage: "exclamationmark.circle")
-                .font(.footnote)
-                .foregroundStyle(WTheme.warning)
-                .padding(.vertical, 8)
-                .moreFlatRow(separator: .hidden)
-        }
+        .background(WTheme.groupedCard)
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .reveal(shown, 0)
+        .animation(.snappy, value: usage != nil)
     }
 
-    // MARK: Trial
-
-    @ViewBuilder
-    private func trialSection(_ trial: TrialInfo) -> some View {
-        MoreFlatSectionHeader("Trial")
-        HStack(spacing: 12) {
-            IconTile(symbol: "clock.badge.fill", tone: trialTone(trial), size: 34)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Free trial")
-                    .font(.body.weight(.medium))
-                if let ends = trial.trialEndsAt {
-                    Text("Ends \(ends.formatted(.dateTime.month().day().year()))")
-                        .font(.footnote)
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Spacer(minLength: 8)
-            if trial.isExpired == true {
-                StatusPill(text: "Expired", tone: .rose)
-            } else if let days = trial.daysRemaining {
-                StatusPill(text: days == 1 ? "1 day left" : "\(days) days left", tone: days <= 3 ? .amber : .emerald)
-            }
+    private func factCell(_ caption: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(caption)
+                .font(.system(size: 12))
+                .foregroundStyle(WTheme.inkSecondary)
+                .lineLimit(1)
+            Text(value)
+                .font(.system(size: 14.5, weight: .medium))
+                .monospacedDigit()
+                .foregroundStyle(WTheme.ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .contentTransition(.opacity)
         }
-        .padding(.vertical, 10)
-        .moreFlatRow(separator: .hidden, textLeading: MoreFlatMetrics.tileTextLeading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 
-    private func trialTone(_ trial: TrialInfo) -> Tone {
-        if trial.isExpired == true { return .rose }
-        if let days = trial.daysRemaining, days <= 3 { return .amber }
-        return .emerald
+    private func chip(_ label: String, tone: Tone) -> some View {
+        HStack(spacing: 5) {
+            Circle().fill(tone.color).frame(width: 6, height: 6)
+            Text(label)
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(tone.color)
+        }
+        .padding(.horizontal, 9)
+        .frame(height: 24)
+        .background(tone.background, in: Capsule())
+    }
+
+    // MARK: Notice
+
+    private struct Notice {
+        let tone: Tone
+        let symbol: String
+        let title: String
+        let body: String
+    }
+
+    private var notice: Notice? {
+        if subscription?.status == "past_due" {
+            return Notice(
+                tone: .rose, symbol: "exclamationmark.triangle.fill", title: "Payment failed",
+                body: "The card on file couldn't be charged. Update it on the web dashboard to keep sending."
+            )
+        }
+        if subscription?.cancelAtPeriodEnd == true, subscription?.status != "canceled" {
+            let end = subscription?.currentPeriodEnd.map { $0.formatted(.dateTime.month(.wide).day()) }
+            return Notice(
+                tone: .amber, symbol: "calendar.badge.exclamationmark",
+                title: end.map { "Ends on \($0)" } ?? "Ends with this period",
+                body: "The plan stays fully active until then. Resume it on the web dashboard and nothing changes."
+            )
+        }
+        return nil
+    }
+
+    private func noticeView(_ notice: Notice) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: notice.symbol)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(notice.tone.color)
+                .frame(width: 20)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(notice.title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(WTheme.ink)
+                Text(notice.body)
+                    .font(.system(size: 14))
+                    .foregroundStyle(WTheme.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(notice.tone.background, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     // MARK: Usage
 
-    @ViewBuilder
+    private struct Meter: Identifiable {
+        let id: String
+        let icon: String
+        let color: Color
+        let label: String
+        let used: Double
+        let limit: Double?
+        var format: (Double) -> String = { WFormat.compact(Int($0)) }
+    }
+
+    private var meters: [Meter] {
+        let counts = usage?.counts ?? env.session.currentOrg?.counts
+        let limits = usage?.limits ?? env.session.currentOrg?.limits
+        var rows: [Meter] = [
+            Meter(
+                id: "mailboxes", icon: "envelope.fill", color: SettingsPalette.mailboxes, label: "Mailboxes",
+                used: Double(usage?.mailboxes?.used ?? counts?.emailAccounts ?? 0),
+                limit: (usage?.mailboxes?.allowance ?? limits?.maxEmailAccounts).map(Double.init)
+            ),
+            Meter(
+                id: "sent", icon: "paperplane.fill", color: SettingsPalette.analytics, label: "Sent today",
+                used: Double(counts?.emailsSentToday ?? 0), limit: limits?.dailyCampaignLimit.map(Double.init)
+            ),
+            Meter(
+                id: "campaigns", icon: "megaphone.fill", color: SettingsPalette.deals, label: "Active campaigns",
+                used: Double(counts?.activeCampaigns ?? 0), limit: limits?.maxActiveCampaigns.map(Double.init)
+            ),
+            Meter(
+                id: "contacts", icon: "person.crop.rectangle.stack.fill", color: SettingsPalette.tasks, label: "Contacts",
+                used: Double(counts?.totalContacts ?? 0), limit: limits?.maxContacts.map(Double.init)
+            ),
+            Meter(
+                id: "members", icon: "person.2.fill", color: SettingsPalette.members, label: "Members",
+                used: Double(counts?.totalMembers ?? 0), limit: limits?.maxTeamMembers.map(Double.init)
+            ),
+        ]
+        if let storage = usage?.storage, let limit = storage.limitBytes, limit > 0 {
+            rows.append(Meter(
+                id: "storage", icon: "externaldrive.fill", color: SettingsPalette.activity, label: "Storage",
+                used: Double(storage.usedBytes ?? 0), limit: Double(limit),
+                format: { Self.bytes(Int64($0)) }
+            ))
+        }
+        return rows
+    }
+
+    private static func bytes(_ count: Int64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        formatter.allowsNonnumericFormatting = false
+        return formatter.string(fromByteCount: count)
+    }
+
     private var usageSection: some View {
-        MoreFlatSectionHeader("Usage this workspace")
-        let counts = env.session.currentOrg?.counts
-        let limits = env.session.currentOrg?.limits
-        usageRow(MoreUsageBar(label: "Email accounts", used: counts?.emailAccounts, limit: limits?.maxEmailAccounts))
-        usageRow(MoreUsageBar(label: "Active campaigns", used: counts?.activeCampaigns, limit: limits?.maxActiveCampaigns))
-        usageRow(MoreUsageBar(label: "Contacts", used: counts?.totalContacts, limit: limits?.maxContacts))
-        usageRow(MoreUsageBar(label: "Team members", used: counts?.totalMembers, limit: limits?.maxTeamMembers))
-        footnoteRow("Usage reflects the current workspace against your plan limits.")
+        SettingsSection("Usage", footer: "Live counts against the limits this workspace is held to.", dividerLeading: 58) {
+            ForEach(Array(meters.enumerated()), id: \.element.id) { index, meter in
+                meterRow(meter, index: index)
+            }
+        }
+        .reveal(shown, 1)
     }
 
-    private func usageRow(_ bar: MoreUsageBar) -> some View {
-        bar
-            .padding(.vertical, 4)
-            .moreFlatRow(separator: .hidden)
+    private func meterRow(_ meter: Meter, index: Int) -> some View {
+        let fraction = meter.limit.map { $0 > 0 ? min(1, meter.used / $0) : 0 }
+        let tint = (fraction ?? 0) >= 1 ? WTheme.negative : (fraction ?? 0) >= 0.85 ? WTheme.warning : meter.color
+        return HStack(alignment: .center, spacing: 12) {
+            SettingsIcon(symbol: meter.icon, color: meter.color)
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(meter.label)
+                        .font(.system(size: 16))
+                        .foregroundStyle(WTheme.ink)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text(meter.format(meter.used))
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(WTheme.ink)
+                            .contentTransition(.numericText())
+                        Text(meter.limit.map { "of \(meter.format($0))" } ?? "· Unlimited")
+                            .font(.system(size: 13.5))
+                            .foregroundStyle(WTheme.inkTertiary)
+                    }
+                    .monospacedDigit()
+                    .lineLimit(1)
+                }
+                if let fraction {
+                    GeometryReader { proxy in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(WTheme.fill)
+                            Capsule()
+                                .fill(tint)
+                                .frame(width: shown ? max(5, proxy.size.width * fraction) : 0)
+                                .animation(.spring(response: 0.9, dampingFraction: 0.85).delay(0.15 + Double(index) * 0.06), value: shown)
+                        }
+                    }
+                    .frame(height: 5)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .accessibilityElement(children: .combine)
     }
 
-    // MARK: Manage on the web
+    // MARK: AI credits
+
+    private var creditsSection: some View {
+        let days = creditDays
+        let peak = max(1, days.map(\.credits).max() ?? 1)
+        return VStack(alignment: .leading, spacing: 8) {
+            EyebrowLabel("AI credits")
+                .padding(.leading, 16)
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Balance")
+                            .font(.system(size: 13))
+                            .foregroundStyle(WTheme.inkSecondary)
+                        Text(balanceText)
+                            .font(.system(size: 28, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(WTheme.ink)
+                            .contentTransition(.numericText())
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("This month")
+                            .font(.system(size: 13))
+                            .foregroundStyle(WTheme.inkSecondary)
+                        Text("\((creditUsage?.spentMonth ?? 0).formatted()) spent")
+                            .font(.system(size: 15, weight: .medium))
+                            .monospacedDigit()
+                            .foregroundStyle(WTheme.ink)
+                        Text("\((creditUsage?.spentWeek ?? 0).formatted()) this week")
+                            .font(.system(size: 13))
+                            .monospacedDigit()
+                            .foregroundStyle(WTheme.inkTertiary)
+                    }
+                }
+                HStack(alignment: .bottom, spacing: 4) {
+                    ForEach(Array(days.enumerated()), id: \.offset) { index, day in
+                        let isToday = index == days.count - 1
+                        UnevenRoundedRectangle(topLeadingRadius: 3, topTrailingRadius: 3, style: .continuous)
+                            .fill(day.credits > 0 ? (isToday ? SettingsPalette.analytics : SettingsPalette.analytics.opacity(0.55)) : WTheme.fill)
+                            .frame(height: shown ? max(4, 64 * CGFloat(day.credits) / CGFloat(peak)) : 4)
+                            .frame(maxWidth: .infinity)
+                            .animation(.spring(response: 0.8, dampingFraction: 0.8).delay(0.2 + Double(index) * 0.02), value: shown)
+                    }
+                }
+                .frame(height: 64, alignment: .bottom)
+                .padding(.top, 18)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Credits spent over the last two weeks")
+                HStack {
+                    Text(days.first.map { $0.date.formatted(.dateTime.month(.abbreviated).day()) } ?? "")
+                    Spacer()
+                    Text("Today")
+                }
+                .font(.system(size: 11.5))
+                .foregroundStyle(WTheme.inkTertiary)
+                .padding(.top, 6)
+            }
+            .padding(16)
+            .background(WTheme.groupedCard)
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+
+            if !topUses.isEmpty {
+                MoreCard(dividerLeading: 16) {
+                    ForEach(topUses, id: \.key) { bucket in
+                        useRow(bucket)
+                    }
+                }
+                .padding(.top, 4)
+            }
+            if let footer = creditsFooter {
+                Text(footer)
+                    .font(.system(size: 13))
+                    .foregroundStyle(WTheme.inkSecondary)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 2)
+            }
+        }
+        .reveal(shown, 2)
+    }
+
+    private func useRow(_ bucket: CreditUsage.Bucket) -> some View {
+        let total = max(1, topUses.map(\.credits).reduce(0, +))
+        let share = Double(bucket.credits) / Double(total)
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(Self.reasonLabel(bucket.key))
+                    .font(.system(size: 15))
+                    .foregroundStyle(WTheme.ink)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Text("\(bucket.credits.formatted())")
+                    .font(.system(size: 15, weight: .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(WTheme.ink)
+                Text("\(Int((share * 100).rounded()))%")
+                    .font(.system(size: 13))
+                    .monospacedDigit()
+                    .foregroundStyle(WTheme.inkTertiary)
+                    .frame(width: 38, alignment: .trailing)
+            }
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(WTheme.fill)
+                    Capsule()
+                        .fill(SettingsPalette.analytics.opacity(0.7))
+                        .frame(width: shown ? max(5, proxy.size.width * share) : 0)
+                        .animation(.spring(response: 0.9, dampingFraction: 0.85).delay(0.3), value: shown)
+                }
+            }
+            .frame(height: 4)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .accessibilityElement(children: .combine)
+    }
+
+    private static let reasonLabels: [String: String] = [
+        "writing_assistant": "Writing assistant",
+        "writing_edit": "Selection edits",
+        "reply_draft": "Reply drafts",
+        "agent_iteration": "Remie",
+        "inbox_agent_draft": "Inbox agent",
+        "research_run": "Contact research",
+        "automation_ai": "Automation AI",
+        "campaign_ai": "Campaign switches",
+        "spam_analysis": "Spam analysis",
+        "placement_test": "Placement tests",
+    ]
+
+    private static func reasonLabel(_ key: String) -> String {
+        if let label = reasonLabels[key] { return label }
+        let words = key.replacingOccurrences(of: "_", with: " ")
+        return words.prefix(1).uppercased() + words.dropFirst()
+    }
+
+    private var topUses: [CreditUsage.Bucket] {
+        Array((creditUsage?.byReason ?? []).filter { $0.credits > 0 }.sorted { $0.credits > $1.credits }.prefix(4))
+    }
+
+    /// The last fourteen days, oldest first, with the empty days filled in.
+    private var creditDays: [(date: Date, credits: Int)] {
+        let calendar = Calendar.current
+        let parser = DateFormatter()
+        parser.calendar = Calendar(identifier: .gregorian)
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        parser.dateFormat = "yyyy-MM-dd"
+        var byDay: [Date: Int] = [:]
+        for point in creditUsage?.series ?? [] {
+            if let date = parser.date(from: point.date) {
+                byDay[calendar.startOfDay(for: date), default: 0] += point.credits
+            }
+        }
+        let today = calendar.startOfDay(for: .now)
+        return (0..<14).reversed().compactMap { offset in
+            calendar.date(byAdding: .day, value: -offset, to: today).map { ($0, byDay[$0] ?? 0) }
+        }
+    }
+
+    private var balanceText: String {
+        if credits?.unlimited == true { return "Unlimited" }
+        return (credits?.balance ?? 0).formatted()
+    }
+
+    private var creditsFooter: String? {
+        guard credits?.unlimited != true else { return "Credits pay for AI drafting, research and analysis." }
+        var parts: [String] = []
+        if let allowance = credits?.monthlyAllowance, allowance > 0 {
+            var line = "\(allowance.formatted()) included each month"
+            if let reset = credits?.nextResetAt {
+                line += ", next on \(reset.formatted(.dateTime.month(.abbreviated).day()))"
+            }
+            parts.append(line)
+        }
+        if let purchased = credits?.purchasedBalance, purchased > 0 {
+            parts.append("\(purchased.formatted()) bought credits that never expire")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: ". ") + "."
+    }
+
+    // MARK: Plans
+
+    /// The public monthly plans, cheapest first.
+    private var catalog: [MorePlan] {
+        plans
+            .filter { $0.isPublic != false && $0.duration != "year" }
+            .sorted { ($0.price ?? 0) < ($1.price ?? 0) }
+    }
+
+    private var yearlySavings: Int? {
+        plans.compactMap { $0.duration == "year" ? $0.savings : nil }.max().map { Int($0) }
+    }
+
+    private var plansSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            EyebrowLabel("Plans")
+                .padding(.leading, 16)
+            ScrollView(.horizontal) {
+                HStack(spacing: 12) {
+                    ForEach(catalog, id: \.id) { plan in
+                        planTile(plan)
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollIndicators(.hidden)
+            .scrollTargetBehavior(.viewAligned)
+            .contentMargins(.horizontal, 16, for: .scrollContent)
+            .padding(.horizontal, -16)
+            Text(yearlySavings.map { "Save up to \($0)% billed yearly. Plans change on the web dashboard." } ?? "Plans change on the web dashboard.")
+                .font(.system(size: 13))
+                .foregroundStyle(WTheme.inkSecondary)
+                .padding(.horizontal, 16)
+                .padding(.top, 2)
+        }
+        .reveal(shown, 3)
+    }
+
+    @ViewBuilder
+    private func planTile(_ plan: MorePlan) -> some View {
+        let current = plan.id != nil && plan.id == subscription?.planID
+        let style = PlanStyle(plan.name, trialing: false)
+        let tile = VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                SettingsIcon(symbol: style.symbol, color: style.color, size: 32)
+                Spacer()
+                if current {
+                    Text("Current")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(WTheme.accent)
+                        .padding(.horizontal, 8)
+                        .frame(height: 22)
+                        .background(Tone.sky.background, in: Capsule())
+                }
+            }
+            Text(plan.name ?? "Plan")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(WTheme.ink)
+                .padding(.top, 12)
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Text("$\(Int(plan.discountedPrice.flatMap { $0 > 0 ? $0 : nil } ?? plan.price ?? 0))")
+                    .font(.system(size: 24, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(WTheme.ink)
+                Text("/ month")
+                    .font(.system(size: 13))
+                    .foregroundStyle(WTheme.inkSecondary)
+            }
+            .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 7) {
+                if let sends = plan.dailyEmails {
+                    perk("\(sends.formatted()) sends a day")
+                }
+                if let credits = plan.monthlyCredits, credits > 0 {
+                    perk("\(credits.formatted()) AI credits a month")
+                }
+                if (plan.dedicatedWorkers ?? 0) > 0 {
+                    perk("Sending kept apart")
+                } else {
+                    perk("Unlimited mailboxes")
+                }
+            }
+            .padding(.top, 14)
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .frame(width: 236, height: 200, alignment: .topLeading)
+        .background(WTheme.groupedCard, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            if current {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(WTheme.accent.opacity(0.55), lineWidth: 1.5)
+            }
+        }
+        if !current, let url = AppConfig.dashboardURL("/app/settings/billing") {
+            Link(destination: url) { tile }
+                .buttonStyle(TapScaleStyle())
+                .accessibilityHint("Opens the web dashboard")
+        } else {
+            tile
+        }
+    }
+
+    private func perk(_ text: String) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: "checkmark")
+                .font(.system(size: 10.5, weight: .bold))
+                .foregroundStyle(WTheme.positive)
+            Text(text)
+                .font(.system(size: 13.5))
+                .foregroundStyle(WTheme.inkSecondary)
+                .lineLimit(1)
+        }
+    }
+
+    // MARK: Referral
+
+    private var referralSection: some View {
+        let percent = referral?.inviteePercentOff ?? 0
+        let months = referral?.inviteeMonths ?? 0
+        let code = referral?.code ?? ""
+        return VStack(alignment: .leading, spacing: 8) {
+            EyebrowLabel("Invite a team")
+                .padding(.leading, 16)
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .top, spacing: 14) {
+                    SettingsIcon(symbol: "gift.fill", color: SettingsPalette.billing, size: 40)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Give \(percent)% off, earn a month")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(WTheme.ink)
+                        Text("Teams that join with your code get \(percent)% off for \(months) \(months == 1 ? "month" : "months"). When they upgrade, a month of their plan comes off your invoices.")
+                            .font(.system(size: 14))
+                            .foregroundStyle(WTheme.inkSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                HStack(spacing: 10) {
+                    Button {
+                        UIPasteboard.general.string = code
+                        UINotificationFeedbackGenerator().notificationOccurred(.success)
+                        withAnimation(.snappy) { copied = true }
+                        Task {
+                            try? await Task.sleep(for: .seconds(1.6))
+                            withAnimation(.snappy) { copied = false }
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Text(code)
+                                .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                                .tracking(1.5)
+                                .foregroundStyle(WTheme.ink)
+                            Spacer(minLength: 4)
+                            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(copied ? WTheme.positive : WTheme.inkSecondary)
+                                .contentTransition(.symbolEffect(.replace))
+                        }
+                        .padding(.horizontal, 14)
+                        .frame(height: 44)
+                        .background(WTheme.fill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(copied ? "Code copied" : "Copy code \(code)")
+                    if let link = referral?.shareURL.flatMap(URL.init(string:)) {
+                        ShareLink(item: link, message: Text("Try Warmbly with \(percent)% off your first \(months) months.")) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "square.and.arrow.up")
+                                    .font(.system(size: 13, weight: .semibold))
+                                Text("Share")
+                                    .font(.system(size: 15, weight: .semibold))
+                            }
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 16)
+                            .frame(height: 44)
+                            .background(WTheme.accent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+                    }
+                }
+                .padding(.top, 16)
+                if let referred = referral?.totalReferred, referred > 0 {
+                    Hairline().padding(.top, 16)
+                    HStack {
+                        Text("\(referred) \(referred == 1 ? "team" : "teams") referred")
+                        Spacer()
+                        Text("\(earnedText) earned")
+                            .monospacedDigit()
+                    }
+                    .font(.system(size: 14))
+                    .foregroundStyle(WTheme.inkSecondary)
+                    .padding(.top, 12)
+                }
+            }
+            .padding(16)
+            .background(WTheme.groupedCard)
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        }
+        .reveal(shown, 4)
+    }
+
+    private var earnedText: String {
+        let cents = referral?.lifetimeEarnedCents ?? 0
+        let currency = (referral?.currency ?? "usd").uppercased()
+        return (Double(cents) / 100).formatted(.currency(code: currency).precision(.fractionLength(0)))
+    }
+
+    // MARK: Manage
 
     @ViewBuilder
     private var manageSection: some View {
-        MoreFlatSectionHeader("Manage")
-        Link(destination: URL(string: "https://app.warmbly.com/app/settings/billing")!) {
-            HStack(spacing: 12) {
-                IconTile(symbol: "safari.fill", tone: .sky, size: 34)
-                Text("Manage billing on the web")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(.primary)
-                Spacer(minLength: 8)
-                Image(systemName: "arrow.up.forward.square")
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(.tertiary)
+        if let url = AppConfig.dashboardURL("/app/settings/billing") {
+            SettingsSection(footer: "Billing changes are made on the web dashboard and apply everywhere.") {
+                Link(destination: url) {
+                    SettingsRow(icon: "sparkles", color: WTheme.accent, title: isSubscribed ? "Change plan" : "Choose a plan", accessory: .external)
+                }
+                .buttonStyle(MoreRowPressStyle())
+                if isSubscribed {
+                    Link(destination: url) {
+                        SettingsRow(icon: "creditcard.fill", color: SettingsPalette.security, title: "Payment method and invoices", accessory: .external)
+                    }
+                    .buttonStyle(MoreRowPressStyle())
+                }
             }
-            .padding(.vertical, 11)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(TapScaleStyle())
-        .moreFlatRow(separator: .hidden, textLeading: MoreFlatMetrics.tileTextLeading)
-        footnoteRow("Change plan, update payment method, and download invoices from the web dashboard.", bottom: 28)
     }
 
-    private func footnoteRow(_ text: String, bottom: CGFloat = 4) -> some View {
-        Text(text)
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-            .padding(.top, 6)
-            .padding(.bottom, bottom)
-            .moreFlatRow(separator: .hidden)
-    }
-
-    private var loadingPlaceholder: some View {
-        VStack(spacing: 16) {
-            SkeletonRows(rows: 5)
-        }
-        .padding(.top, 8)
-    }
-
-    // MARK: - Derived
+    // MARK: Derived
 
     private var planName: String {
         let raw = subscription?.plan?.name ?? "Free"
-        return raw.isEmpty ? "Free" : raw.capitalized
+        guard let first = raw.first else { return "Free" }
+        return first.uppercased() + raw.dropFirst().lowercased()
     }
 
     private var isTrialing: Bool {
         subscription?.status == "trialing" || trial?.isInTrial == true
     }
 
-    private var renewalText: String? {
-        guard let end = subscription?.currentPeriodEnd else { return nil }
-        let formatted = end.formatted(.dateTime.month().day().year())
-        return subscription?.cancelAtPeriodEnd == true ? "Access until \(formatted)" : "Renews \(formatted)"
+    private var isSubscribed: Bool {
+        guard !isTrialing, let status = subscription?.status else { return false }
+        return ["active", "past_due"].contains(status) && (subscription?.plan?.price ?? 0) > 0
     }
 
-    private func priceText(_ price: Double) -> String {
-        let unit = subscription?.plan?.duration.map { "/\($0)" } ?? ""
-        return String(format: "$%.0f%@", price, unit)
+    private var statusChip: (label: String, tone: Tone)? {
+        if isTrialing { return ("Trial", .sky) }
+        switch subscription?.status {
+        case "past_due": return ("Payment due", .rose)
+        case "canceled": return ("Canceled", .slate)
+        case "active":
+            return subscription?.cancelAtPeriodEnd == true ? ("Ending", .amber) : ("Active", .emerald)
+        default: return nil
+        }
     }
 
-    // MARK: - Load
+    private var priceAmount: String {
+        guard let plan = subscription?.plan, let price = plan.price, price > 0 else { return "Free" }
+        let charged = plan.discountedPrice.flatMap { $0 > 0 && $0 < price ? $0 : nil } ?? price
+        return "$" + Int(charged.rounded()).formatted()
+    }
+
+    private var priceUnit: String? {
+        guard (subscription?.plan?.price ?? 0) > 0 else { return nil }
+        return subscription?.plan?.duration == "year" ? "/ year" : "/ month"
+    }
+
+    private var priceSavings: String? {
+        guard let savings = subscription?.plan?.savings, savings > 0 else { return nil }
+        return "Save \(Int(savings))%"
+    }
+
+    private var facts: [(caption: String, value: String)] {
+        let date: (Date) -> String = { $0.formatted(.dateTime.month(.abbreviated).day()) }
+        var first: (String, String)
+        if isTrialing, let ends = trial?.trialEndsAt ?? subscription?.trialEnd ?? subscription?.freeTrialEndsAt {
+            first = ("Trial ends", date(ends))
+        } else if let end = subscription?.currentPeriodEnd {
+            first = (subscription?.cancelAtPeriodEnd == true ? "Active until" : "Renews", date(end))
+        } else {
+            first = ("Mailboxes", usage?.mailboxes?.allowance.map { "Up to \($0)" } ?? "Unlimited")
+        }
+        let sends: String = if let limit = usage?.limits?.dailyCampaignLimit {
+            limit.formatted()
+        } else {
+            usage == nil ? "–" : "Unlimited"
+        }
+        let aiCredits: String = if credits?.unlimited == true {
+            "Unlimited"
+        } else if let monthly = subscription?.plan?.monthlyCredits, monthly > 0 {
+            "\(WFormat.compact(monthly)) a month"
+        } else {
+            "Pay as you go"
+        }
+        return [first, ("Daily sends", sends), ("AI credits", aiCredits)]
+    }
+
+    // MARK: Load
 
     private func load() async {
         errorMessage = nil
         do {
             async let sub: SubscriptionInfo = env.api.get("subscription")
             async let tr: TrialInfo = env.api.get("subscription/trial")
-            subscription = try await sub
-            trial = try? await tr
-            await env.session.refreshCurrentOrg()
+            async let lim: OrgUsageSnapshot = env.api.get("organization/current/limits")
+            async let bal: CreditBalance = env.api.get("subscription/credits")
+            async let use: CreditUsage = env.api.get("subscription/credits/usage")
+            async let ref: ReferralSummary = env.api.get("subscription/referral")
+            async let cat: PlansResponse = env.api.get("plans")
+            let subscription = try await sub
+            let fresh = (try? await tr, try? await lim, try? await bal, try? await use, try? await ref, try? await cat)
+            withAnimation(.snappy) {
+                self.subscription = subscription
+                trial = fresh.0
+                usage = fresh.1 ?? usage
+                credits = fresh.2
+                creditUsage = fresh.3
+                referral = fresh.4
+                plans = fresh.5?.plans ?? plans
+            }
         } catch {
             errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
         loaded = true
+    }
+}
+
+/// How a plan looks: its glyph, colour and one-line pitch.
+private struct PlanStyle {
+    let symbol: String
+    let color: Color
+    let tagline: String
+
+    init(_ name: String?, trialing: Bool) {
+        let key = (name ?? "free").lowercased()
+        if trialing || key.contains("trial") {
+            symbol = "sparkles"; color = WTheme.accent
+            tagline = "Every feature unlocked while you try Warmbly."
+        } else if key.hasPrefix("starter") {
+            symbol = "paperplane.fill"; color = WTheme.positive
+            tagline = "Great for small businesses with a small budget."
+        } else if key.hasPrefix("grow") {
+            symbol = "chart.line.uptrend.xyaxis"; color = Tone.orange.color
+            tagline = "Ideal for growing businesses scaling their outreach."
+        } else if key.hasPrefix("business") {
+            symbol = "building.2.fill"; color = WTheme.accent
+            tagline = "For established teams that need higher limits and advanced features."
+        } else if key.hasPrefix("enterprise") {
+            symbol = "crown.fill"; color = WTheme.ink
+            tagline = "Custom volume and dedicated support for large organizations."
+        } else if key.contains("warmup") || key.contains("pool") {
+            symbol = "flame.fill"; color = Tone.orange.color
+            tagline = "The premium warmup pool and no mailbox cap."
+        } else {
+            symbol = "leaf.fill"; color = WTheme.paused
+            tagline = "Warm up to 10 mailboxes in the Warmbly pool."
+        }
     }
 }

@@ -1,11 +1,16 @@
 package auth
 
-import "github.com/warmbly/warmbly/internal/models"
+import (
+	"github.com/warmbly/warmbly/internal/app/appattest"
+	"github.com/warmbly/warmbly/internal/models"
+)
 
 type AuthData struct {
 	Email     string `json:"email"`
 	Password  string `json:"password"`
 	Turnstile string `json:"turnstile"`
+	// AppAttest is the native app's proof, sent instead of Turnstile.
+	AppAttest *appattest.Proof `json:"app_attest,omitempty"`
 	// ReferralCode is the optional ?ref= code the signup arrived with. Carried
 	// to RegistrationConfirm so the new org can be attributed to its referrer.
 	ReferralCode string `json:"referral_code"`
@@ -31,14 +36,16 @@ type ConfirmData struct {
 }
 
 type ResetPasswordStart struct {
-	Email     string `json:"email"`
-	Turnstile string `json:"turnstile"`
+	Email     string           `json:"email"`
+	Turnstile string           `json:"turnstile"`
+	AppAttest *appattest.Proof `json:"app_attest,omitempty"`
 }
 
 type ResetPasswordConfirm struct {
-	Session   string `json:"session"`
-	Password  string `json:"password"`
-	Turnstile string `json:"turnstile"`
+	Session   string           `json:"session"`
+	Password  string           `json:"password"`
+	Turnstile string           `json:"turnstile"`
+	AppAttest *appattest.Proof `json:"app_attest,omitempty"`
 }
 
 type ChangePassword struct {

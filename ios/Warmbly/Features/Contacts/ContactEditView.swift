@@ -96,12 +96,12 @@ struct ContactEditSheet: View {
                     TextField("Phone", text: $phone)
                         .keyboardType(.phonePad)
                     Toggle("Subscribed", isOn: $subscribed)
-                        .tint(WTheme.accent)
                 }
                 campaignsSection
                 customFieldsSection
                 categorySection
             }
+            .contactFormChrome()
             .navigationTitle("Edit contact")
             .navigationBarTitleDisplayMode(.inline)
             .task { await loadCampaignOptions() }
@@ -115,6 +115,7 @@ struct ContactEditSheet: View {
                         ProgressView().controlSize(.small)
                     } else {
                         Button("Save") { Task { await save() } }
+                            .fontWeight(.semibold)
                             .disabled(!canManage || !isDirty)
                     }
                 }
@@ -148,25 +149,23 @@ struct ContactEditSheet: View {
         Section {
             if campaignOptions.isEmpty {
                 Text("No campaigns yet.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 14))
+                    .foregroundStyle(WTheme.inkSecondary)
             } else {
                 ForEach(campaignOptions) { campaign in
                     Button {
                         toggleCampaign(campaign.id)
                     } label: {
                         HStack(spacing: 10) {
-                            Image(systemName: "paperplane.fill")
+                            Image(systemName: "paperplane")
                                 .font(.system(size: 13))
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(WTheme.inkSecondary)
                                 .frame(width: 16)
                             Text(campaign.name ?? "Campaign")
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(WTheme.ink)
                                 .lineLimit(1)
                             Spacer()
-                            if selectedCampaignIDs.contains(campaign.id) {
-                                Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(WTheme.accent)
-                            }
+                            ContactCheckCircle(on: selectedCampaignIDs.contains(campaign.id), size: 20)
                         }
                     }
                     .disabled(!canManage)
@@ -211,8 +210,8 @@ struct ContactEditSheet: View {
         Section {
             if categoryStore.categories.isEmpty {
                 Text("No categories yet. Create them on the web dashboard.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 14))
+                    .foregroundStyle(WTheme.inkSecondary)
             } else {
                 ForEach(categoryStore.categories) { category in
                     Button {
@@ -221,16 +220,12 @@ struct ContactEditSheet: View {
                         HStack(spacing: 10) {
                             Circle()
                                 .fill(ContactColor.dot(category.color, seed: category.id))
-                                .frame(width: 12, height: 12)
+                                .frame(width: 9, height: 9)
+                                .frame(width: 16)
                             Text(category.title ?? "Untitled")
-                                .font(.body.weight(.medium))
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(WTheme.ink)
                             Spacer()
-                            if selectedCategoryIDs.contains(category.id) {
-                                Image(systemName: "checkmark")
-                                    .fontWeight(.semibold)
-                                    .foregroundStyle(WTheme.accent)
-                            }
+                            ContactCheckCircle(on: selectedCategoryIDs.contains(category.id), size: 20)
                         }
                     }
                     .disabled(!canManage)
@@ -374,22 +369,19 @@ struct ContactCreateSheet: View {
                                 HStack(spacing: 10) {
                                     Circle()
                                         .fill(ContactColor.dot(category.color, seed: category.id))
-                                        .frame(width: 12, height: 12)
+                                        .frame(width: 9, height: 9)
+                                        .frame(width: 16)
                                     Text(category.title ?? "Untitled")
-                                        .font(.body.weight(.medium))
-                                        .foregroundStyle(.primary)
+                                        .foregroundStyle(WTheme.ink)
                                     Spacer()
-                                    if selectedCategoryIDs.contains(category.id) {
-                                        Image(systemName: "checkmark")
-                                            .fontWeight(.semibold)
-                                            .foregroundStyle(WTheme.accent)
-                                    }
+                                    ContactCheckCircle(on: selectedCategoryIDs.contains(category.id), size: 20)
                                 }
                             }
                         }
                     }
                 }
             }
+            .contactFormChrome()
             .navigationTitle("New contact")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -401,6 +393,7 @@ struct ContactCreateSheet: View {
                         ProgressView().controlSize(.small)
                     } else {
                         Button("Add") { Task { await create() } }
+                            .fontWeight(.semibold)
                             .disabled(!emailValid)
                     }
                 }
@@ -472,5 +465,11 @@ private struct PresenceEditingModifier: ViewModifier {
 extension View {
     func presenceEditingWhileVisible(_ id: String) -> some View {
         modifier(PresenceEditingModifier(id: id))
+    }
+
+    /// Grouped form on the app's subtle band instead of the system grey.
+    func contactFormChrome() -> some View {
+        scrollContentBackground(.hidden)
+            .background(WTheme.surface)
     }
 }

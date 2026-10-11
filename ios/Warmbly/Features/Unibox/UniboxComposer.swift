@@ -10,9 +10,15 @@ struct UniboxComposer: View {
     let context: UniboxComposeContext
     /// Opens the AI writer immediately (the thread's sparkle shortcut).
     var openAIOnAppear: Bool = false
+    /// Starts a thread-grounded draft as soon as the sheet opens.
+    var autoDraft: Bool = false
     /// Fields restored from an undone instant send; overrides the context's
     /// initial recipients/subject and pre-fills the body.
     var restore: UniboxReplySnapshot?
+    /// The inbox agent's draft being edited; sending approves it when only the text changed.
+    var agentDraft: AgentThreadDraft?
+    /// Hands the edited text back when the sheet closes without sending.
+    var onKeepDraft: ((String) -> Void)?
     /// Called after a successful send with the snapshot of what went out, so
     /// the thread can refresh and offer undo-with-restore.
     var onSent: (UniboxSendResponse, UniboxReplySnapshot) -> Void
@@ -31,6 +37,7 @@ struct UniboxComposer: View {
     @State private var scheduledAt = Date().addingTimeInterval(3600)
     @State private var showSchedulePicker = false
     @State private var showTemplateBrowser = false
+    @State private var didSend = false
 
     /// AI is inline, not a sheet: a prompt bar above the keyboard plus
     /// rewrite actions on the current draft or just the selected text,
@@ -82,12 +89,18 @@ struct UniboxComposer: View {
     init(
         context: UniboxComposeContext,
         openAIOnAppear: Bool = false,
+        autoDraft: Bool = false,
         restore: UniboxReplySnapshot? = nil,
+        agentDraft: AgentThreadDraft? = nil,
+        onKeepDraft: ((String) -> Void)? = nil,
         onSent: @escaping (UniboxSendResponse, UniboxReplySnapshot) -> Void
     ) {
         self.context = context
         self.openAIOnAppear = openAIOnAppear
+        self.autoDraft = autoDraft
         self.restore = restore
+        self.agentDraft = agentDraft
+        self.onKeepDraft = onKeepDraft
         self.onSent = onSent
         _to = State(initialValue: restore?.to ?? context.to)
         _cc = State(initialValue: restore?.cc ?? context.cc)
@@ -99,6 +112,10 @@ struct UniboxComposer: View {
     }
 
     private var canAI: Bool { env.session.can(.useAI) }
+    /// `/generation/edit` and `/generation/write` also require managing campaigns.
+    private var canRewrite: Bool { canAI && env.session.can(.manageCampaigns) }
+    /// The prompt bar drafts through the thread when there is one, so it needs only AI.
+    private var canPrompt: Bool { canAI && (context.threadID != nil || canRewrite) }
     private var canTemplates: Bool { env.session.can(.viewCampaigns) }
 
     private var canSend: Bool {
@@ -117,7 +134,8 @@ struct UniboxComposer: View {
             VStack(spacing: 0) {
                 labeledRow("From") {
                     Text(context.accountEmail ?? "This mailbox")
-                        .font(.subheadline)
+                        .font(.system(size: 15))
+                        .foregroundStyle(WTheme.ink)
                         .lineLimit(1)
                 }
                 hairline
@@ -127,9 +145,10 @@ struct UniboxComposer: View {
                             withAnimation(.snappy) { showCcBcc = true }
                         } label: {
                             Image(systemName: "chevron.down")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(.secondary)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(WTheme.inkSecondary)
                                 .frame(width: 28, height: 28)
+                                .background(WTheme.fill, in: Circle())
                         }
                         .accessibilityLabel("Add Cc and Bcc")
                     }
@@ -141,18 +160,26 @@ struct UniboxComposer: View {
                     RecipientField(label: "Bcc", addresses: $bcc, text: $bccText)
                     hairline
                 }
-                TextField("Subject", text: $subject)
-                    .font(.subheadline.weight(.medium))
-                    .padding(.horizontal, 16)
-                    .frame(minHeight: 46)
+                TextField(text: $subject) {
+                    Text("Subject").foregroundStyle(WTheme.inkTertiary)
+                }
+                .font(.system(size: 17, weight: .medium))
+                .tracking(-0.2)
+                .foregroundStyle(WTheme.ink)
+                .padding(.horizontal, 16)
+                .frame(minHeight: 50)
                 hairline
+                if let agentDraft {
+                    agentBanner(agentDraft)
+                    hairline
+                }
                 if sendMode != .instant {
                     scheduleBanner
                     hairline
                 }
                 if let error = store.errorMessage {
                     Text(error)
-                        .font(.footnote)
+                        .font(.system(size: 13))
                         .foregroundStyle(WTheme.negative)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 16)
@@ -161,9 +188,10 @@ struct UniboxComposer: View {
                 }
                 editor
             }
-            .background(Color(.systemBackground))
-            .navigationTitle("Reply")
+            .background(WTheme.canvas)
+            .navigationTitle(agentDraft == nil ? "Reply" : "Drafted reply")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(WTheme.canvas, for: .navigationBar)
             .toolbar { toolbarContent }
             .safeAreaInset(edge: .bottom) { helperBar }
         }
@@ -172,7 +200,10 @@ struct UniboxComposer: View {
         .interactiveDismissDisabled(store.isSending)
         .sensoryFeedback(.impact(weight: .light), trigger: draftDonePulse)
         .sensoryFeedback(.selection, trigger: reviewActionPulse)
-        .onDisappear { draftTask?.cancel() }
+        .onDisappear {
+            draftTask?.cancel()
+            if !didSend { onKeepDraft?(messageBody) }
+        }
         .sheet(isPresented: $showSchedulePicker) {
             ComposeScheduleSheet(isPresented: $showSchedulePicker, scheduledAt: $scheduledAt) {
                 withAnimation(.snappy) { sendMode = .scheduled }
@@ -186,6 +217,9 @@ struct UniboxComposer: View {
             }
         }
         .task {
+            if autoDraft, canAI, context.threadID != nil, restore == nil {
+                startDraftReply(instruction: nil)
+            }
             if canTemplates { await templates.load(env.api) }
         }
     }
@@ -201,8 +235,8 @@ struct UniboxComposer: View {
 
     // MARK: Toolbar
 
-    /// Gmail-style chrome: X to close, paperplane to send, and a menu holding
-    /// the when-to-send choice plus the helpers.
+    /// X to close, an ink send circle, and a menu holding the when-to-send
+    /// choice plus the helpers.
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .cancellationAction) {
@@ -213,18 +247,7 @@ struct UniboxComposer: View {
             }
             .accessibilityLabel("Close")
         }
-        ToolbarItemGroup(placement: .topBarTrailing) {
-            if store.isSending {
-                ProgressView()
-            } else {
-                Button {
-                    Task { await send() }
-                } label: {
-                    Image(systemName: sendMode == .scheduled ? "clock.badge.checkmark" : "paperplane.fill")
-                }
-                .disabled(!canSend)
-                .accessibilityLabel(sendLabel)
-            }
+        ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 Picker("When to send", selection: $sendMode) {
                     Label("Send now", systemImage: "paperplane").tag(UniboxSendMode.instant)
@@ -248,7 +271,7 @@ struct UniboxComposer: View {
                         Label("Templates", systemImage: "doc.on.doc")
                     }
                 }
-                if canAI {
+                if canPrompt {
                     Button {
                         withAnimation(.snappy) { aiBarVisible = true }
                     } label: {
@@ -260,6 +283,17 @@ struct UniboxComposer: View {
             }
             .sensoryFeedback(.selection, trigger: sendMode)
         }
+        ToolbarItem(placement: .topBarTrailing) {
+            ReplySendCircle(
+                symbol: sendMode == .scheduled ? "clock" : "arrow.up",
+                enabled: canSend,
+                busy: store.isSending
+            ) {
+                Task { await send() }
+            }
+            .accessibilityLabel(sendLabel)
+        }
+        .sharedBackgroundVisibility(.hidden)
     }
 
     // MARK: Field rows
@@ -267,8 +301,8 @@ struct UniboxComposer: View {
     private func labeledRow(_ label: String, @ViewBuilder value: () -> some View) -> some View {
         HStack(spacing: 12) {
             Text(label)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 14))
+                .foregroundStyle(WTheme.inkTertiary)
                 .frame(width: 44, alignment: .leading)
             value()
         }
@@ -278,40 +312,69 @@ struct UniboxComposer: View {
     }
 
     private var hairline: some View {
-        Divider()
+        Hairline()
     }
 
-    /// Gmail-style schedule strip under the fields: names the chosen timing,
-    /// tap to change it, x to just send now.
+    /// Schedule strip under the fields: names the chosen timing, tap to
+    /// change it, x to just send now.
     private var scheduleBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: sendMode == .scheduled ? "clock" : "wand.and.stars")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(WTheme.accent)
+        HStack(spacing: 9) {
+            LiveDot(color: sendMode == .scheduled ? WTheme.warning : WTheme.accent, size: 6, pulsing: sendMode == .smart)
             Text(
                 sendMode == .scheduled
                     ? "Scheduled for \(scheduledAt.formatted(date: .abbreviated, time: .shortened))"
                     : "Smart send: goes out at the next safe slot for this mailbox"
             )
-            .font(.footnote)
-            .foregroundStyle(.secondary)
+            .font(.system(size: 13))
+            .foregroundStyle(WTheme.inkSecondary)
             .lineLimit(1)
             Spacer(minLength: 8)
             Button {
                 withAnimation(.snappy) { sendMode = .instant }
             } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 15))
-                    .foregroundStyle(.tertiary)
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(WTheme.inkSecondary)
+                    .frame(width: 24, height: 24)
+                    .background(WTheme.fill, in: Circle())
             }
             .accessibilityLabel("Send now instead")
         }
         .padding(.horizontal, 16)
-        .frame(minHeight: 40)
+        .frame(minHeight: 42)
+        .background(WTheme.surface)
         .contentShape(Rectangle())
         .onTapGesture {
             if sendMode == .scheduled { showSchedulePicker = true }
         }
+    }
+
+    /// Names where the text came from, and whether Send still approves it.
+    private func agentBanner(_ draft: AgentThreadDraft) -> some View {
+        HStack(spacing: 9) {
+            RemieSpark(size: 13, state: .idle)
+            Text(approvesDraft ? "Drafted by the inbox agent" : "Sends as a new reply")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(WTheme.inkSecondary)
+                .contentTransition(.opacity)
+            if let intent = draft.intent {
+                StatusPill(text: intent.label.lowercased(), tone: intent.tone)
+            }
+            Spacer(minLength: 8)
+            if messageBody != draft.body {
+                Button("Revert") {
+                    withAnimation(.snappy) { messageBody = draft.body }
+                }
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(WTheme.accent)
+                .transition(.opacity)
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(minHeight: 40)
+        .background(Remie.sky500.opacity(0.06))
+        .animation(.snappy, value: approvesDraft)
+        .animation(.snappy, value: messageBody == draft.body)
     }
 
     // MARK: Editor
@@ -319,16 +382,18 @@ struct UniboxComposer: View {
     /// The draft takes all remaining space, borderless, aligned with the rows.
     private var editor: some View {
         TextEditor(text: $messageBody, selection: $selection)
-            .font(.body)
+            .font(.system(size: 16))
+            .foregroundStyle(WTheme.ink)
+            .lineSpacing(3)
             .scrollContentBackground(.hidden)
             .padding(.horizontal, 11)
             .padding(.top, 6)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .overlay(alignment: .topLeading) {
                 if messageBody.isEmpty {
-                    Text("Compose email")
-                        .font(.body)
-                        .foregroundStyle(.tertiary)
+                    Text("Write your reply")
+                        .font(.system(size: 16))
+                        .foregroundStyle(WTheme.inkTertiary)
                         .padding(.top, 14)
                         .padding(.leading, 16)
                         .allowsHitTesting(false)
@@ -353,7 +418,7 @@ struct UniboxComposer: View {
                 noticeChip(notice)
             }
             VStack(spacing: 0) {
-                Divider()
+                Hairline()
                 switch draftPhase {
                 case .generating:
                     draftStatusRow
@@ -367,7 +432,7 @@ struct UniboxComposer: View {
                     }
                 }
             }
-            .background(.bar)
+            .background(WTheme.canvas)
         }
     }
 
@@ -375,12 +440,12 @@ struct UniboxComposer: View {
     /// helper bar for a few seconds, with a one-tap Undo when applicable.
     private func noticeChip(_ notice: AINotice) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Tone.indigo.color)
+            Image(systemName: "sparkle")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(WTheme.accent)
             Text(notice.text)
-                .font(.footnote.weight(.medium))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(WTheme.inkSecondary)
                 .lineLimit(1)
             if notice.undo, aiUndo != nil {
                 Button("Undo") {
@@ -391,15 +456,14 @@ struct UniboxComposer: View {
                     }
                     selection = nil
                 }
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(Tone.indigo.color)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(WTheme.ink)
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .background(.bar, in: Capsule())
-        .overlay(Capsule().strokeBorder(Color(.systemGray5), lineWidth: 1))
-        .shadow(color: .black.opacity(0.08), radius: 8, y: 2)
+        .frame(height: 32)
+        .background(WTheme.raised, in: Capsule())
+        .overlay(Capsule().strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
         .padding(.bottom, 8)
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
@@ -412,9 +476,9 @@ struct UniboxComposer: View {
     /// a staged shimmer label, and a cancel that abandons the result.
     private var draftStatusRow: some View {
         HStack(spacing: 10) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Tone.indigo.color)
+            Image(systemName: "sparkle")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(WTheme.accent)
                 .symbolEffect(.pulse, isActive: !reduceMotion)
             Group {
                 if reduceMotion {
@@ -424,22 +488,21 @@ struct UniboxComposer: View {
                         .skeletonShimmer()
                 }
             }
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
+            .font(.system(size: 14.5))
+            .foregroundStyle(WTheme.inkSecondary)
             .id(draftStage)
             .transition(.opacity)
             Spacer(minLength: 8)
             Button {
                 cancelDraft()
             } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 17))
-                    .foregroundStyle(.tertiary)
+                Text("Stop")
             }
+            .buttonStyle(OutlineButtonStyle(size: .small))
             .accessibilityLabel("Cancel draft")
         }
         .padding(.horizontal, 16)
-        .frame(minHeight: 44)
+        .frame(minHeight: 56)
     }
 
     /// Springs in when the draft lands: usage summary plus Keep / Adjust /
@@ -447,39 +510,29 @@ struct UniboxComposer: View {
     private var draftReviewBar: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Tone.indigo.color)
-                Text(draftUsage.map { "Draft ready · \($0)" } ?? "Draft ready")
-                    .font(.footnote.weight(.semibold))
+                Image(systemName: "sparkle")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(WTheme.accent)
+                Text("Draft ready")
+                    .font(.system(size: 14.5, weight: .medium))
+                    .foregroundStyle(WTheme.ink)
+                if let draftUsage {
+                    Text(draftUsage)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(WTheme.inkTertiary)
+                        .lineLimit(1)
+                }
                 Spacer(minLength: 0)
             }
             if adjustOpen {
-                HStack(spacing: 8) {
-                    TextField("shorter, mention pricing…", text: $adjustText)
-                        .font(.subheadline)
-                        .focused($adjustFocused)
-                        .onSubmit { submitAdjust() }
-                        .padding(.horizontal, 10)
-                        .frame(height: 34)
-                        .background(
-                            Color(.secondarySystemBackground),
-                            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        )
-                    Button {
-                        submitAdjust()
-                    } label: {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 24))
-                            .foregroundStyle(
-                                adjustText.trimmingCharacters(in: .whitespaces).isEmpty
-                                    ? Color(.systemGray3) : Tone.indigo.color
-                            )
-                    }
-                    .disabled(adjustText.trimmingCharacters(in: .whitespaces).isEmpty)
-                    .accessibilityLabel("Regenerate with adjustment")
-                }
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                ReplyPromptBox(
+                    text: $adjustText,
+                    placeholder: "Shorter, mention pricing…",
+                    focus: $adjustFocused,
+                    sendLabel: "Regenerate with adjustment",
+                    onSubmit: submitAdjust
+                ) { EmptyView() }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             HStack(spacing: 8) {
                 reviewButton("Keep", prominent: true) { keepDraft() }
@@ -497,23 +550,17 @@ struct UniboxComposer: View {
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
+    @ViewBuilder
     private func reviewButton(_ title: String, prominent: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(prominent ? Color.white : Tone.indigo.color)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 7)
-                .background(
-                    prominent ? AnyShapeStyle(Tone.indigo.color) : AnyShapeStyle(Tone.indigo.background),
-                    in: Capsule()
-                )
+        if prominent {
+            Button(title, action: action).buttonStyle(InkButtonStyle(size: .small))
+        } else {
+            Button(title, action: action).buttonStyle(OutlineButtonStyle(size: .small))
         }
-        .buttonStyle(TapScaleStyle())
     }
 
     private var helperRow: some View {
-        HStack(spacing: 18) {
+        HStack(spacing: 8) {
             if canAI { aiMenu }
             if canTemplates { templatesMenu }
             if aiUndo != nil {
@@ -523,9 +570,7 @@ struct UniboxComposer: View {
                         aiUndo = nil
                     }
                 } label: {
-                    Label("Undo", systemImage: "arrow.uturn.backward")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                    replyChip(icon: "arrow.uturn.backward", title: "Undo")
                 }
                 .buttonStyle(TapScaleStyle())
                 .transition(.opacity)
@@ -535,16 +580,16 @@ struct UniboxComposer: View {
                 ProgressView().controlSize(.small)
             } else {
                 Text("\(messageBody.count) / \(UniboxComposerStore.bodyLimit)")
-                    .font(.caption2)
+                    .font(.system(size: 12))
                     .monospacedDigit()
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(WTheme.inkTertiary)
             }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 14)
         .padding(.vertical, 10)
     }
 
-    /// Text the user has highlighted in the editor, if any — AI actions then
+    /// Text the user has highlighted in the editor, if any; AI actions then
     /// target just that range instead of the whole draft.
     private var selectedTextRange: Range<String.Index>? {
         guard let selection, !selection.isInsertion,
@@ -564,14 +609,16 @@ struct UniboxComposer: View {
                     Label("Draft a reply from this thread", systemImage: "sparkles")
                 }
             }
-            Button {
-                withAnimation(.snappy) { aiBarVisible = true }
-            } label: {
-                Label("Draft with AI", systemImage: "square.and.pencil")
+            if canPrompt {
+                Button {
+                    withAnimation(.snappy) { aiBarVisible = true }
+                } label: {
+                    Label(context.threadID != nil ? "Draft with instructions" : "Draft with AI", systemImage: "square.and.pencil")
+                }
             }
             // Capture the range at menu build: opening the menu can drop the
             // editor's focus and clear the live selection state.
-            if let range = selectedTextRange {
+            if canRewrite, let range = selectedTextRange {
                 Section("Selected text") {
                     ForEach(AISelectionAction.allCases) { action in
                         Button(action.label) {
@@ -583,7 +630,7 @@ struct UniboxComposer: View {
                         withAnimation(.snappy) { aiBarVisible = true }
                     }
                 }
-            } else if !messageBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            } else if canRewrite, !messageBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Section("Rewrite draft") {
                     Button("Improve writing") {
                         Task { await rewriteDraft("Improve the writing of this email reply; keep the meaning and roughly the same length") }
@@ -603,9 +650,7 @@ struct UniboxComposer: View {
                 }
             }
         } label: {
-            Label("AI", systemImage: "sparkles")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(Tone.indigo.color)
+            replyChip(icon: "sparkle", title: "AI", iconTint: WTheme.accent)
         }
         .disabled(isGenerating || draftPhase != .idle)
     }
@@ -629,17 +674,31 @@ struct UniboxComposer: View {
                 )
             }
         } label: {
-            Label("Templates", systemImage: "doc.on.doc")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(WTheme.accent)
+            replyChip(icon: "doc.on.doc", title: "Templates")
         }
     }
 
-    /// Inline prompt bar: sparkle, prompt field, tone, go, no sheet. Shows a
-    /// thread-draft quick action when the body is empty, and an "Editing
-    /// selection" chip when a custom selection edit is in flight.
+    /// Hairline helper chip under the editor.
+    private func replyChip(icon: String, title: String, iconTint: Color = WTheme.inkSecondary) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(iconTint)
+            Text(title)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(WTheme.ink)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 32)
+        .background(WTheme.raised, in: Capsule())
+        .overlay(Capsule().strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
+    }
+
+    /// Inline prompt bar: a Devin-style prompt box with tone and go, no
+    /// sheet. Shows a thread-draft quick action when the body is empty, and an
+    /// "Editing selection" chip when a custom selection edit is in flight.
     private var aiPromptBar: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 8) {
             if editingSelection == nil, context.threadID != nil,
                messageBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Button {
@@ -647,45 +706,56 @@ struct UniboxComposer: View {
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "text.bubble")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Tone.indigo.color)
+                            .font(.system(size: 12.5, weight: .medium))
+                            .foregroundStyle(WTheme.accent)
                         Text("Draft a reply from this thread")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.primary)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(WTheme.ink)
                         Spacer(minLength: 8)
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.tertiary)
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(WTheme.inkTertiary)
                     }
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, 14)
                     .frame(minHeight: 40)
+                    .background(WTheme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(WTheme.hairline, lineWidth: 1)
+                    )
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(TapScaleStyle())
-                Divider()
             }
-            HStack(spacing: 10) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Tone.indigo.color)
+            ReplyPromptBox(
+                text: $aiPrompt,
+                placeholder: editingSelection != nil ? "Describe the edit" : (context.threadID != nil ? "What should the reply say?" : "Tell AI what to write"),
+                focus: $aiFocused,
+                busy: isGenerating,
+                sendLabel: editingSelection == nil ? "Generate draft" : "Rewrite selection",
+                onSubmit: { Task { await submitPromptBar() } }
+            ) {
+                Button {
+                    editingSelection = nil
+                    withAnimation(.snappy) { aiBarVisible = false }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(WTheme.inkSecondary)
+                        .frame(width: 28, height: 28)
+                        .background(WTheme.fill, in: Circle())
+                }
+                .buttonStyle(TapScaleStyle())
+                .accessibilityLabel("Close AI")
                 if editingSelection != nil {
                     Text("Editing selection")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Tone.indigo.color)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Tone.indigo.background, in: Capsule())
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(WTheme.accent)
+                        .padding(.horizontal, 9)
+                        .frame(height: 26)
+                        .background(Tone.sky.background, in: Capsule())
                         .fixedSize()
                 }
-                TextField(
-                    editingSelection == nil ? "Tell AI what to write" : "Describe the edit",
-                    text: $aiPrompt,
-                    axis: .vertical
-                )
-                .font(.subheadline)
-                .lineLimit(1 ... 3)
-                .focused($aiFocused)
-                .onSubmit { Task { await submitPromptBar() } }
                 Menu {
                     Picker("Tone", selection: $aiTone) {
                         ForEach(AIWriteTone.allCases) { option in
@@ -693,41 +763,23 @@ struct UniboxComposer: View {
                         }
                     }
                 } label: {
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(aiTone == .standard ? Color.secondary : Tone.indigo.color)
-                        .frame(width: 28, height: 28)
+                    HStack(spacing: 5) {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 10.5, weight: .medium))
+                        Text(aiTone.label)
+                            .font(.system(size: 12.5, weight: .medium))
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(aiTone == .standard ? WTheme.inkSecondary : WTheme.ink)
+                    .padding(.horizontal, 10)
+                    .frame(height: 28)
+                    .background(WTheme.fill, in: Capsule())
                 }
                 .accessibilityLabel("Tone")
-                if isGenerating {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Button {
-                        Task { await submitPromptBar() }
-                    } label: {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 24))
-                            .foregroundStyle(
-                                aiPrompt.trimmingCharacters(in: .whitespaces).isEmpty
-                                    ? Color(.systemGray3) : Tone.indigo.color
-                            )
-                    }
-                    .disabled(aiPrompt.trimmingCharacters(in: .whitespaces).isEmpty)
-                    .accessibilityLabel(editingSelection == nil ? "Generate draft" : "Rewrite selection")
-                }
-                Button {
-                    editingSelection = nil
-                    withAnimation(.snappy) { aiBarVisible = false }
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 17))
-                        .foregroundStyle(.tertiary)
-                }
-                .accessibilityLabel("Close AI")
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 9)
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
         .task { aiFocused = true }
     }
 
@@ -751,6 +803,9 @@ struct UniboxComposer: View {
                     aiPrompt = ""
                 }
             }
+        } else if context.threadID != nil {
+            withAnimation(.snappy) { aiPrompt = "" }
+            startDraftReply(instruction: prompt)
         } else {
             await draftFromPrompt()
         }
@@ -1072,7 +1127,38 @@ struct UniboxComposer: View {
 
     // MARK: Send
 
+    /// Same recipient, subject and timing as the draft, so the approve endpoint can send it.
+    private var approvesDraft: Bool {
+        guard let agentDraft else { return false }
+        let extra = showCcBcc ? cc + addresses(ccText) + bcc + addresses(bccText) : []
+        return sendMode == .instant
+            && extra.isEmpty
+            && recipients.map { $0.lowercased() } == [agentDraft.toAddr.lowercased()]
+            && subject.trimmingCharacters(in: .whitespaces) == agentDraft.subject.trimmingCharacters(in: .whitespaces)
+    }
+
     private func send() async {
+        let snapshot = UniboxReplySnapshot(
+            to: recipients,
+            cc: showCcBcc ? cc + addresses(ccText) : [],
+            bcc: showCcBcc ? bcc + addresses(bccText) : [],
+            subject: subject,
+            body: messageBody
+        )
+        if let agentDraft, approvesDraft {
+            do {
+                let text = messageBody.trimmingCharacters(in: .whitespacesAndNewlines)
+                let response = try await store.approve(env.api, draftID: agentDraft.id, body: text == agentDraft.body ? nil : text)
+                didSend = true
+                onSent(response, snapshot)
+                dismiss()
+            } catch let error as APIError where error.code == "conflict" {
+                store.setError("This draft was already handled. Close to see the thread as it is now.")
+            } catch {
+                store.setError(error.localizedDescription)
+            }
+            return
+        }
         let request = UniboxReplyRequest(
             emailAccountID: context.accountID,
             to: recipients,
@@ -1087,14 +1173,10 @@ struct UniboxComposer: View {
             scheduledAt: sendMode == .scheduled ? scheduledAt : nil
         )
         do {
-            let snapshot = UniboxReplySnapshot(
-                to: recipients,
-                cc: showCcBcc ? cc + addresses(ccText) : [],
-                bcc: showCcBcc ? bcc + addresses(bccText) : [],
-                subject: subject,
-                body: messageBody
-            )
             let response = try await store.send(env.api, request: request)
+            didSend = true
+            // The reply went out its own way, so the agent's draft is settled.
+            if let agentDraft { await store.discard(env.api, draftID: agentDraft.id) }
             onSent(response, snapshot)
             dismiss()
         } catch {
@@ -1204,31 +1286,39 @@ struct UniboxTemplatePicker: View {
                             } label: {
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(template.name)
-                                        .font(.body.weight(.medium))
-                                        .foregroundStyle(.primary)
+                                        .font(.system(size: 15, weight: .medium))
+                                        .foregroundStyle(WTheme.ink)
                                     if let subject = template.subject, !subject.isEmpty {
                                         Text(subject)
-                                            .font(.footnote.weight(.medium))
-                                            .foregroundStyle(.secondary)
+                                            .font(.system(size: 13.5))
+                                            .foregroundStyle(WTheme.inkSecondary)
                                             .lineLimit(1)
                                     }
                                     if let snippet = template.bodyPlain?
                                         .trimmingCharacters(in: .whitespacesAndNewlines), !snippet.isEmpty {
                                         Text(snippet)
-                                            .font(.footnote)
-                                            .foregroundStyle(.tertiary)
+                                            .font(.system(size: 13))
+                                            .foregroundStyle(WTheme.inkTertiary)
                                             .lineLimit(2)
                                     }
                                 }
-                                .padding(.vertical, 2)
+                                .padding(.vertical, 4)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
                             }
+                            .buttonStyle(.plain)
+                            .listRowBackground(WTheme.canvas)
+                            .listRowSeparatorTint(WTheme.hairline)
                         }
                     }
                     .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
                 }
             }
+            .background(WTheme.canvas)
             .navigationTitle("Templates")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(WTheme.canvas, for: .navigationBar)
             .searchable(
                 text: $query,
                 placement: .navigationBarDrawer(displayMode: .always),
@@ -1237,6 +1327,7 @@ struct UniboxTemplatePicker: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .foregroundStyle(WTheme.ink)
                 }
             }
         }
@@ -1251,5 +1342,88 @@ struct UniboxTemplatePicker: View {
             store.query = query
             await store.load(env.api)
         }
+    }
+}
+
+// MARK: - Composer chrome
+
+/// The toolbar send control: a 32pt ink circle, dimmed while it can't send.
+private struct ReplySendCircle: View {
+    let symbol: String
+    let enabled: Bool
+    let busy: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle().fill(WTheme.ink.opacity(enabled || busy ? 1 : 0.2))
+                if busy {
+                    ProgressView().controlSize(.small).tint(WTheme.inkInverse)
+                } else {
+                    Image(systemName: symbol)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(WTheme.inkInverse)
+                }
+            }
+            .frame(width: 32, height: 32)
+            .animation(.easeOut(duration: 0.18), value: enabled)
+        }
+        .buttonStyle(TapScaleStyle())
+        .disabled(!enabled || busy)
+    }
+}
+
+/// Devin-style prompt box: raised, hairline-edged, accessories bottom-left and
+/// an ink send circle bottom-right.
+private struct ReplyPromptBox<Accessories: View>: View {
+    @Binding var text: String
+    let placeholder: String
+    var focus: FocusState<Bool>.Binding
+    var busy = false
+    let sendLabel: String
+    let onSubmit: () -> Void
+    @ViewBuilder var accessories: Accessories
+
+    private var isEmpty: Bool { text.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField(text: $text, axis: .vertical) {
+                Text(placeholder).foregroundStyle(WTheme.inkTertiary)
+            }
+            .font(.system(size: 15))
+            .foregroundStyle(WTheme.ink)
+            .lineLimit(1 ... 4)
+            .focused(focus)
+            .onSubmit(onSubmit)
+            HStack(spacing: 6) {
+                accessories
+                Spacer(minLength: 0)
+                if busy {
+                    ProgressView().controlSize(.small).frame(width: 32, height: 32)
+                } else {
+                    Button(action: onSubmit) {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(WTheme.inkInverse)
+                            .frame(width: 32, height: 32)
+                            .background(WTheme.ink.opacity(isEmpty ? 0.2 : 1), in: Circle())
+                    }
+                    .buttonStyle(TapScaleStyle())
+                    .disabled(isEmpty)
+                    .accessibilityLabel(sendLabel)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 12)
+        .padding(.bottom, 10)
+        .background(WTheme.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(WTheme.hairlineStrong, lineWidth: 1)
+        )
+        .animation(.easeOut(duration: 0.18), value: isEmpty)
     }
 }

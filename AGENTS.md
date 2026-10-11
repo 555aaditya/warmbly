@@ -212,6 +212,7 @@ Every instance that has not updated yet runs the code an attacker can read here.
 - passwords are hashed with **Argon2id** and nothing else. No change may introduce a second scheme, weaken the parameters, or store a password in any reversible form
 - `crypt.CheckPassword` (`internal/pkg/crypt/validation.go`) is the only gate on a new or changed password, and it refuses anything on the embedded NCSC breached list (`internal/pkg/crypt/passwords/breached.txt`). Every path that accepts a password must call it: registration, reset, change, invitation acceptance, and any future one
 - every auth-sensitive entry point is behind CAPTCHA (`internal/pkg/captcha/turnstile.go`): login, registration, password reset. The login and registration code-confirmation steps take no second captcha: their signed, single-use session from the start step already proves it passed
+- the native app proves itself with App Attest instead (`internal/app/appattest`, verifier in `internal/pkg/appattest`): a key attested against Apple's root once per install, then an assertion over a single-use challenge bound to the action on each of those calls, with an advancing counter and a per-key budget. `verifyHuman` in `internal/app/auth/service.go` is the one gate for both; a new captcha-gated path calls it, never `captcha.Verify` alone. The app never renders Turnstile
 - TOTP verification records the step it consumed (`user_totp_settings.last_used_step`) and refuses a replay of it. Any new second factor needs equivalent single-use enforcement
 - **admin routes require a session that verified a second factor.** `middleware.AdminMiddleware` refuses `!session.MFAVerified` with `admin_mfa_required`, and `RequireAdminPermission` then checks the admin bit. Every admin route sits behind both; never add one outside them. The instance-wide Warmbly Cloud link is gated the same way, because it belongs to the instance, not to a workspace
 - an operation that changes who can get in, or moves money or ownership, requires a fresh authentication (`middleware.RequireFreshAuth`, `POST /v1/auth/reauth`). API-key and OAuth callers pass through, because they present a credential on every call and have no session to refresh
@@ -754,7 +755,7 @@ Instead, the codebase uses layered abuse controls and trust signals across auth,
 
 ### Auth and signup protection
 
-Authentication flows use Cloudflare Turnstile:
+Authentication flows use Cloudflare Turnstile from a browser and App Attest from the native app:
 
 - login
 - registration

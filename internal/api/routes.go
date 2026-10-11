@@ -361,6 +361,15 @@ func Run(
 	// has typed. It gets its own per-IP budget so opening that page repeatedly
 	// cannot spend the allowance password sign-in, registration and reset all
 	// draw on. Finishing the ceremony is an attempt and stays on /auth below.
+	// The native app's App Attest handshake: a single-use challenge, and the
+	// once-per-install key registration that Apple's attestation authorises.
+	appAttestPublic := v1.Group("/auth/app-attest")
+	appAttestPublic.Use(m.AppAttestIPRateLimitMiddleware())
+	{
+		appAttestPublic.POST("/challenge", h.AppAttestChallenge)
+		appAttestPublic.POST("/keys", h.AppAttestRegisterKey)
+	}
+
 	passkeyPublic := v1.Group("/auth/passkey")
 	passkeyPublic.Use(m.PasskeyChallengeIPRateLimitMiddleware())
 	{

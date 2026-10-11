@@ -1,5 +1,4 @@
 import SwiftUI
-import Charts
 
 // MARK: - Tone maps
 
@@ -12,6 +11,16 @@ enum AnalyticsToneMap {
         case "quarantine": .orange
         case "blocked": .rose
         default: .slate
+        }
+    }
+
+    static func bandLabel(_ raw: String?) -> String {
+        switch raw {
+        case "healthy": "Healthy"
+        case "warning": "Watch"
+        case "quarantine": "At risk"
+        case "blocked": "Blocked"
+        default: "No data yet"
         }
     }
 
@@ -38,112 +47,42 @@ enum AnalyticsToneMap {
     }
 }
 
-// MARK: - Flat list helpers
-
-/// Eyebrow caption as a bare row — never a grouped `Section` header (that
-/// reintroduces the sticky gray band). Whitespace above is the separator.
-struct AnalyticsSectionCaption<Trailing: View>: View {
-    let title: String
-    let icon: String?
-    let iconTone: Tone
-    let top: CGFloat
-    let trailing: Trailing
-
-    init(
-        _ title: String,
-        icon: String? = nil,
-        iconTone: Tone = .slate,
-        top: CGFloat = 20,
-        @ViewBuilder trailing: () -> Trailing
-    ) {
-        self.title = title
-        self.icon = icon
-        self.iconTone = iconTone
-        self.top = top
-        self.trailing = trailing()
-    }
+/// Compact labeled number used inside stat grids.
+struct AnalyticsMiniStat: View {
+    let label: String
+    let value: String
+    var tone: Tone? = nil
 
     var body: some View {
-        HStack(spacing: 5) {
-            if let icon {
-                Image(systemName: icon)
-                    .font(.caption2)
-                    .foregroundStyle(iconTone.color)
-            }
-            EyebrowLabel(title)
-            Spacer(minLength: 8)
-            trailing
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(.system(size: 13))
+                .foregroundStyle(WTheme.inkSecondary)
+                .lineLimit(1)
+            Text(value)
+                .font(.system(size: 20, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(tone?.color ?? WTheme.ink)
+                .contentTransition(.numericText())
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
         }
-        .padding(.horizontal, 20)
-        .padding(.top, top)
-        .padding(.bottom, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .listRowInsets(EdgeInsets())
-        .listRowSeparator(.hidden)
-        .listRowBackground(Color(.systemBackground))
     }
 }
 
-extension AnalyticsSectionCaption where Trailing == EmptyView {
-    init(_ title: String, icon: String? = nil, iconTone: Tone = .slate, top: CGFloat = 20) {
-        self.init(title, icon: icon, iconTone: iconTone, top: top) { EmptyView() }
-    }
-}
-
-/// Flat row treatment for the analytics plain lists: 20pt gutters, white row
-/// background, and (when given) a hairline tucked under the text column.
-private struct AnalyticsPlainRowModifier: ViewModifier {
-    let separator: Visibility
-    let separatorLeading: CGFloat?
-
-    func body(content: Content) -> some View {
-        let base = content
-            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
-            .listRowSeparator(separator)
-            .listRowBackground(Color(.systemBackground))
-        if let separatorLeading {
-            base.alignmentGuide(.listRowSeparatorLeading) { _ in separatorLeading }
-        } else {
-            base
-        }
-    }
-}
-
-extension View {
-    func analyticsPlainRow(separator: Visibility = .automatic, separatorLeading: CGFloat? = nil) -> some View {
-        modifier(AnalyticsPlainRowModifier(separator: separator, separatorLeading: separatorLeading))
-    }
-}
-
-/// Redacted stat grid shown while a section's endpoint is still loading.
-struct AnalyticsSectionLoading: View {
-    var body: some View {
-        LazyVGrid(
-            columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)],
-            alignment: .leading,
-            spacing: 14
-        ) {
-            ForEach(0 ..< 3, id: \.self) { _ in
-                AnalyticsMiniStat(label: "Loading", value: "0000")
-            }
-        }
-        .redacted(reason: .placeholder)
-        .padding(.vertical, 8)
-    }
-}
-
-/// Inline section failure row; the rest of the screen keeps working.
+/// Inline section failure; the rest of the screen keeps working.
 struct AnalyticsSectionError: View {
     let text: String
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.footnote)
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 13))
                 .foregroundStyle(WTheme.negative)
             Text(text)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 14))
+                .foregroundStyle(WTheme.inkSecondary)
         }
         .padding(.vertical, 6)
     }
@@ -151,350 +90,759 @@ struct AnalyticsSectionError: View {
 
 // MARK: - Deliverability
 
-struct AnalyticsDeliverabilitySection: View {
-    let summary: DeliverabilitySummary?
-    let error: String?
-    var captionTop: CGFloat = 14
-
-    private let columns = [
-        GridItem(.flexible(), alignment: .leading),
-        GridItem(.flexible(), alignment: .leading),
-        GridItem(.flexible(), alignment: .leading),
-    ]
+/// The workspace's sending reputation: a score, the three rates that move
+/// it against their safe ranges, how replies read, and who is suppressed.
+struct AnalyticsDeliverabilityPage: View {
+    let store: AnalyticsStore
+    var shown: Bool
 
     var body: some View {
-        AnalyticsSectionCaption("Deliverability", top: captionTop) {
-            if let band = summary?.band {
-                StatusPill(text: band, tone: AnalyticsToneMap.band(band))
+        if let summary = store.deliverability {
+            VStack(alignment: .leading, spacing: 16) {
+                scoreCard(summary).reveal(shown, 0)
+                rangesCard(summary).reveal(shown, 1)
+                if intentTotal(summary) > 0 {
+                    intentCard(summary).reveal(shown, 2)
+                }
+                suppressionCard(summary).reveal(shown, 3)
+                if let mailboxes = summary.byMailbox, !mailboxes.isEmpty {
+                    mailboxCard(mailboxes).reveal(shown, 4)
+                }
+            }
+        } else if let error = store.deliverabilityError {
+            AnalyticsSectionError(text: error).coverCard()
+        } else {
+            AnalyticsLoadingCards()
+        }
+    }
+
+    // MARK: Score
+
+    private func scoreCard(_ summary: DeliverabilitySummary) -> some View {
+        let tone = AnalyticsToneMap.band(summary.band)
+        let score = summary.score ?? (summary.band == "healthy" ? 100 : 0)
+        return HStack(spacing: 18) {
+            SweepRing(fraction: Double(score) / 100, color: tone.color, shown: shown, lineWidth: 11) {
+                VStack(spacing: -2) {
+                    CountUpText(value: shown ? Double(score) : 0, format: { "\(Int($0.rounded()))" })
+                        .font(.system(size: 34, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(WTheme.ink)
+                        .animation(.easeOut(duration: 1.1).delay(0.15), value: shown)
+                    Text("of 100")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(WTheme.inkTertiary)
+                }
+            }
+            .frame(width: 116, height: 116)
+            VStack(alignment: .leading, spacing: 6) {
+                StatusPill(text: AnalyticsToneMap.bandLabel(summary.band), tone: tone)
+                Text(headline(summary.band))
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(WTheme.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text((summary.emailsSent ?? 0) > 0 ? "Read from \(WFormat.compact(summary.emailsSent ?? 0)) emails sent" : "Nothing sent in this period to judge")
+                    .font(.system(size: 13.5))
+                    .monospacedDigit()
+                    .foregroundStyle(WTheme.inkSecondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .coverCard()
+        .accessibilityElement(children: .combine)
+    }
+
+    private func headline(_ band: String?) -> String {
+        switch band {
+        case "healthy": "Your mail is landing well"
+        case "warning": "Worth keeping an eye on"
+        case "quarantine": "Sending is at risk"
+        case "blocked": "Sending is paused"
+        default: "Send a few emails to see this"
+        }
+    }
+
+    // MARK: Ranges
+
+    private func rangesCard(_ summary: DeliverabilitySummary) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            CardTitle("Inside the safe range", caption: "The rates mailbox providers judge you on")
+            RateGauge(
+                label: "Bounce rate", value: summary.bounceRate ?? 0,
+                watch: 2, risk: 5, note: "Keep under 2%", shown: shown, delay: 0.2
+            )
+            RateGauge(
+                label: "Complaint rate", value: summary.complaintRate ?? 0,
+                watch: 0.03, risk: 0.10, note: "Keep under 0.03%", shown: shown, delay: 0.3
+            )
+            if let spam = summary.spamPlacementRate {
+                RateGauge(
+                    label: "Landed in spam", value: spam,
+                    watch: 10, risk: 20, note: "Keep under 10%", shown: shown, delay: 0.4
+                )
+            } else {
+                HStack(spacing: 8) {
+                    Image(systemName: "tray.full")
+                        .font(.system(size: 13))
+                        .foregroundStyle(WTheme.inkTertiary)
+                    Text("Spam placement shows once warmup has enough deliveries to read.")
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(WTheme.inkSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
-        if let summary {
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
-                AnalyticsMiniStat(label: "Sent", value: AnalyticsFmt.count(summary.emailsSent))
-                AnalyticsMiniStat(
-                    label: "Bounce rate",
-                    value: AnalyticsFmt.rate(summary.bounceRate),
-                    tone: (summary.bounceRate ?? 0) >= 5 ? .rose : ((summary.bounceRate ?? 0) >= 2 ? .amber : nil)
-                )
+        .coverCard()
+    }
+
+    // MARK: Intent
+
+    private func intentTotal(_ summary: DeliverabilitySummary) -> Int {
+        intents(summary).reduce(0) { $0 + $1.count }
+    }
+
+    private func intents(_ summary: DeliverabilitySummary) -> [(label: String, count: Int, color: Color)] {
+        [
+            ("Interested", summary.intentPositive ?? 0, WTheme.positive),
+            ("Question", summary.intentQuestion ?? 0, WTheme.accent),
+            ("Neutral", summary.intentNeutral ?? 0, WTheme.special),
+            ("Out of office", summary.intentOutOfOffice ?? 0, WTheme.paused),
+            ("Not interested", summary.intentNegative ?? 0, WTheme.negative),
+            ("Automated", summary.intentAutomated ?? 0, WTheme.hairlineStrong),
+        ]
+    }
+
+    private func intentCard(_ summary: DeliverabilitySummary) -> some View {
+        let rows = intents(summary).filter { $0.count > 0 }
+        let total = max(1, rows.reduce(0) { $0 + $1.count })
+        return VStack(alignment: .leading, spacing: 16) {
+            CardTitle("How people replied", caption: "\(total) \(total == 1 ? "reply" : "replies"), read for intent")
+            GeometryReader { proxy in
+                HStack(spacing: 3) {
+                    ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                        let width = max(6, (proxy.size.width - CGFloat(rows.count - 1) * 3) * CGFloat(row.count) / CGFloat(total))
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(row.color)
+                            .frame(width: shown ? width : 0)
+                            .animation(.spring(response: 0.8, dampingFraction: 0.82).delay(0.2 + Double(index) * 0.07), value: shown)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            .frame(height: 14)
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], alignment: .leading, spacing: 10) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    HStack(spacing: 7) {
+                        RoundedRectangle(cornerRadius: 2.5).fill(row.color).frame(width: 9, height: 9)
+                        Text(row.label)
+                            .font(.system(size: 14))
+                            .foregroundStyle(WTheme.inkSecondary)
+                            .lineLimit(1)
+                        Spacer(minLength: 4)
+                        Text("\(row.count)")
+                            .font(.system(size: 14, weight: .semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(WTheme.ink)
+                    }
+                }
+            }
+        }
+        .coverCard()
+    }
+
+    // MARK: Suppression
+
+    private func suppressionCard(_ summary: DeliverabilitySummary) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            CardTitle("Kept off your lists", caption: "Addresses Warmbly will not email again")
+            HStack(spacing: 0) {
+                AnalyticsMiniStat(label: "Suppressed", value: AnalyticsFmt.count(summary.suppressedRecipients))
+                AnalyticsMiniStat(label: "Unsubscribed", value: AnalyticsFmt.count(summary.unsubscribeCount))
                 AnalyticsMiniStat(
                     label: "Complaints",
-                    value: AnalyticsFmt.rate(summary.complaintRate),
-                    tone: (summary.complaintRate ?? 0) >= 0.10 ? .rose : ((summary.complaintRate ?? 0) >= 0.03 ? .amber : nil)
+                    value: AnalyticsFmt.count(summary.complaintCount),
+                    tone: (summary.complaintCount ?? 0) > 0 ? .rose : nil
                 )
-                AnalyticsMiniStat(
-                    label: "Spam placement",
-                    value: summary.spamPlacementRate.map { AnalyticsFmt.rate($0) } ?? "no samples",
-                    tone: (summary.spamPlacementRate ?? 0) >= 20 ? .rose : ((summary.spamPlacementRate ?? 0) >= 10 ? .amber : nil)
-                )
-                AnalyticsMiniStat(label: "Suppressed", value: AnalyticsFmt.count(summary.suppressedRecipients))
-                AnalyticsMiniStat(label: "Unsubscribes", value: AnalyticsFmt.count(summary.unsubscribeCount))
             }
-            .padding(.vertical, 10)
-            .analyticsPlainRow(separator: .hidden)
             if let pending = summary.dlqPending, pending > 0 {
-                HStack(spacing: 8) {
-                    Image(systemName: "clock.badge.exclamationmark")
-                        .font(.footnote)
-                        .foregroundStyle(WTheme.warning)
-                    Text("\(pending) deliverability events pending retry")
-                        .font(.footnote)
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.vertical, 6)
-                .analyticsPlainRow(separator: .hidden)
+                Label("\(pending) events waiting to retry", systemImage: "clock.arrow.circlepath")
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(WTheme.warning)
             }
-        } else if let error {
-            AnalyticsSectionError(text: error)
-                .analyticsPlainRow(separator: .hidden)
-        } else {
-            AnalyticsSectionLoading()
-                .analyticsPlainRow(separator: .hidden)
         }
+        .coverCard()
+    }
+
+    // MARK: Mailboxes
+
+    private func mailboxCard(_ rows: [AnalyticsDeliverabilityMailbox]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            CardTitle("By mailbox").padding(.bottom, 8)
+            ForEach(Array(rows.prefix(8).enumerated()), id: \.element.id) { index, row in
+                if index > 0 { Hairline().padding(.leading, 50) }
+                HStack(spacing: 12) {
+                    store.mailboxAvatar(id: row.id, email: row.email, size: 36)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(row.email ?? "Mailbox")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(WTheme.ink)
+                            .lineLimit(1)
+                        Text("\(WFormat.compact(row.sent ?? 0)) sent  ·  \(AnalyticsFmt.rate(row.bounceRate)) bounced")
+                            .font(.system(size: 13))
+                            .monospacedDigit()
+                            .foregroundStyle(WTheme.inkSecondary)
+                    }
+                    Spacer()
+                    StatusPill(text: AnalyticsToneMap.bandLabel(row.band), tone: AnalyticsToneMap.band(row.band))
+                }
+                .padding(.vertical, 9)
+            }
+        }
+        .coverCard()
+    }
+}
+
+/// A rate on a track split into fine, watch and risk, with a knob that slides to it.
+struct RateGauge: View {
+    let label: String
+    let value: Double
+    let watch: Double
+    let risk: Double
+    let note: String
+    var shown: Bool
+    var delay: Double = 0
+
+    private var tone: Tone { value >= risk ? .rose : value >= watch ? .amber : .emerald }
+    private var scale: Double { risk * 1.6 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(label)
+                    .font(.system(size: 15))
+                    .foregroundStyle(WTheme.ink)
+                Spacer()
+                Text(AnalyticsFmt.rate(value))
+                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(tone == .emerald ? WTheme.ink : tone.color)
+            }
+            GeometryReader { proxy in
+                let width = proxy.size.width
+                let watchX = width * watch / scale
+                let riskX = width * risk / scale
+                let knob = width * min(1, value / scale)
+                ZStack(alignment: .leading) {
+                    HStack(spacing: 2) {
+                        Capsule().fill(WTheme.positive.opacity(0.28)).frame(width: max(0, watchX - 1))
+                        Rectangle().fill(WTheme.warning.opacity(0.3)).frame(width: max(0, riskX - watchX - 2))
+                        Capsule().fill(WTheme.negative.opacity(0.26))
+                    }
+                    .frame(height: 6)
+                    Circle()
+                        .fill(WTheme.groupedCard)
+                        .frame(width: 16, height: 16)
+                        .overlay(Circle().stroke(tone.color, lineWidth: 4))
+                        .shadow(color: tone.color.opacity(0.35), radius: 4, y: 1)
+                        .offset(x: (shown ? knob : 0) - 8)
+                        .animation(.spring(response: 1, dampingFraction: 0.7).delay(delay), value: shown)
+                }
+                .frame(height: 16)
+            }
+            .frame(height: 16)
+            Text(note)
+                .font(.system(size: 12.5))
+                .foregroundStyle(WTheme.inkTertiary)
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 
 // MARK: - Warmup
 
-struct AnalyticsWarmupSection: View {
-    let warmup: WarmupAnalytics?
-    let error: String?
-    let periodLabel: String
-    var captionTop: CGFloat = 14
+/// Warmup across every mailbox: what went out, how the days tracked the
+/// ramp, where it landed, and each mailbox's climb.
+struct AnalyticsWarmupPage: View {
+    let store: AnalyticsStore
+    var shown: Bool
 
-    private let columns = [
-        GridItem(.flexible(), alignment: .leading),
-        GridItem(.flexible(), alignment: .leading),
-        GridItem(.flexible(), alignment: .leading),
-    ]
+    @State private var selectedDay: Int?
 
-    private var chartDays: [(id: Int, day: Date, sent: Int, target: Int)] {
-        (warmup?.dailyStats ?? []).enumerated().compactMap { index, day in
-            guard let date = AnalyticsDay.parse(day.date) else { return nil }
-            return (id: index, day: date, sent: day.emailsSent ?? 0, target: day.targetVolume ?? 0)
+    var body: some View {
+        if let summary = store.warmup?.summary {
+            VStack(alignment: .leading, spacing: 16) {
+                heroCard(summary).reveal(shown, 0)
+                if (summary.totalSent ?? 0) > 0 {
+                    dailyCard.reveal(shown, 1)
+                }
+                if !placements.isEmpty {
+                    placementCard.reveal(shown, 2)
+                }
+                if !warming.isEmpty {
+                    rampCard.reveal(shown, 3)
+                }
+            }
+        } else if let error = store.warmupError {
+            AnalyticsSectionError(text: error).coverCard()
+        } else {
+            AnalyticsLoadingCards()
         }
     }
 
-    var body: some View {
-        AnalyticsSectionCaption("Warmup", icon: "flame", iconTone: .orange, top: captionTop)
-        if let summary = warmup?.summary {
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
-                AnalyticsMiniStat(label: "Warmup sent", value: AnalyticsFmt.count(summary.totalSent), tone: .orange)
+    // MARK: Hero
+
+    private func heroCard(_ summary: AnalyticsWarmupSummary) -> some View {
+        let progress = (summary.targetProgress ?? 0) / 100
+        return VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "flame.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Tone.orange.color)
+                            .symbolEffect(.bounce, value: shown)
+                        Text("Warmup emails sent")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(WTheme.inkSecondary)
+                    }
+                    CountUpText(value: shown ? Double(summary.totalSent ?? 0) : 0, format: { Int($0.rounded()).formatted() })
+                        .font(.system(size: 40, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(WTheme.ink)
+                        .animation(.easeOut(duration: 1.2), value: shown)
+                    Text("over \(summary.daysActive ?? 0) active \((summary.daysActive ?? 0) == 1 ? "day" : "days")")
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(WTheme.inkTertiary)
+                }
+                Spacer(minLength: 8)
+                SweepRing(fraction: progress, color: Tone.orange.color, shown: shown, lineWidth: 9) {
+                    VStack(spacing: -1) {
+                        Text("\(Int((progress * 100).rounded()))%")
+                            .font(.system(size: 20, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(WTheme.ink)
+                        Text("of target")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(WTheme.inkTertiary)
+                    }
+                }
+                .frame(width: 96, height: 96)
+            }
+            Hairline()
+            HStack(spacing: 0) {
                 AnalyticsMiniStat(label: "Replies", value: AnalyticsFmt.count(summary.totalReplied))
                 AnalyticsMiniStat(label: "Reply rate", value: AnalyticsFmt.rate(summary.replyRate))
-                AnalyticsMiniStat(label: "Avg / active day", value: String(format: "%.1f", summary.averageDaily ?? 0))
-                AnalyticsMiniStat(label: "Days active", value: "\(summary.daysActive ?? 0)")
-                AnalyticsMiniStat(label: "Target met", value: String(format: "%.0f%%", summary.targetProgress ?? 0))
+                AnalyticsMiniStat(label: "A day", value: String(format: "%.0f", summary.averageDaily ?? 0))
             }
-            .padding(.vertical, 10)
-            .analyticsPlainRow(separator: .hidden)
-
-            if (summary.totalSent ?? 0) > 0, chartDays.count > 1 {
-                Chart(chartDays, id: \.id) { day in
-                    BarMark(
-                        x: .value("Day", day.day),
-                        y: .value("Sent", day.sent)
-                    )
-                    .foregroundStyle(Tone.orange.color.opacity(0.75))
-                    LineMark(
-                        x: .value("Day", day.day),
-                        y: .value("Target", day.target)
-                    )
-                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                    .foregroundStyle(WTheme.paused)
-                }
-                .chartXAxis {
-                    AxisMarks(values: .automatic(desiredCount: 4)) { _ in
-                        AxisGridLine().foregroundStyle(Color(.separator).opacity(0.4))
-                        AxisValueLabel(format: .dateTime.month(.abbreviated).day())
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(Color.secondary)
-                    }
-                }
-                .chartYAxis {
-                    AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { _ in
-                        AxisGridLine().foregroundStyle(Color(.separator).opacity(0.4))
-                        AxisValueLabel()
-                            .font(.system(size: 10))
-                            .foregroundStyle(Color.secondary)
-                    }
-                }
-                .frame(height: 130)
-                .padding(.vertical, 8)
-                .analyticsPlainRow(separator: .hidden)
-            } else if (summary.totalSent ?? 0) == 0 {
-                Text("No warmup activity in the last \(periodLabel).")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 4)
-                    .analyticsPlainRow(separator: .hidden)
-            }
-        } else if let error {
-            AnalyticsSectionError(text: error)
-                .analyticsPlainRow(separator: .hidden)
-        } else {
-            AnalyticsSectionLoading()
-                .analyticsPlainRow(separator: .hidden)
         }
+        .coverCard()
+    }
+
+    // MARK: Daily bars
+
+    private struct Day {
+        let date: Date
+        let sent: Int
+        let target: Int
+        let replied: Int
+    }
+
+    private var days: [Day] {
+        (store.warmup?.dailyStats ?? []).compactMap { day in
+            guard let date = AnalyticsDay.parse(day.date.map { String($0.prefix(10)) }) else { return nil }
+            return Day(date: date, sent: day.emailsSent ?? 0, target: day.targetVolume ?? 0, replied: day.emailsReplied ?? 0)
+        }
+    }
+
+    private var dailyCard: some View {
+        let days = days
+        let peak = max(1, days.map { max($0.sent, $0.target) }.max() ?? 1)
+        let picked = selectedDay.flatMap { days.indices.contains($0) ? days[$0] : nil }
+        let utcDay: Date.FormatStyle = {
+            var style = Date.FormatStyle.dateTime.weekday(.abbreviated).month(.abbreviated).day()
+            style.timeZone = TimeZone(identifier: "UTC")!
+            return style
+        }()
+        return VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(picked.map { utcDay.format($0.date) } ?? "Each day against its target")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(WTheme.ink)
+                    .contentTransition(.opacity)
+                Group {
+                    if let picked {
+                        Text("\(picked.sent) sent of \(picked.target)  ·  \(picked.replied) replied")
+                    } else {
+                        Text("Drag across the bars to read a day")
+                    }
+                }
+                .font(.system(size: 13.5))
+                .monospacedDigit()
+                .foregroundStyle(WTheme.inkSecondary)
+                .contentTransition(.numericText())
+            }
+            .animation(.snappy(duration: 0.2), value: selectedDay)
+            GeometryReader { proxy in
+                let count = max(1, days.count)
+                let gap: CGFloat = count > 40 ? 1.5 : 4
+                let barWidth = max(2, (proxy.size.width - gap * CGFloat(count - 1)) / CGFloat(count))
+                HStack(alignment: .bottom, spacing: gap) {
+                    ForEach(Array(days.enumerated()), id: \.offset) { index, day in
+                        let height = proxy.size.height * CGFloat(day.sent) / CGFloat(peak)
+                        let targetY = proxy.size.height * CGFloat(day.target) / CGFloat(peak)
+                        let dim = selectedDay != nil && selectedDay != index
+                        ZStack(alignment: .bottom) {
+                            RoundedRectangle(cornerRadius: min(4, barWidth / 2), style: .continuous)
+                                .fill(WTheme.fill)
+                                .frame(height: max(2, targetY))
+                            RoundedRectangle(cornerRadius: min(4, barWidth / 2), style: .continuous)
+                                .fill(LinearGradient(colors: [Color(hex: 0xFDBA74), Tone.orange.color], startPoint: .top, endPoint: .bottom))
+                                .frame(height: shown ? max(2, height) : 2)
+                                .opacity(dim ? 0.35 : 1)
+                                .animation(.spring(response: 0.8, dampingFraction: 0.78).delay(0.15 + Double(index) * min(0.04, 1.2 / Double(count))), value: shown)
+                        }
+                        .frame(width: barWidth)
+                    }
+                }
+                .frame(maxHeight: .infinity, alignment: .bottom)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            let index = Int(value.location.x / (barWidth + gap))
+                            selectedDay = min(max(0, index), count - 1)
+                        }
+                        .onEnded { _ in
+                            withAnimation(.snappy) { selectedDay = nil }
+                        }
+                )
+            }
+            .frame(height: 130)
+            .sensoryFeedback(.selection, trigger: selectedDay)
+            HStack(spacing: 14) {
+                legend(color: Tone.orange.color, text: "Sent")
+                legend(color: WTheme.hairlineStrong, text: "Target")
+                Spacer()
+            }
+        }
+        .coverCard()
+    }
+
+    private func legend(color: Color, text: String) -> some View {
+        HStack(spacing: 6) {
+            RoundedRectangle(cornerRadius: 2.5).fill(color).frame(width: 9, height: 9)
+            Text(text)
+                .font(.system(size: 12.5))
+                .foregroundStyle(WTheme.inkSecondary)
+        }
+    }
+
+    // MARK: Placement
+
+    private var placements: [AccountHealthRow] {
+        store.accounts.filter { ($0.warmupPlacement?.delivered ?? 0) > 0 }
+    }
+
+    private var placementCard: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            CardTitle("Where warmup landed", caption: "Verified deliveries at Google, Microsoft and Yahoo, last 7 days")
+                .padding(.bottom, 10)
+            ForEach(Array(placements.enumerated()), id: \.element.id) { index, account in
+                if index > 0 { Hairline() }
+                placementRow(account, index: index)
+            }
+            HStack(spacing: 14) {
+                legend(color: WTheme.positive, text: "Inbox")
+                legend(color: WTheme.accent, text: "Tabs")
+                legend(color: WTheme.negative, text: "Spam")
+                Spacer()
+            }
+            .padding(.top, 10)
+        }
+        .coverCard()
+    }
+
+    private func placementRow(_ account: AccountHealthRow, index: Int) -> some View {
+        let placement = account.warmupPlacement
+        let delivered = max(1, placement?.delivered ?? 1)
+        let parts: [(Int, Color)] = [
+            (placement?.inbox ?? 0, WTheme.positive),
+            (placement?.tabs ?? 0, WTheme.accent),
+            (placement?.spam ?? 0, WTheme.negative),
+        ]
+        let rate = placement?.inboxRate ?? 0
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(account.email ?? "Mailbox")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(WTheme.ink)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Text(String(format: "%.0f%%", rate))
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(rate >= 90 ? WTheme.positive : rate >= 80 ? WTheme.warning : WTheme.negative)
+                Text("inbox")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(WTheme.inkTertiary)
+            }
+            GeometryReader { proxy in
+                HStack(spacing: 2) {
+                    ForEach(Array(parts.enumerated()), id: \.offset) { part, item in
+                        if item.0 > 0 {
+                            Capsule()
+                                .fill(item.1)
+                                .frame(width: shown ? max(4, (proxy.size.width - 4) * CGFloat(item.0) / CGFloat(delivered)) : 0)
+                                .animation(.spring(response: 0.9, dampingFraction: 0.8).delay(0.2 + Double(index) * 0.08 + Double(part) * 0.1), value: shown)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            .frame(height: 8)
+            Text("\(placement?.delivered ?? 0) delivered  ·  \(placement?.spam ?? 0) in spam")
+                .font(.system(size: 12.5))
+                .monospacedDigit()
+                .foregroundStyle(WTheme.inkTertiary)
+        }
+        .padding(.vertical, 10)
+        .accessibilityElement(children: .combine)
+    }
+
+    // MARK: Ramp
+
+    private var warming: [AccountHealthRow] {
+        store.accounts.filter { $0.warmupStatus?.enabled == true }
+    }
+
+    private var rampCard: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            CardTitle("Each mailbox's ramp", caption: "Today's daily target on its way to the ceiling")
+                .padding(.bottom, 8)
+            ForEach(Array(warming.enumerated()), id: \.element.id) { index, account in
+                if index > 0 { Hairline().padding(.leading, 48) }
+                rampRow(account, index: index)
+            }
+        }
+        .coverCard()
+    }
+
+    private func rampRow(_ account: AccountHealthRow, index: Int) -> some View {
+        let status = account.warmupStatus
+        let ceiling = max(1, status?.maxVolume ?? 40)
+        let today = min(ceiling, status?.targetVolume ?? 0)
+        let paused = status?.paused == true
+        return HStack(alignment: .top, spacing: 12) {
+            MailboxAvatar(email: account.email ?? "", avatarURL: account.avatarURL, brand: account.resolvedBrand, seed: account.id, size: 36)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(account.email ?? "Mailbox")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(WTheme.ink)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    Text(paused ? "Paused" : "Day \(status?.daysActive ?? 0)")
+                        .font(.system(size: 13, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(paused ? WTheme.inkTertiary : Tone.orange.color)
+                }
+                WarmupBar(progress: shown ? Double(today) / Double(ceiling) : 0, paused: paused, delay: Double(index) * 0.08)
+                    .frame(height: 8)
+                Text("\(Text("\(today)").foregroundStyle(WTheme.ink).fontWeight(.semibold)) of \(ceiling) a day  ·  \(status?.currentVolume ?? 0) sent today")
+                    .font(.system(size: 12.5))
+                    .monospacedDigit()
+                    .foregroundStyle(WTheme.inkSecondary)
+            }
+        }
+        .padding(.vertical, 10)
     }
 }
 
-// MARK: - Account health
+// MARK: - Mailboxes
 
-struct AnalyticsAccountsSection: View {
-    let accounts: [AccountHealthRow]
-    let counts: AnalyticsAccountHealthCounts?
-    let error: String?
-    var isLoading: Bool = false
-    var captionTop: CGFloat = 14
+/// Every mailbox's health: a summary of the fleet, then each mailbox with
+/// today's sending and its score, opening its detail.
+struct AnalyticsAccountsPage: View {
+    let store: AnalyticsStore
+    var shown: Bool
+
+    #if DEBUG
+    @State private var debugOpen = false
+    #endif
 
     var body: some View {
-        AnalyticsSectionCaption("Account health", top: captionTop) {
-            if let counts {
-                HStack(spacing: 6) {
-                    if let healthy = counts.healthyAccounts, healthy > 0 {
-                        StatusPill(text: "\(healthy)", tone: .emerald)
+        if store.accounts.isEmpty, let error = store.accountsError {
+            AnalyticsSectionError(text: error).coverCard()
+        } else if store.accounts.isEmpty, store.isLoading {
+            AnalyticsLoadingCards()
+        } else if store.accounts.isEmpty {
+            CoverEmptyState(
+                symbol: "envelope.fill",
+                title: "No mailboxes yet",
+                message: "Connect a mailbox and its health shows up here."
+            )
+        } else {
+            VStack(alignment: .leading, spacing: 16) {
+                summaryCard.reveal(shown, 0)
+                listCard.reveal(shown, 1)
+            }
+            #if DEBUG
+            .navigationDestination(isPresented: $debugOpen) {
+                if let first = store.accounts.last { AnalyticsAccountDetailView(account: first) }
+            }
+            .task { debugOpen = ProcessInfo.processInfo.environment["WARMBLY_DEBUG_ANALYTICS_ACCOUNT"] != nil }
+            #endif
+        }
+    }
+
+    private var counts: (healthy: Int, warning: Int, error: Int) {
+        let accounts = store.accounts
+        return (
+            accounts.count { $0.health?.status == "healthy" },
+            accounts.count { $0.health?.status == "warning" },
+            accounts.count { $0.health?.status == "error" }
+        )
+    }
+
+    private var averageScore: Int {
+        let scores = store.accounts.compactMap { $0.health?.score }
+        guard !scores.isEmpty else { return 0 }
+        return scores.reduce(0, +) / scores.count
+    }
+
+    private var summaryCard: some View {
+        let counts = counts
+        let total = max(1, store.accounts.count)
+        let segments: [(String, Int, Color)] = [
+            ("Healthy", counts.healthy, WTheme.positive),
+            ("Warning", counts.warning, WTheme.warning),
+            ("Error", counts.error, WTheme.negative),
+        ]
+        let average = averageScore
+        let tone: Tone = average >= 80 ? .emerald : average >= 60 ? .amber : .rose
+        return VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Average health")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(WTheme.inkSecondary)
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        CountUpText(value: shown ? Double(average) : 0, format: { "\(Int($0.rounded()))" })
+                            .font(.system(size: 40, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(WTheme.ink)
+                            .animation(.easeOut(duration: 1.1), value: shown)
+                        Text("/ 100")
+                            .font(.system(size: 15))
+                            .foregroundStyle(WTheme.inkTertiary)
                     }
-                    if let warning = counts.warningAccounts, warning > 0 {
-                        StatusPill(text: "\(warning)", tone: .amber)
+                    Text("across \(store.accounts.count) \(store.accounts.count == 1 ? "mailbox" : "mailboxes")")
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(WTheme.inkTertiary)
+                }
+                Spacer()
+                SweepRing(fraction: Double(average) / 100, color: tone.color, shown: shown, lineWidth: 9) {
+                    Image(systemName: tone == .emerald ? "checkmark" : "exclamationmark")
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundStyle(tone.color)
+                        .symbolEffect(.bounce, value: shown)
+                }
+                .frame(width: 88, height: 88)
+            }
+            GeometryReader { proxy in
+                HStack(spacing: 3) {
+                    ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
+                        if segment.1 > 0 {
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(segment.2)
+                                .frame(width: shown ? max(6, (proxy.size.width - 6) * CGFloat(segment.1) / CGFloat(total)) : 0)
+                                .animation(.spring(response: 0.8, dampingFraction: 0.82).delay(0.25 + Double(index) * 0.1), value: shown)
+                        }
                     }
-                    if let bad = counts.errorAccounts, bad > 0 {
-                        StatusPill(text: "\(bad)", tone: .rose)
-                    }
+                    Spacer(minLength: 0)
                 }
             }
+            .frame(height: 10)
+            HStack(spacing: 16) {
+                ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                    HStack(spacing: 6) {
+                        Circle().fill(segment.2).frame(width: 7, height: 7)
+                        Text("\(segment.1) \(segment.0.lowercased())")
+                            .font(.system(size: 13.5))
+                            .monospacedDigit()
+                            .foregroundStyle(segment.1 > 0 ? WTheme.ink : WTheme.inkTertiary)
+                    }
+                }
+                Spacer()
+            }
         }
-        if let error, accounts.isEmpty {
-            AnalyticsSectionError(text: error)
-                .analyticsPlainRow(separator: .hidden)
-        } else if accounts.isEmpty, isLoading {
-            // First load in flight; don't flash the empty message.
-            AnalyticsSectionLoading()
-                .analyticsPlainRow(separator: .hidden)
-        } else if accounts.isEmpty {
-            Text("No mailboxes connected yet.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .padding(.vertical, 6)
-                .analyticsPlainRow(separator: .hidden)
-        } else {
-            ForEach(accounts) { account in
+        .coverCard()
+    }
+
+    private var listCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(store.accounts.enumerated()), id: \.element.id) { index, account in
+                if index > 0 { Hairline().padding(.leading, 66) }
                 NavigationLink {
                     AnalyticsAccountDetailView(account: account)
                 } label: {
-                    AnalyticsAccountRowView(account: account)
+                    AnalyticsAccountRowView(account: account, shown: shown, index: index)
                 }
-                .analyticsPlainRow(separatorLeading: 66)
+                .buttonStyle(MoreRowPressStyle())
             }
         }
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(WTheme.groupedCard)
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 }
 
 struct AnalyticsAccountRowView: View {
     let account: AccountHealthRow
-
-    private var usage: String {
-        guard let usage = account.dailyUsage else { return "" }
-        var parts: [String] = []
-        if let limit = usage.campaignLimit, limit > 0 {
-            parts.append("\(usage.campaignSent ?? 0) of \(limit) / day")
-        }
-        if let warmupLimit = usage.warmupLimit, warmupLimit > 0 {
-            parts.append("warmup \(usage.warmupSent ?? 0) of \(warmupLimit)")
-        }
-        return parts.joined(separator: " · ")
-    }
+    var shown = true
+    var index = 0
 
     var body: some View {
-        HStack(spacing: 12) {
-            IconTile(symbol: "envelope", tone: AnalyticsToneMap.health(account.health?.status), size: 38)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(account.email ?? "mailbox")
-                    .font(.body.weight(.medium))
+        let tone = AnalyticsToneMap.health(account.health?.status)
+        let usage = account.dailyUsage
+        let limit = max(0, usage?.campaignLimit ?? 0)
+        let sent = usage?.campaignSent ?? 0
+        let issues = account.errors?.count ?? 0
+        return HStack(spacing: 12) {
+            MailboxAvatar(email: account.email ?? "", avatarURL: account.avatarURL, brand: account.resolvedBrand, seed: account.id, size: 40)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(account.email ?? "Mailbox")
+                    .font(.system(size: 15.5, weight: .medium))
+                    .foregroundStyle(WTheme.ink)
                     .lineLimit(1)
-                HStack(spacing: 4) {
-                    if let provider = account.provider, !provider.isEmpty {
-                        Text(provider)
-                    }
-                    if !usage.isEmpty {
-                        if account.provider?.isEmpty == false { Text("·") }
-                        Text(usage).monospacedDigit()
+                HStack(spacing: 6) {
+                    Text(account.providerLabel)
+                    if issues > 0 {
+                        Text("·")
+                        Text("\(issues) \(issues == 1 ? "issue" : "issues")")
+                            .foregroundStyle(WTheme.negative)
+                    } else if limit > 0 {
+                        Text("·")
+                        Text("\(sent)/\(limit) today").monospacedDigit()
                     }
                 }
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 13))
+                .foregroundStyle(WTheme.inkSecondary)
                 .lineLimit(1)
-            }
-            Spacer()
-            StatusPill(
-                text: account.health?.status ?? "unknown",
-                tone: AnalyticsToneMap.health(account.health?.status)
-            )
-            if let score = account.health?.score {
-                HealthRing(score: score, tone: AnalyticsToneMap.health(account.health?.status), size: 34)
-            }
-        }
-        .padding(.vertical, 9)
-    }
-}
-
-// MARK: - Top campaigns
-
-struct AnalyticsTopCampaignsSection: View {
-    let campaigns: [AnalyticsTopCampaign]
-
-    private func statusTone(_ raw: String?) -> Tone {
-        switch raw {
-        case "active": .emerald
-        case "paused": .amber
-        case "draft": .slate
-        default: .slate
-        }
-    }
-
-    var body: some View {
-        if !campaigns.isEmpty {
-            AnalyticsSectionCaption("Top campaigns")
-            ForEach(campaigns) { campaign in
-                HStack(spacing: 12) {
-                    IconTile(symbol: "megaphone", tone: statusTone(campaign.status), size: 36)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(campaign.name ?? "Untitled campaign")
-                            .font(.body.weight(.medium))
-                            .lineLimit(1)
-                        Text("\(WFormat.compact(campaign.emailsSent ?? 0)) sent · \(AnalyticsFmt.rate(campaign.openRate)) open · \(AnalyticsFmt.rate(campaign.replyRate)) reply")
-                            .font(.footnote)
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    Spacer()
-                    StatusPill(
-                        text: campaign.status ?? "unknown",
-                        tone: statusTone(campaign.status),
-                        pulsing: campaign.status == "active"
-                    )
+                if limit > 0, sent > 0 {
+                    GrowBar(fraction: Double(sent) / Double(limit), color: WTheme.accent, shown: shown, delay: 0.2 + Double(index) * 0.05, height: 4)
+                        .frame(maxWidth: 160)
                 }
-                .padding(.vertical, 9)
-                .analyticsPlainRow(separatorLeading: 64)
             }
+            Spacer(minLength: 6)
+            HealthRing(score: account.health?.score, tone: tone, size: 38)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(WTheme.inkTertiary)
         }
-    }
-}
-
-// MARK: - Recent activity
-
-struct AnalyticsActivitySection: View {
-    let items: [AnalyticsActivityItem]
-
-    private func icon(_ type: String?) -> String {
-        switch type {
-        case "sent": "paperplane"
-        case "opened": "envelope.open"
-        case "clicked": "link"
-        case "replied": "arrowshape.turn.up.left"
-        case "bounced": "exclamationmark.triangle"
-        default: "bolt"
-        }
-    }
-
-    private func tone(_ type: String?) -> Tone {
-        switch type {
-        case "sent": .slate
-        case "opened": .sky
-        case "clicked": .indigo
-        case "replied": .emerald
-        case "bounced": .rose
-        default: .slate
-        }
-    }
-
-    var body: some View {
-        if !items.isEmpty {
-            AnalyticsSectionCaption("Recent activity")
-            ForEach(Array(items.prefix(12).enumerated()), id: \.offset) { _, item in
-                HStack(spacing: 12) {
-                    IconTile(symbol: icon(item.type), tone: tone(item.type), size: 34)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(item.contactEmail ?? "unknown recipient")
-                            .font(.body.weight(.medium))
-                            .lineLimit(1)
-                        Text("\(item.type ?? "event") · \(item.campaignName ?? "campaign")")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    Spacer()
-                    if let timestamp = item.timestamp {
-                        Text(WFormat.relative(timestamp))
-                            .font(.footnote)
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.vertical, 8)
-                .analyticsPlainRow(separatorLeading: 62)
-            }
-        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
     }
 }

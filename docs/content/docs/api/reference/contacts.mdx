@@ -82,6 +82,16 @@ Returns a `data` array of contacts plus a `pagination` envelope. Paginate by pas
       "is_catch_all": false,
       "mail_host": "gmail",
       "esp_provider": "gmail",
+      "outreach": {
+        "sent": 3,
+        "opened": 2,
+        "clicked": 0,
+        "replied": 1,
+        "bounced": 0,
+        "last_sent_at": "2026-06-08T09:12:00Z",
+        "last_opened_at": "2026-06-08T10:40:00Z",
+        "last_replied_at": "2026-06-09T07:05:00Z"
+      },
       "updated_at": "2026-06-10T12:00:00Z",
       "created_at": "2026-05-01T09:30:00Z"
     }
@@ -139,6 +149,10 @@ On the first page (no `cursor`), the response includes a `counts` object with or
   }
 }
 ```
+
+### Outreach
+
+Every contact carries `outreach`, its engagement across every campaign: how many emails reached it (`sent`), and how many of those it `opened`, `clicked`, `replied` to or `bounced`, with the time each last happened (`last_sent_at`, `last_opened_at`, `last_clicked_at`, `last_replied_at`, `last_bounced_at`, absent until the first one). These are the same counts the [contact 360](#get-a-contact) reports under `engagement`. Opens count a person only; a mail client fetching the message automatically is not counted.
 
 ## Create contacts
 

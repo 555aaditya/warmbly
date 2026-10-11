@@ -8,6 +8,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"github.com/warmbly/warmbly/internal/app/appattest"
 	tokenpkg "github.com/warmbly/warmbly/internal/app/token"
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
@@ -20,7 +21,7 @@ import (
 
 func (s *authService) ResetPasswordStart(ctx context.Context, data *ResetPasswordStart, ipaddr string) *errx.Error {
 	// The caller's 400, not an incident. See LoginStart.
-	if err := s.captcha.Verify(ctx, data.Turnstile, ipaddr); err != nil {
+	if err := s.verifyHuman(ctx, appattest.ActionResetPassword, data.Turnstile, data.AppAttest, ipaddr); err != nil {
 		return err
 	}
 
@@ -138,7 +139,7 @@ func (s *authService) sendResetEmailWithRetry(ctx context.Context, to, subject, 
 
 func (s *authService) ResetPasswordConfirm(ctx context.Context, data *ResetPasswordConfirm, session, ipaddr string) *errx.Error {
 	// The caller's 400, not an incident. See LoginStart.
-	if err := s.captcha.Verify(ctx, data.Turnstile, ipaddr); err != nil {
+	if err := s.verifyHuman(ctx, appattest.ActionResetPasswordConfirm, data.Turnstile, data.AppAttest, ipaddr); err != nil {
 		return err
 	}
 

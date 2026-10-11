@@ -39,11 +39,12 @@ struct ContactFiltersSheet: View {
                     }
                 }
                 item {
+                    let order = draft.sortBy.orderLabels
                     menuRow(
                         "Order",
-                        value: draft.reverse ? "Oldest first" : "Newest first",
-                        options: [("Newest first", !draft.reverse), ("Oldest first", draft.reverse)]
-                    ) { picked in draft.reverse = (picked == "Oldest first") }
+                        value: draft.reverse ? order.reversed : order.natural,
+                        options: [(order.natural, !draft.reverse), (order.reversed, draft.reverse)]
+                    ) { picked in draft.reverse = (picked == order.reversed) }
                 }
 
                 eyebrow("Filter")
@@ -76,28 +77,29 @@ struct ContactFiltersSheet: View {
                 ForEach($draft.customFields) { $field in
                     customFieldRow($field)
                         .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 10, trailing: 16))
-                        .listRowBackground(Color(.systemBackground))
+                        .listRowBackground(WTheme.canvas)
                 }
                 .onDelete { draft.customFields.remove(atOffsets: $0) }
                 item {
                     Button {
                         withAnimation(.snappy) { draft.customFields.append(ContactFieldFilter()) }
                     } label: {
-                        Label("Add custom field", systemImage: "plus.circle.fill")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(WTheme.accent)
+                        Label("Add custom field", systemImage: "plus")
+                            .font(.system(size: 13.5, weight: .medium))
                     }
+                    .buttonStyle(OutlineButtonStyle(size: .small))
                 }
                 Text("Match by any custom property, like a job title or plan.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(WTheme.inkTertiary)
                     .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 24, trailing: 20))
                     .listRowSeparator(.hidden)
-                    .listRowBackground(Color(.systemBackground))
+                    .listRowBackground(WTheme.canvas)
             }
             .listStyle(.plain)
+            .listRowSeparatorTint(WTheme.hairline)
             .scrollContentBackground(.hidden)
-            .background(Color(.systemBackground))
+            .background(WTheme.canvas)
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Filters")
             .navigationBarTitleDisplayMode(.inline)
@@ -136,14 +138,14 @@ struct ContactFiltersSheet: View {
         EyebrowLabel(title)
             .listRowInsets(EdgeInsets(top: 22, leading: 20, bottom: 6, trailing: 20))
             .listRowSeparator(.hidden)
-            .listRowBackground(Color(.systemBackground))
+            .listRowBackground(WTheme.canvas)
     }
 
     private func item<V: View>(@ViewBuilder _ content: () -> V) -> some View {
         content()
             .frame(maxWidth: .infinity, alignment: .leading)
             .listRowInsets(EdgeInsets(top: 6, leading: 20, bottom: 6, trailing: 20))
-            .listRowBackground(Color(.systemBackground))
+            .listRowBackground(WTheme.canvas)
     }
 
     // MARK: Rows
@@ -151,7 +153,7 @@ struct ContactFiltersSheet: View {
     /// A row whose value is a native dropdown menu (label + value + chevrons).
     private func menuRow(_ label: String, value: String, options: [(String, Bool)], onPick: @escaping (String) -> Void) -> some View {
         HStack {
-            Text(label).font(.subheadline)
+            Text(label).font(.system(size: 15)).foregroundStyle(WTheme.ink)
             Spacer(minLength: 8)
             Menu {
                 ForEach(options, id: \.0) { title, selected in
@@ -160,10 +162,7 @@ struct ContactFiltersSheet: View {
                     }
                 }
             } label: {
-                HStack(spacing: 4) {
-                    Text(value).font(.subheadline.weight(.medium)).foregroundStyle(WTheme.accent)
-                    Image(systemName: "chevron.up.chevron.down").font(.system(size: 11, weight: .semibold)).foregroundStyle(.tertiary)
-                }
+                FilterValueChip(text: value)
             }
         }
         .frame(minHeight: 34)
@@ -172,7 +171,7 @@ struct ContactFiltersSheet: View {
     /// Category multi-select as a dropdown of checkable items.
     private var categoriesRow: some View {
         HStack {
-            Text("Categories").font(.subheadline)
+            Text("Categories").font(.system(size: 15)).foregroundStyle(WTheme.ink)
             Spacer(minLength: 8)
             Menu {
                 if !draft.categoryIDs.isEmpty {
@@ -191,13 +190,7 @@ struct ContactFiltersSheet: View {
                     }
                 }
             } label: {
-                HStack(spacing: 4) {
-                    Text(draft.categoryIDs.isEmpty ? "All" : "\(draft.categoryIDs.count) selected")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(WTheme.accent)
-                        .contentTransition(.numericText())
-                    Image(systemName: "chevron.up.chevron.down").font(.system(size: 11, weight: .semibold)).foregroundStyle(.tertiary)
-                }
+                FilterValueChip(text: draft.categoryIDs.isEmpty ? "All" : "\(draft.categoryIDs.count) selected")
             }
         }
         .frame(minHeight: 34)
@@ -206,19 +199,18 @@ struct ContactFiltersSheet: View {
     private func rangeRow(_ label: String, value: Binding<Int?>) -> some View {
         let enabled = value.wrappedValue != nil
         return HStack(spacing: 12) {
-            Text(label).font(.subheadline).foregroundStyle(enabled ? .primary : .secondary)
+            Text(label).font(.system(size: 15)).foregroundStyle(enabled ? WTheme.ink : WTheme.inkSecondary)
             Spacer(minLength: 8)
             if enabled {
                 MiniStepper(value: Binding(get: { value.wrappedValue ?? 0 }, set: { value.wrappedValue = $0 }), range: 0 ... 100)
                     .transition(.scale.combined(with: .opacity))
-                Text("campaign\((value.wrappedValue ?? 0) == 1 ? "" : "s")").font(.caption).foregroundStyle(.tertiary)
+                Text("campaign\((value.wrappedValue ?? 0) == 1 ? "" : "s")").font(WFont.meta(11)).foregroundStyle(WTheme.inkTertiary)
             }
             Toggle("", isOn: Binding(
                 get: { enabled },
                 set: { on in withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) { value.wrappedValue = on ? (value.wrappedValue ?? 1) : nil } }
             ))
             .labelsHidden()
-            .tint(WTheme.accent)
         }
         .frame(minHeight: 34)
     }
@@ -226,7 +218,7 @@ struct ContactFiltersSheet: View {
     private func dateRow(_ label: String, value: Binding<Date?>) -> some View {
         let enabled = value.wrappedValue != nil
         return HStack(spacing: 12) {
-            Text(label).font(.subheadline).foregroundStyle(enabled ? .primary : .secondary)
+            Text(label).font(.system(size: 15)).foregroundStyle(enabled ? WTheme.ink : WTheme.inkSecondary)
             Spacer(minLength: 8)
             if enabled {
                 DatePicker("", selection: Binding(get: { value.wrappedValue ?? Date() }, set: { value.wrappedValue = $0 }), displayedComponents: .date)
@@ -238,7 +230,6 @@ struct ContactFiltersSheet: View {
                 set: { on in withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) { value.wrappedValue = on ? (value.wrappedValue ?? Date()) : nil } }
             ))
             .labelsHidden()
-            .tint(WTheme.accent)
         }
         .frame(minHeight: 34)
     }
@@ -251,7 +242,8 @@ struct ContactFiltersSheet: View {
                 TextField("Field name", text: field.name)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                    .font(.subheadline.weight(.medium))
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(WTheme.ink)
                 Menu {
                     ForEach(ContactFilterType.allCases, id: \.self) { type in
                         Button { field.wrappedValue.type = type } label: {
@@ -259,21 +251,39 @@ struct ContactFiltersSheet: View {
                         }
                     }
                 } label: {
-                    HStack(spacing: 3) {
-                        Text(field.wrappedValue.type.label).font(.caption.weight(.medium))
-                        Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold))
-                    }
-                    .foregroundStyle(WTheme.accent)
+                    FilterValueChip(text: field.wrappedValue.type.label)
                 }
             }
             TextField("Value to match", text: field.value)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 14))
+                .foregroundStyle(WTheme.inkSecondary)
         }
     }
 }
 
-/// Two round themed steppers around a monospaced value.
+/// Hairline value chip with up/down chevrons, the label of a dropdown menu.
+private struct FilterValueChip: View {
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(text)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(WTheme.ink)
+                .contentTransition(.numericText())
+                .lineLimit(1)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(WTheme.inkTertiary)
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 28)
+        .background(WTheme.raised, in: Capsule())
+        .overlay(Capsule().strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
+    }
+}
+
+/// Two round hairline steppers around a monospaced value.
 private struct MiniStepper: View {
     @Binding var value: Int
     let range: ClosedRange<Int>
@@ -282,7 +292,8 @@ private struct MiniStepper: View {
         HStack(spacing: 8) {
             button("minus") { if value > range.lowerBound { value -= 1 } }
             Text("\(value)")
-                .font(.subheadline.weight(.semibold))
+                .font(WFont.meta(14, weight: .medium))
+                .foregroundStyle(WTheme.ink)
                 .monospacedDigit()
                 .frame(minWidth: 22)
                 .contentTransition(.numericText())
@@ -295,10 +306,11 @@ private struct MiniStepper: View {
             withAnimation(.snappy) { action() }
         } label: {
             Image(systemName: symbol)
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(WTheme.accent)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(WTheme.ink)
                 .frame(width: 28, height: 28)
-                .background(Tone.sky.background, in: Circle())
+                .background(WTheme.raised, in: Circle())
+                .overlay(Circle().strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
         }
         .buttonStyle(TapScaleStyle())
     }

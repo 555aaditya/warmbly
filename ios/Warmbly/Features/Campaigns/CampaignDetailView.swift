@@ -65,11 +65,11 @@ final class CampaignDetailStore {
     }
 }
 
-/// Campaign hub: sky hero with status + start/pause, then one flat, full-bleed
-/// sheet (no cards) — headline volume in the hero, rates and secondary counts
-/// as bare stat columns, a live chart, then hairline-separated rows to browse
-/// (Leads / Sequence / Senders), tune sending inline, and open Schedule /
-/// Settings. Sub-pages push on the Campaigns tab's NavigationStack.
+/// Campaign hub: a canvas header with status + start/pause and headline
+/// volume, then a flat full-bleed list: rates as bare stat columns, a live
+/// chart, and hairline rows to browse (Leads / Sequence / Senders), tune
+/// sending inline, and open Schedule / Settings. Sub-pages push on the
+/// Campaigns tab's NavigationStack.
 struct CampaignDetailView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(\.dismiss) private var dismiss
@@ -85,6 +85,7 @@ struct CampaignDetailView: View {
     @State private var deleteError: String?
     @State private var dailyLimit: Int = 50
     @State private var limitSaveTask: Task<Void, Never>?
+    @State private var appeared = false
 
     init(campaign: Campaign) {
         _store = State(initialValue: CampaignDetailStore(campaign: campaign))
@@ -92,40 +93,35 @@ struct CampaignDetailView: View {
     }
 
     private var campaign: Campaign { store.campaign }
+    /// Numbers count up and the chart draws once the first load lands.
+    private var shown: Bool { appeared && overviewStore.hasLoaded }
     private var presenceKey: String { "campaign:\(campaign.id)" }
     private var canManage: Bool { env.session.can(.manageCampaigns) }
 
-    private var sheetShape: UnevenRoundedRectangle {
-        UnevenRoundedRectangle(topLeadingRadius: 26, topTrailingRadius: 26, style: .continuous)
-    }
-
-    /// Content leading where row text starts (16 inset + 34 tile + 12 gap), so
+    /// Content leading where row text starts (20 inset + 34 tile + 12 gap), so
     /// hairlines tuck under the text column, Gmail-style.
-    private static let rowTextLeading: CGFloat = 62
+    private static let rowTextLeading: CGFloat = 66
 
     var body: some View {
         VStack(spacing: 0) {
             hero
                 .frame(maxWidth: .infinity, alignment: .leading)
+            Hairline()
             hubList
-                .clipShape(sheetShape)
-                .background(
-                    sheetShape
-                        .fill(Color(.systemBackground))
-                        .ignoresSafeArea(edges: .bottom)
-                        .shadow(color: .black.opacity(0.12), radius: 18, y: -4)
-                )
         }
         .background(alignment: .top) {
-            AirSkyWash().ignoresSafeArea(edges: .top)
+            AirSkyWash()
+                .frame(height: 320)
+                .ignoresSafeArea(edges: .top)
         }
+        .background(WTheme.canvas)
         .toolbarBackground(.hidden, for: .navigationBar)
-        .toolbarColorScheme(.dark, for: .navigationBar)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarContent }
         .presenceResource(presenceKey)
         .task {
+            appeared = true
             await store.refresh(env.api)
             dailyLimit = store.campaign.dailyLimit ?? 50
             // Counts for the browse rows load alongside the analytics.
@@ -197,68 +193,59 @@ struct CampaignDetailView: View {
     // MARK: Hero
 
     private var hero: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 10) {
-                VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 10) {
+                    EyebrowLabel("Campaign")
                     Text(campaign.name)
-                        .font(.title2.bold())
-                        .foregroundStyle(.white)
+                        .displayFont(28)
+                        .foregroundStyle(WTheme.ink)
                         .lineLimit(2)
                         .minimumScaleFactor(0.75)
                     HStack(spacing: 8) {
                         heroStatusPill
                         Text(campaign.scheduleSummary)
-                            .font(.footnote)
-                            .monospacedDigit()
-                            .foregroundStyle(.white.opacity(0.72))
+                            .font(WFont.meta(11.5))
+                            .foregroundStyle(WTheme.inkTertiary)
                             .lineLimit(1)
                     }
                     ResourceViewers(resource: presenceKey)
                 }
                 Spacer(minLength: 8)
                 toggleButton
+                    .padding(.top, 18)
             }
             heroStats
         }
         .padding(.horizontal, 20)
-        .padding(.top, 2)
+        .padding(.top, 4)
         .padding(.bottom, 18)
     }
 
     private var heroStatusPill: some View {
         let info = campaign.statusInfo
-        return HStack(spacing: 5) {
-            Circle()
-                .fill(info.tone.color)
-                .frame(width: 7, height: 7)
-                .modifier(PingEffect(active: info.isLive, color: info.tone.color))
-            Text(info.label)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white)
+        return HStack(spacing: 6) {
+            LiveDot(color: info.tone.color, size: 6, pulsing: info.isLive)
+            Text(info.label.prefix(1).uppercased() + info.label.dropFirst())
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(WTheme.ink)
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 4)
-        .background(.white.opacity(0.16), in: Capsule())
+        .padding(.horizontal, 10)
+        .frame(height: 26)
+        .background(WTheme.raised, in: Capsule())
+        .overlay(Capsule().strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
     }
 
+    /// How far through its leads the campaign is, split by how each ended.
+    @ViewBuilder
     private var heroStats: some View {
-        let summary = overviewStore.analytics?.summary
-        return HStack(spacing: 10) {
-            AirStatChip(
-                value: WFormat.compact(summary?.emailsSent ?? 0),
-                label: "Sent",
-                symbol: "paperplane.fill"
-            )
-            AirStatChip(
-                value: WFormat.compact(summary?.uniqueOpens ?? 0),
-                label: "Opens",
-                symbol: "envelope.open.fill"
-            )
-            AirStatChip(
-                value: WFormat.compact(summary?.replies ?? 0),
-                label: "Replies",
-                symbol: "arrowshape.turn.up.left.fill"
-            )
+        if let counts = overviewStore.leadCounts, (counts.total ?? 0) > 0 {
+            CampaignProgressHero(counts: counts, live: campaign.statusInfo.isLive)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+        } else if overviewStore.hasLoaded {
+            Text("No leads yet. Add them from Leads below and progress shows here.")
+                .font(.system(size: 14))
+                .foregroundStyle(WTheme.inkSecondary)
         }
     }
 
@@ -278,31 +265,31 @@ struct CampaignDetailView: View {
         if env.session.can(.sendCampaigns), let action = toggleAction {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 let remaining = cooldownRemaining(at: context.date)
-                Button {
-                    confirmToggle = true
-                } label: {
-                    Group {
-                        if store.isToggling {
-                            ProgressView()
-                                .controlSize(.small)
-                                .tint(.white)
-                        } else if remaining > 0 {
-                            Label("wait \(remaining)s", systemImage: "clock")
-                                .monospacedDigit()
-                        } else {
-                            Label(action.title, systemImage: action.icon)
-                        }
+                let label = Group {
+                    if store.isToggling {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(action.isStart ? WTheme.inkInverse : WTheme.ink)
+                    } else if remaining > 0 {
+                        Label("wait \(remaining)s", systemImage: "clock")
+                            .font(WFont.meta(12.5, weight: .medium))
+                    } else {
+                        Label(action.title, systemImage: action.icon)
                     }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 15)
-                    .padding(.vertical, 9)
-                    .background(.white.opacity(0.18), in: Capsule())
-                    .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
                 }
-                .buttonStyle(TapScaleStyle())
+                .labelStyle(ToggleLabelStyle())
+                // Start/resume is the primary ink pill; pause is a hairline pill.
+                Group {
+                    if action.isStart {
+                        Button { confirmToggle = true } label: { label }
+                            .buttonStyle(InkButtonStyle(size: .small))
+                    } else {
+                        Button { confirmToggle = true } label: { label }
+                            .buttonStyle(OutlineButtonStyle(size: .small))
+                            .opacity(remaining > 0 && !store.isToggling ? 0.6 : 1)
+                    }
+                }
                 .disabled(store.isToggling || remaining > 0)
-                .opacity(remaining > 0 && !store.isToggling ? 0.6 : 1)
             }
         }
     }
@@ -370,7 +357,7 @@ struct CampaignDetailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .listRowInsets(EdgeInsets())
             .listRowSeparator(.hidden)
-            .listRowBackground(Color(.systemBackground))
+            .listRowBackground(WTheme.canvas)
     }
 
     private func plainRow<Content: View>(
@@ -380,8 +367,9 @@ struct CampaignDetailView: View {
         content()
             .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
             .listRowSeparator(separator)
+            .listRowSeparatorTint(WTheme.hairline)
             .alignmentGuide(.listRowSeparatorLeading) { _ in Self.rowTextLeading }
-            .listRowBackground(Color(.systemBackground))
+            .listRowBackground(WTheme.canvas)
     }
 
     // MARK: Performance
@@ -389,33 +377,36 @@ struct CampaignDetailView: View {
     @ViewBuilder
     private var performanceSection: some View {
         let summary = overviewStore.analytics?.summary
-        sectionHeader("Performance", top: 14)
+        if overviewStore.hasLoaded {
+            plainRow(separator: .hidden) {
+                CampaignTrendSection(days: overviewStore.days, shown: shown)
+                    .padding(.top, 16)
+                    .padding(.bottom, 6)
+                    .reveal(shown, 0)
+            }
+        }
+        sectionHeader("Performance")
         plainRow(separator: .hidden) {
             let bounce = summary?.bounceRate ?? 0
             LazyVGrid(columns: Self.statColumns, alignment: .leading, spacing: 16) {
-                miniStat("Open rate", rate(summary?.openRate), tone: .sky)
-                miniStat("Reply rate", rate(summary?.replyRate), tone: .emerald)
-                miniStat("Positive rate", rate(summary?.positiveReplyRate), tone: .emerald)
-                miniStat("Bounce rate", rate(summary?.bounceRate), tone: bounce >= 5 ? .rose : (bounce >= 2 ? .amber : nil))
-                miniStat("Clicks", WFormat.compact(summary?.uniqueClicks ?? 0))
-                miniStat("Interested", WFormat.compact(summary?.interestedLeads ?? 0))
-                miniStat("Positive", WFormat.compact(summary?.positiveReplies ?? 0))
-                miniStat("Unsubs", WFormat.compact(summary?.unsubscribes ?? 0))
-                miniStat("In queue", WFormat.compact(summary?.emailsPending ?? 0))
+                miniStat("Open rate", summary?.openRate, percent: true, tone: .sky, index: 0)
+                miniStat("Reply rate", summary?.replyRate, percent: true, tone: .emerald, index: 1)
+                miniStat("Positive rate", summary?.positiveReplyRate, percent: true, tone: .emerald, index: 2)
+                miniStat("Bounce rate", summary?.bounceRate, percent: true, tone: bounce >= 5 ? .rose : (bounce >= 2 ? .amber : nil), index: 3)
+                miniStat("Clicks", (summary?.uniqueClicks).map(Double.init), index: 4)
+                miniStat("Interested", (summary?.interestedLeads).map(Double.init), index: 5)
+                miniStat("Positive", (summary?.positiveReplies).map(Double.init), index: 6)
+                miniStat("Unsubs", (summary?.unsubscribes).map(Double.init), index: 7)
+                miniStat("In queue", (summary?.emailsPending).map(Double.init), index: 8)
             }
             .padding(.vertical, 12)
-        }
-        if overviewStore.hasLoaded, !overviewStore.daily.isEmpty {
-            plainRow(separator: .hidden) {
-                CampaignDailyChartRow(daily: overviewStore.daily)
-            }
         }
         if let machine = summary?.machineOpens, machine > 0 {
             plainRow(separator: .hidden) {
                 Text("\(WFormat.compact(machine)) automated opens (Apple Mail Privacy et al.) are excluded from the open rate.")
-                    .font(.footnote)
+                    .font(.system(size: 12.5))
                     .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(WTheme.inkTertiary)
                     .padding(.bottom, 8)
             }
         }
@@ -427,22 +418,23 @@ struct CampaignDetailView: View {
         GridItem(.flexible(), alignment: .leading),
     ]
 
-    private func miniStat(_ label: String, _ value: String, tone: Tone? = nil) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+    /// A stat that counts up from zero on arrival, one beat after the last.
+    private func miniStat(_ label: String, _ value: Double?, percent: Bool = false, tone: Tone? = nil, index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
             EyebrowLabel(label)
-            Text(value)
-                .font(.system(size: 19, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(tone?.color ?? Color.primary)
-                .contentTransition(.numericText())
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
+            CountUpText(value: shown ? (value ?? 0) : 0) { current in
+                percent ? String(format: "%.1f%%", current) : WFormat.compact(Int(current.rounded()))
+            }
+            .font(.system(size: 21, weight: .regular))
+            .tracking(-0.7)
+            .monospacedDigit()
+            .foregroundStyle(tone?.color ?? WTheme.ink)
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+            .animation(.easeOut(duration: 1).delay(0.3 + Double(index) * 0.05), value: shown)
+            .animation(.snappy, value: value)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func rate(_ value: Double?) -> String {
-        String(format: "%.1f%%", value ?? 0)
     }
 
     // MARK: Browse
@@ -457,21 +449,20 @@ struct CampaignDetailView: View {
                 showLeads = true
             } label: {
                 HStack(spacing: 12) {
-                    IconTile(symbol: "person.2.fill", tone: .sky, size: 34)
+                    rowTile("person.2")
                     Text("Leads")
-                        .font(.body.weight(.medium))
-                        .foregroundStyle(.primary)
+                        .font(.system(size: 15.5))
+                        .foregroundStyle(WTheme.ink)
                     Spacer(minLength: 8)
                     if let value = overviewStore.analytics?.summary?.totalContacts.map(WFormat.compact) {
                         Text(value)
-                            .font(.footnote)
-                            .monospacedDigit()
-                            .foregroundStyle(.tertiary)
+                            .font(WFont.meta(12))
+                            .foregroundStyle(WTheme.inkTertiary)
                             .contentTransition(.numericText())
                     }
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.tertiary)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(WTheme.inkTertiary)
                 }
                 .padding(.vertical, 11)
                 .contentShape(Rectangle())
@@ -480,7 +471,7 @@ struct CampaignDetailView: View {
         }
         plainRow {
             navRow(
-                icon: "list.number", tone: .indigo, title: "Sequence",
+                icon: "list.number", title: "Sequence",
                 value: stepsStore.hasLoaded ? "\(stepsStore.steps.count) step\(stepsStore.steps.count == 1 ? "" : "s")" : nil
             ) {
                 CampaignSequencePage(campaignID: campaign.id, store: stepsStore)
@@ -488,7 +479,7 @@ struct CampaignDetailView: View {
         }
         plainRow {
             navRow(
-                icon: "tray.full.fill", tone: .emerald, title: "Senders",
+                icon: "tray.full", title: "Senders",
                 value: sendersStore.hasLoaded ? WFormat.compact(sendersStore.senders.count) : nil
             ) {
                 CampaignSendersPageView(campaign: campaign, store: sendersStore)
@@ -498,7 +489,6 @@ struct CampaignDetailView: View {
 
     private func navRow<Destination: View>(
         icon: String,
-        tone: Tone,
         title: String,
         value: String?,
         @ViewBuilder destination: @escaping () -> Destination
@@ -507,15 +497,15 @@ struct CampaignDetailView: View {
             destination()
         } label: {
             HStack(spacing: 12) {
-                IconTile(symbol: icon, tone: tone, size: 34)
+                rowTile(icon)
                 Text(title)
-                    .font(.body.weight(.medium))
+                    .font(.system(size: 15.5))
+                    .foregroundStyle(WTheme.ink)
                 Spacer(minLength: 8)
                 if let value {
                     Text(value)
-                        .font(.footnote)
-                        .monospacedDigit()
-                        .foregroundStyle(.tertiary)
+                        .font(WFont.meta(12))
+                        .foregroundStyle(WTheme.inkTertiary)
                         .contentTransition(.numericText())
                 }
             }
@@ -531,13 +521,14 @@ struct CampaignDetailView: View {
         sectionHeader("Sending")
         plainRow {
             HStack(spacing: 12) {
-                IconTile(symbol: "gauge.with.dots.needle.50percent", tone: .amber, size: 34)
+                rowTile("gauge.with.dots.needle.50percent")
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Daily limit")
-                        .font(.body.weight(.medium))
+                        .font(.system(size: 15.5))
+                        .foregroundStyle(WTheme.ink)
                     Text("Emails per mailbox each day")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 13))
+                        .foregroundStyle(WTheme.inkSecondary)
                 }
                 Spacer(minLength: 8)
                 stepper
@@ -546,21 +537,21 @@ struct CampaignDetailView: View {
         }
         settingToggle(
             "Stop on reply", subtitle: "Pause a lead when they answer",
-            icon: "hand.raised.fill", tone: .emerald,
+            icon: "hand.raised",
             value: campaign.stopOnReply ?? true,
             body: { CampaignUpdateBody(stopOnReply: $0) },
             mutate: { c, v in c.stopOnReply = v }
         )
         settingToggle(
             "Open tracking", subtitle: "Count when a lead opens",
-            icon: "envelope.open.fill", tone: .sky,
+            icon: "envelope.open",
             value: campaign.openTracking ?? true,
             body: { CampaignUpdateBody(openTracking: $0) },
             mutate: { c, v in c.openTracking = v }
         )
         settingToggle(
             "Link tracking", subtitle: "Count when a lead clicks",
-            icon: "link", tone: .sky,
+            icon: "link",
             value: campaign.linkTracking ?? true,
             body: { CampaignUpdateBody(linkTracking: $0) },
             mutate: { c, v in c.linkTracking = v }
@@ -575,8 +566,8 @@ struct CampaignDetailView: View {
                 dailyLimit = max(1, dailyLimit - 1)
             }
             Text("\(dailyLimit)")
-                .font(.system(size: 17, weight: .semibold))
-                .monospacedDigit()
+                .font(WFont.meta(16, weight: .medium))
+                .foregroundStyle(WTheme.ink)
                 .frame(minWidth: 32)
                 .contentTransition(.numericText())
             stepButton("plus", enabled: canManage && dailyLimit < 100) {
@@ -588,10 +579,12 @@ struct CampaignDetailView: View {
     private func stepButton(_ symbol: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(enabled ? AnyShapeStyle(WTheme.accent) : AnyShapeStyle(Color(.tertiaryLabel)))
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(enabled ? WTheme.ink : WTheme.inkTertiary)
                 .frame(width: 30, height: 30)
-                .background(Tone.slate.background, in: Circle())
+                .background(WTheme.raised, in: Circle())
+                .overlay(Circle().strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
+                .opacity(enabled ? 1 : 0.6)
         }
         .buttonStyle(TapScaleStyle())
         .disabled(!enabled)
@@ -601,7 +594,6 @@ struct CampaignDetailView: View {
         _ title: String,
         subtitle: String,
         icon: String,
-        tone: Tone,
         value: Bool,
         body: @escaping (Bool) -> CampaignUpdateBody,
         mutate: @escaping (inout Campaign, Bool) -> Void
@@ -616,20 +608,33 @@ struct CampaignDetailView: View {
                 }
             )) {
                 HStack(spacing: 12) {
-                    IconTile(symbol: icon, tone: tone, size: 34)
+                    rowTile(icon)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(title)
-                            .font(.body.weight(.medium))
+                            .font(.system(size: 15.5))
+                            .foregroundStyle(WTheme.ink)
                         Text(subtitle)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: 13))
+                            .foregroundStyle(WTheme.inkSecondary)
                     }
                 }
             }
-            .tint(WTheme.accent)
             .disabled(!canManage)
             .padding(.vertical, 9)
         }
+    }
+
+    /// Neutral hairline tile leading a hub row; color is kept for state.
+    private func rowTile(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 14, weight: .regular))
+            .foregroundStyle(WTheme.ink)
+            .frame(width: 34, height: 34)
+            .background(WTheme.raised, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(WTheme.hairlineStrong, lineWidth: 1)
+            )
     }
 
     /// Steppers fire per tap; coalesce into one PATCH after the taps stop.
@@ -651,12 +656,12 @@ struct CampaignDetailView: View {
     private var setupSection: some View {
         sectionHeader("Setup")
         plainRow {
-            navRow(icon: "calendar", tone: .amber, title: "Schedule", value: nil) {
+            navRow(icon: "calendar", title: "Schedule", value: nil) {
                 CampaignSchedulePage(store: store)
             }
         }
         plainRow {
-            navRow(icon: "gearshape.fill", tone: .slate, title: "Settings", value: nil) {
+            navRow(icon: "gearshape", title: "Settings", value: nil) {
                 CampaignSettingsPage(store: store, onDeleted: { dismiss() })
             }
         }
@@ -669,16 +674,16 @@ struct CampaignDetailView: View {
         if let description = campaign.description, !description.isEmpty {
             plainRow(separator: .hidden) {
                 Text(description)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 14.5))
+                    .foregroundStyle(WTheme.inkSecondary)
                     .padding(.top, 18)
             }
         }
         if let created = campaign.createdAt {
             plainRow(separator: .hidden) {
                 Text("Created \(created.formatted(date: .abbreviated, time: .omitted)) · Updated \(WFormat.relative(campaign.updatedAt ?? created))")
-                    .font(.footnote)
-                    .foregroundStyle(.tertiary)
+                    .font(WFont.meta(11))
+                    .foregroundStyle(WTheme.inkTertiary)
                     .padding(.top, 10)
                     .padding(.bottom, 28)
             }
@@ -691,6 +696,17 @@ struct CampaignDetailView: View {
             dismiss()
         } catch {
             deleteError = error.localizedDescription
+        }
+    }
+}
+
+/// Compact icon + title for the hero's start/pause pill.
+private struct ToggleLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 6) {
+            configuration.icon
+                .font(.system(size: 11, weight: .semibold))
+            configuration.title
         }
     }
 }

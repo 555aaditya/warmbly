@@ -2,24 +2,53 @@ import SwiftUI
 
 // MARK: - Scopes
 
-/// Computed inbox views, derived client-side from `GET /v1/unibox/overview`.
+/// What the list shows. Each case maps to `GET /v1/unibox` params, and its
+/// `key` is the rail's scope key, shared with the web (`folder:inbox`).
 enum UniboxScope: Hashable {
-    case all, unread, today, week, awaiting, snoozed, scheduled, uncategorized
+    case all, unread, today, week, awaiting, agentDrafts, snoozed, scheduled, uncategorized
+    case folder(String)
     case mailbox(id: String, label: String)
+    case tag(id: String, label: String)
     case category(id: String, label: String, colorHex: String?)
+    case view(String)
+
+    static let inbox = UniboxScope.folder("inbox")
+
+    var key: String {
+        switch self {
+        case .all: "all"
+        case .unread: "unread"
+        case .today: "today"
+        case .week: "week"
+        case .awaiting: "awaiting"
+        case .agentDrafts: "agent_drafts"
+        case .snoozed: "snoozed"
+        case .scheduled: "scheduled"
+        case .uncategorized: "uncategorized"
+        case let .folder(folder): "folder:\(folder)"
+        case let .mailbox(id, _): "mailbox:\(id)"
+        case let .tag(id, _): "tag:\(id)"
+        case let .category(id, _, _): "category:\(id)"
+        case let .view(id): "view:\(id)"
+        }
+    }
 
     var title: String {
         switch self {
-        case .all: return "All"
+        case .all: return "All mail"
         case .unread: return "Unread"
         case .today: return "Today"
-        case .week: return "Week"
+        case .week: return "Last 7 days"
         case .awaiting: return "Awaiting reply"
+        case .agentDrafts: return "Agent drafts"
         case .snoozed: return "Snoozed"
         case .scheduled: return "Scheduled"
         case .uncategorized: return "Uncategorized"
+        case let .folder(folder): return UniboxRail.folderTitle(folder)
         case let .mailbox(_, label): return label
+        case let .tag(_, label): return label
         case let .category(_, label, _): return label
+        case let .view(id): return UniboxRail.views.first { $0.id == id }?.label ?? "View"
         }
     }
 }
@@ -148,6 +177,13 @@ struct UniboxGroupCount: Codable, Identifiable, Sendable, Hashable {
     }
 }
 
+/// One canonical folder's counts; the server always sends all six.
+struct UniboxFolderCount: Codable, Sendable, Hashable {
+    var folder: String
+    var unread: Int?
+    var total: Int?
+}
+
 struct UniboxOverview: Codable, Sendable {
     var total: Int?
     var unread: Int?
@@ -155,15 +191,21 @@ struct UniboxOverview: Codable, Sendable {
     var week: Int?
     var snoozed: Int?
     var awaitingReply: Int?
+    var automated: Int?
+    var automatedUnread: Int?
+    var awaitingAgentDraft: Int?
     var scheduledPending: Int?
     var scheduledPendingMax: Int?
+    var folders: [UniboxFolderCount]?
     var mailboxes: [UniboxMailboxCount]?
     var tags: [UniboxGroupCount]?
     var categories: [UniboxGroupCount]?
     var generatedAt: Date?
 
     enum CodingKeys: String, CodingKey {
-        case total, unread, today, week, snoozed, mailboxes, tags, categories
+        case total, unread, today, week, snoozed, automated, folders, mailboxes, tags, categories
+        case automatedUnread = "automated_unread"
+        case awaitingAgentDraft = "awaiting_agent_draft"
         case awaitingReply = "awaiting_reply"
         case scheduledPending = "scheduled_pending"
         case scheduledPendingMax = "scheduled_pending_max"
@@ -328,9 +370,11 @@ struct ScheduledSend: Codable, Identifiable, Sendable, Hashable {
 struct UniboxMarkSeenRequest: Codable, Sendable {
     var emailIDs: [String]
     var seen: Bool
+    /// Marks a whole folder instead of the listed messages.
+    var folder: String?
 
     enum CodingKeys: String, CodingKey {
-        case seen
+        case seen, folder
         case emailIDs = "email_ids"
     }
 }

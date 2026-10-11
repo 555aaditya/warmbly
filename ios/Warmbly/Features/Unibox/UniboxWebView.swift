@@ -80,11 +80,15 @@ struct UniboxWebView: UIViewRepresentable {
             color: #0F172A; word-break: break-word;
             -webkit-text-size-adjust: 100%;
           }
-          @media (prefers-color-scheme: dark) { body { color: #E2E8F0; } }
           img, table { max-width: 100% !important; height: auto; }
           a { color: #0284C7; }
           pre.plain { white-space: pre-wrap; font-family: -apple-system, system-ui, sans-serif; }
-          blockquote { margin: 0 0 0 8px; padding-left: 10px; border-left: 3px solid #CBD5E1; color: #64748B; }
+          blockquote { margin: 0 0 0 4px; padding-left: 12px; border-left: 2px solid #DDE4EC; color: #64748B; }
+          @media (prefers-color-scheme: dark) {
+            body { color: #FAFAFA; }
+            a { color: #38BDF8; }
+            blockquote { border-left-color: #2E2E33; color: #A1A1AA; }
+          }
         </style>
         </head><body>\(body)</body></html>
         """

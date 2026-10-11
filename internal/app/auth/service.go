@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/warmbly/warmbly/internal/app/appattest"
 	"github.com/warmbly/warmbly/internal/app/organization"
 	"github.com/warmbly/warmbly/internal/app/token"
 	"github.com/warmbly/warmbly/internal/app/trial"
@@ -78,6 +79,8 @@ type AuthService interface {
 	LoginConfirm(ctx context.Context, data *ConfirmData, session, ipaddr, userAgent string) (*models.LoginResult, *errx.Error)
 	// WireTwoFA attaches the 2FA challenger (post-construction; nil = 2FA off).
 	WireTwoFA(t TwoFAChallenger)
+	// WireAppAttest accepts native app proofs on the captcha-gated paths (nil = off).
+	WireAppAttest(a *appattest.Service)
 
 	RegistrationStart(ctx context.Context, data *AuthData, origin SignupOrigin) (*models.AuthSession, *errx.Error)
 	RegistrationConfirm(ctx context.Context, data *ConfirmData, session string, origin SignupOrigin) (*models.AuthSession, *errx.Error)
@@ -173,9 +176,11 @@ type authService struct {
 	organizationService      organization.OrganizationService
 	emailNotificationService notify.EmailNotificationService
 	// opsNotify raises instance-wide operator alerts. Nil is the default.
-	opsNotify      OperatorNotifier
-	cache          *cache.Cache
-	captcha        *captcha.Turnstile
+	opsNotify OperatorNotifier
+	cache     *cache.Cache
+	captcha   *captcha.Turnstile
+	// appAttest takes the native app's proof in place of Turnstile. Nil turns it off.
+	appAttest      *appattest.Service
 	appleIDTokens  IDTokenVerifier
 	googleIDTokens IDTokenVerifier
 	twofa          TwoFAChallenger
@@ -206,6 +211,18 @@ type authService struct {
 }
 
 func (s *authService) WireTwoFA(t TwoFAChallenger) { s.twofa = t }
+
+// WireAppAttest accepts native app proofs on the captcha-gated paths.
+func (s *authService) WireAppAttest(a *appattest.Service) { s.appAttest = a }
+
+// verifyHuman is the anti-automation gate on every unauthenticated auth write:
+// Turnstile for a browser, an App Attest assertion for the native app.
+func (s *authService) verifyHuman(ctx context.Context, action, turnstile string, proof *appattest.Proof, ipaddr string) *errx.Error {
+	if proof != nil && s.captcha.Required() && s.appAttest.Enabled() {
+		return s.appAttest.Verify(ctx, action, proof)
+	}
+	return s.captcha.Verify(ctx, turnstile, ipaddr)
+}
 
 func (s *authService) WireDeployment(policy *config.AuthPolicy, mailDelivers bool) {
 	if policy != nil {

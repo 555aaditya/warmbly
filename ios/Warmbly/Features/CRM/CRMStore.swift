@@ -295,12 +295,31 @@ final class CRMTasksStore {
 
     /// Flip completion. Completed <-> pending; setting completed stamps completed_at server-side.
     func setDone(_ api: APIClient, task: CRMTask, done: Bool) async throws {
+        // Optimistic: flip it now, put it back if the server refuses.
+        var local = task
+        local.status = done ? "completed" : "pending"
+        local.completedAt = done ? .now : nil
+        replace(local)
         var body = CRMTaskUpdateBody()
-        body.status = done ? "completed" : "pending"
-        let updated: CRMTask = try await api.patch("crm/tasks/\(task.id)", body: body)
-        withAnimation(.snappy) {
+        body.status = local.status
+        do {
+            let updated: CRMTask = try await api.patch("crm/tasks/\(task.id)", body: body)
+            replace(updated)
+        } catch {
+            replace(task)
+            throw error
+        }
+    }
+
+    /// Tasks finished today, for the today ring.
+    var doneToday: Int {
+        tasks.count { $0.isDone && ($0.completedAt.map(Calendar.current.isDateInToday) ?? false) }
+    }
+
+    private func replace(_ task: CRMTask) {
+        withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) {
             if let index = tasks.firstIndex(where: { $0.id == task.id }) {
-                tasks[index] = updated
+                tasks[index] = task
             }
         }
     }

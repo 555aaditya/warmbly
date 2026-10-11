@@ -1,14 +1,8 @@
 import SwiftUI
 
-/// Meetings browser presented as a full-screen cover from the More hub,
-/// copying the campaign leads browser: its own NavigationStack, a slide-in
-/// drawer (sky hero with the next meeting badge + upcoming/today/past scopes
-/// with a sliding capsule, edge-swipe to open), a search pill with hamburger +
-/// presence + circular close, a tracked-uppercase scope caption, and a dense
-/// hairline list grouped under eyebrow captions (today gets a sky ping). Rows
-/// show time + attendee + source + state pill with an inline join affordance
-/// when a call link exists; cancel is gated behind manageContacts. Reloads on
-/// the .meetings realtime pulse.
+/// Meetings browser presented from the settings hub: a next-up hero with a
+/// live countdown and join button, today/upcoming/canceled tiles, and a
+/// day-grouped agenda. Cancel is gated behind manageContacts.
 struct CRMMeetingsView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(\.dismiss) private var dismiss
@@ -16,6 +10,9 @@ struct CRMMeetingsView: View {
     @State private var pendingCancel: CRMMeeting?
     @State private var cancelError: String?
     @State private var sidebarOpen = false
+    @State private var shown = false
+    @State private var lastNext: CRMMeeting?
+    @FocusState private var searchFocused: Bool
 
     private var canWrite: Bool { env.session.can(.manageContacts) }
     private var isSearching: Bool { !store.query.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -79,8 +76,10 @@ struct CRMMeetingsView: View {
         withAnimation(CRMBrowser.spring) { sidebarOpen = true }
     }
 
-    private func select(_ scope: CRMMeetingScope) {
+    private func select(_ scope: CRMMeetingScope, close: Bool = true) {
+        if let next = store.nextUpcoming { lastNext = next }
         withAnimation(.spring(response: 0.38, dampingFraction: 0.8)) { store.scope = scope }
+        guard close else { return }
         Task {
             try? await Task.sleep(for: .milliseconds(280))
             withAnimation(CRMBrowser.spring) { sidebarOpen = false }
@@ -92,53 +91,113 @@ struct CRMMeetingsView: View {
     private var mainPane: some View {
         @Bindable var store = store
         return VStack(spacing: 0) {
-            CRMSearchBar(
+            GlassHeaderBar(
+                title: "Meetings",
+                subtitle: store.hasLoaded ? Text("\(store.count(for: .upcoming) ?? 0) upcoming") : nil,
                 query: $store.query,
-                prompt: "Search meetings",
-                onMenu: { openSidebar() },
-                menuLabel: "Open meetings menu"
+                searchPrompt: "Search meetings",
+                searchFocused: $searchFocused,
+                menuLabel: "Open meetings menu",
+                onMenu: openSidebar
             ) {
-                CRMCircleButton(symbol: "xmark", label: "Close meetings", weight: .semibold, size: 15) {
-                    dismiss()
-                }
+                GlassCircleButton(symbol: "xmark", label: "Close meetings") { dismiss() }
             }
-            scopeCaption
             list
         }
-        .background(Color(.systemBackground))
+        .background(WTheme.groupedPage)
     }
 
-    // MARK: Caption
+    // MARK: Next up
 
-    private var scopeCaption: some View {
-        HStack(spacing: 6) {
-            Text(isSearching ? "SEARCH RESULTS" : store.scope.title.uppercased())
-                .font(.caption.weight(.semibold))
-                .tracking(0.9)
-                .foregroundStyle(.secondary)
-            if !isSearching, let count = captionCount, count > 0 {
-                Text(WFormat.compact(count))
-                    .font(.caption.weight(.semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(.tertiary)
-                    .contentTransition(.numericText())
+    @ViewBuilder
+    private var heroCard: some View {
+        if let next = heroMeeting {
+            NextMeetingCard(meeting: next, shown: shown)
+        } else {
+            HStack(spacing: 14) {
+                SettingsIcon(symbol: "calendar", color: WTheme.accent, size: 46)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Your calendar is clear")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(WTheme.ink)
+                    Text("Booked calls from Calendly and Cal.com land here.")
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(WTheme.inkSecondary)
+                }
+                Spacer(minLength: 0)
             }
-            Spacer()
-            if isSearching, store.hasLoaded {
-                Text("\(store.visibleMeetings.count) found")
-                    .font(.caption.weight(.semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .contentTransition(.numericText())
-            }
+            .coverCard()
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 8)
-        .padding(.bottom, 2)
     }
 
-    private var captionCount: Int? {
-        store.count(for: store.scope) ?? store.totalCount
+    /// The meeting the hero counts down to, kept while the past scope is open.
+    private var heroMeeting: CRMMeeting? {
+        store.nextUpcoming ?? lastNext
+    }
+
+    private var statsRow: some View {
+        HStack(spacing: 10) {
+            statTile("Today", value: store.count(for: .today) ?? 0, symbol: "sun.max.fill", tone: .amber, index: 0)
+            statTile("Upcoming", value: store.count(for: .upcoming) ?? 0, symbol: "calendar.badge.clock", tone: .sky, index: 1)
+            statTile("Canceled", value: store.summary?.canceled ?? 0, symbol: "calendar.badge.minus", tone: .rose, index: 2)
+        }
+    }
+
+    private func statTile(_ title: String, value: Int, symbol: String, tone: Tone, index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(tone.color)
+                .frame(width: 28, height: 28)
+                .background(tone.background, in: Circle())
+            CountUpText(value: shown ? Double(value) : 0, format: { WFormat.compact(Int($0.rounded())) })
+                .font(.system(size: 22, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .animation(.spring(response: 0.9, dampingFraction: 0.9).delay(0.1 + Double(index) * 0.06), value: shown)
+                .foregroundStyle(WTheme.ink)
+            Text(title)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(WTheme.inkSecondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(WTheme.groupedCard, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .reveal(shown, index + 1)
+    }
+
+    // MARK: Agenda
+
+    private struct DayGroup: Identifiable {
+        let id: Date
+        let title: String
+        let isToday: Bool
+        let meetings: [CRMMeeting]
+    }
+
+    private var dayGroups: [DayGroup] {
+        let calendar = Calendar.current
+        var order: [Date] = []
+        var buckets: [Date: [CRMMeeting]] = [:]
+        for meeting in store.visibleMeetings {
+            let day = calendar.startOfDay(for: meeting.scheduledFor ?? .distantPast)
+            if buckets[day] == nil { order.append(day) }
+            buckets[day, default: []].append(meeting)
+        }
+        return order.map { day in
+            DayGroup(id: day, title: dayTitle(day), isToday: calendar.isDateInToday(day), meetings: buckets[day] ?? [])
+        }
+    }
+
+    private func dayTitle(_ day: Date) -> String {
+        let calendar = Calendar.current
+        if day == .distantPast { return "Unscheduled" }
+        if calendar.isDateInToday(day) { return "Today" }
+        if calendar.isDateInTomorrow(day) { return "Tomorrow" }
+        if calendar.isDateInYesterday(day) { return "Yesterday" }
+        let sameYear = calendar.isDate(day, equalTo: .now, toGranularity: .year)
+        return sameYear
+            ? day.formatted(.dateTime.weekday(.wide).month(.wide).day())
+            : day.formatted(.dateTime.month(.wide).day().year())
     }
 
     // MARK: List
@@ -146,27 +205,67 @@ struct CRMMeetingsView: View {
     @ViewBuilder
     private var list: some View {
         if store.isLoading, !store.hasLoaded {
-            ScrollView { SkeletonRows(rows: 8) }
+            ScrollView { AnalyticsLoadingCards().padding(16) }
         } else if let error = store.errorMessage, store.meetings.isEmpty {
             ErrorStateView(title: "Couldn't load meetings", message: error) {
                 await store.load(env.api)
             }
-        } else if store.visibleMeetings.isEmpty {
-            emptyState
         } else {
             List {
-                if store.scope == .upcoming {
-                    upcomingGroups
+                Section {
+                    VStack(spacing: 12) {
+                        if !isSearching {
+                            heroCard
+                                .reveal(shown, 0)
+                            statsRow
+                        }
+                        PillSwitcher(
+                            options: CRMMeetingScope.allCases,
+                            selection: Binding(get: { store.scope }, set: { select($0, close: false) }),
+                            label: \.title
+                        )
+                        .padding(.top, 2)
+                    }
+                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 0, trailing: 0))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                }
+                if store.visibleMeetings.isEmpty {
+                    Section {
+                        emptyState
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                    }
                 } else {
-                    ForEach(store.visibleMeetings) { meeting in
-                        row(meeting)
+                    ForEach(dayGroups) { group in
+                        Section {
+                            ForEach(group.meetings) { meeting in
+                                row(meeting)
+                            }
+                        } header: {
+                            CoverSectionHeader(
+                                title: group.title,
+                                count: group.meetings.count,
+                                color: group.isToday ? WTheme.accent : nil,
+                                pulsing: group.isToday && store.scope != .past
+                            )
+                        }
+                    }
+                    Section {
+                        CRMEndMarker(endCount, "meeting")
+                            .listRowBackground(Color.clear)
                     }
                 }
-                CRMEndMarker(endCount, "meeting")
             }
-            .listStyle(.plain)
+            .listStyle(.insetGrouped)
+            .listSectionSpacing(18)
+            .contentMargins(.horizontal, 16, for: .scrollContent)
+            .contentMargins(.top, 0, for: .scrollContent)
+            .scrollContentBackground(.hidden)
             .scrollDismissesKeyboard(.immediately)
+            .defaultScrollAnchor(SettingsDebug.anchor)
             .refreshable { await store.load(env.api) }
+            .onAppear { shown = true }
         }
     }
 
@@ -177,38 +276,21 @@ struct CRMMeetingsView: View {
     }
 
     @ViewBuilder
-    private var upcomingGroups: some View {
-        let today = store.meetings.filter(\.isToday)
-        let later = store.meetings.filter { !$0.isToday }
-        if !today.isEmpty {
-            CRMListCaption(title: "Today", count: today.count, tone: .sky, ping: true)
-            ForEach(today) { meeting in
-                row(meeting)
-            }
-        }
-        if !later.isEmpty {
-            CRMListCaption(title: "Later", count: later.count)
-            ForEach(later) { meeting in
-                row(meeting)
-            }
-        }
-    }
-
-    @ViewBuilder
     private var emptyState: some View {
         if isSearching {
-            EmptyStateView(title: "No matching meetings", message: "Try a different search.")
+            CoverEmptyState(symbol: "magnifyingglass", color: WTheme.inkSecondary, title: "No matching meetings", message: "Try a different search.")
         } else {
             switch store.scope {
             case .upcoming:
-                EmptyStateView(
+                CoverEmptyState(
+                    symbol: "calendar.badge.clock",
                     title: "No upcoming meetings",
-                    message: "Meetings booked through Calendly, Cal.com or logged manually show up here."
+                    message: "Meetings booked through Calendly, Cal.com or logged by hand show up here."
                 )
             case .today:
-                EmptyStateView(title: "Nothing today", message: "Meetings scheduled for today show up here.")
+                CoverEmptyState(symbol: "sun.max.fill", color: WTheme.warning, title: "Nothing today", message: "A clear day. Good time to follow up on replies.")
             case .past:
-                EmptyStateView(title: "No past meetings", message: "Meetings that already happened show up here.")
+                CoverEmptyState(symbol: "clock.arrow.circlepath", color: WTheme.special, title: "No past meetings", message: "Meetings that already happened show up here.")
             }
         }
     }
@@ -216,56 +298,77 @@ struct CRMMeetingsView: View {
     // MARK: Row
 
     private func row(_ meeting: CRMMeeting) -> some View {
-        HStack(spacing: 12) {
-            Circle()
-                .fill(meeting.statusTone.color.opacity(meeting.isToday && store.scope != .past ? 1 : 0.5))
-                .frame(width: 6, height: 6)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(meeting.displayTitle)
-                    .font(.body.weight(.medium))
-                    .lineLimit(1)
-                HStack(spacing: 6) {
-                    if let scheduled = meeting.scheduledFor {
-                        Text(CRMFormat.meetingTime(scheduled))
-                            .font(.footnote)
-                            .monospacedDigit()
-                            .foregroundStyle(meeting.isToday ? WTheme.accent : .secondary)
-                    }
-                    if let invitee = meeting.inviteeLabel, meeting.eventName?.isEmpty == false {
-                        Text(invitee)
-                            .font(.footnote)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                    }
+        let canceled = meeting.status == "canceled"
+        let live = meeting.isLive
+        return HStack(spacing: 12) {
+            VStack(alignment: .trailing, spacing: 2) {
+                if let start = meeting.scheduledFor {
+                    Text(start.formatted(date: .omitted, time: .shortened))
+                        .font(.system(size: 14.5, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(canceled ? WTheme.inkTertiary : WTheme.ink)
+                } else {
+                    Text("TBD")
+                        .font(.system(size: 14.5, weight: .semibold))
+                        .foregroundStyle(WTheme.inkTertiary)
+                }
+                if let minutes = meeting.durationMinutes {
+                    Text(minutes >= 60 && minutes % 60 == 0 ? "\(minutes / 60) h" : "\(minutes) min")
+                        .font(.system(size: 12))
+                        .monospacedDigit()
+                        .foregroundStyle(WTheme.inkTertiary)
                 }
             }
-            Spacer(minLength: 8)
+            .frame(width: 66, alignment: .trailing)
+            Capsule()
+                .fill(live ? WTheme.positive : meeting.statusTone.color.opacity(canceled ? 0.35 : 0.85))
+                .frame(width: 3.5)
+                .padding(.vertical, 2)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(meeting.displayTitle)
+                    .font(.system(size: 15.5, weight: .medium))
+                    .foregroundStyle(canceled ? WTheme.inkTertiary : WTheme.ink)
+                    .strikethrough(canceled, color: WTheme.inkTertiary)
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    if let invitee = meeting.inviteeLabel, meeting.eventName?.isEmpty == false {
+                        Text(invitee)
+                            .lineLimit(1)
+                    }
+                    if meeting.source != "manual", !meeting.sourceLabel.isEmpty {
+                        Text(meeting.sourceLabel)
+                            .foregroundStyle(WTheme.inkTertiary)
+                    }
+                }
+                .font(.system(size: 13))
+                .foregroundStyle(WTheme.inkSecondary)
+                if live {
+                    LiveTag()
+                } else if meeting.status != "booked", meeting.status != nil {
+                    StatusPill(text: meeting.statusLabel.prefix(1).uppercased() + meeting.statusLabel.dropFirst(), tone: meeting.statusTone)
+                }
+            }
+            Spacer(minLength: 6)
             if let joinURL = meeting.joinURL, let url = URL(string: joinURL),
-               store.scope != .past, meeting.status != "canceled" {
+               store.scope != .past, !canceled {
                 Link(destination: url) {
                     Image(systemName: "video.fill")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(WTheme.accent)
-                        .frame(width: 32, height: 32)
-                        .background(Tone.sky.background, in: Circle())
+                        .foregroundStyle(live ? .white : WTheme.accent)
+                        .frame(width: 34, height: 34)
+                        .background(live ? WTheme.positive : Tone.sky.background, in: Circle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(TapScaleStyle())
                 .accessibilityLabel("Join meeting")
             }
-            VStack(alignment: .trailing, spacing: 4) {
-                if !meeting.sourceLabel.isEmpty {
-                    Text(meeting.sourceLabel)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.tertiary)
-                }
-                StatusPill(text: meeting.statusLabel, tone: meeting.statusTone)
-            }
         }
-        .padding(.vertical, 6)
-        .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 16))
-        .listRowBackground(Color(.systemBackground))
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.vertical, 4)
+        .listRowBackground(WTheme.groupedCard)
+        .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 14))
+        .alignmentGuide(.listRowSeparatorLeading) { _ in 90 }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            if canWrite, meeting.status != "canceled" {
+            if canWrite, !canceled {
                 Button(role: .destructive) {
                     pendingCancel = meeting
                 } label: {
@@ -284,7 +387,7 @@ struct CRMMeetingsView: View {
                     Label("Reschedule", systemImage: "calendar")
                 }
             }
-            if canWrite, meeting.status != "canceled" {
+            if canWrite, !canceled {
                 Button(role: .destructive) {
                     pendingCancel = meeting
                 } label: {
@@ -301,6 +404,160 @@ struct CRMMeetingsView: View {
             cancelError = error.localizedDescription
         }
     }
+}
+
+// MARK: - Next meeting
+
+/// The hero: the next meeting with a live countdown, who it is with, and a
+/// join button that turns green once the call is starting.
+private struct NextMeetingCard: View {
+    let meeting: CRMMeeting
+    let shown: Bool
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 15)) { context in
+            let now = context.date
+            let live = meeting.isLive(at: now)
+            let soon = (meeting.scheduledFor?.timeIntervalSince(now) ?? .infinity) < 10 * 60
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 6) {
+                    if live || soon {
+                        PulsingDot(color: live ? WTheme.positive : WTheme.accent)
+                    }
+                    Text(live ? "Happening now" : "Next up")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(live ? WTheme.positive : WTheme.inkSecondary)
+                    Spacer()
+                    if meeting.source != "manual", !meeting.sourceLabel.isEmpty {
+                        Text(meeting.sourceLabel)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(WTheme.inkTertiary)
+                    }
+                }
+                Text(countdown(now: now, live: live))
+                    .font(.system(size: 34, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(live ? WTheme.positive : WTheme.ink)
+                    .contentTransition(.numericText(countsDown: true))
+                    .animation(.snappy, value: countdown(now: now, live: live))
+                HStack(spacing: 12) {
+                    WAvatar(name: meeting.inviteeLabel ?? meeting.displayTitle, seed: meeting.inviteeEmail ?? meeting.id, size: 40)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(meeting.displayTitle)
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(WTheme.ink)
+                            .lineLimit(1)
+                        Text(subtitle)
+                            .font(.system(size: 13))
+                            .foregroundStyle(WTheme.inkSecondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
+                if let joinURL = meeting.joinURL, let url = URL(string: joinURL) {
+                    Link(destination: url) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "video.fill")
+                            Text(live ? "Join now" : "Join call")
+                        }
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 46)
+                        .background(live || soon ? WTheme.positive : WTheme.ink, in: Capsule())
+                    }
+                    .buttonStyle(TapScaleStyle())
+                    .animation(.snappy, value: live || soon)
+                } else if let location = meeting.location, !location.isEmpty {
+                    Label(location, systemImage: "mappin.and.ellipse")
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(WTheme.inkSecondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .coverCard()
+    }
+
+    private var subtitle: String {
+        var parts: [String] = []
+        if let invitee = meeting.inviteeLabel, meeting.eventName?.isEmpty == false { parts.append(invitee) }
+        if let start = meeting.scheduledFor {
+            var when = CRMFormat.meetingTime(start)
+            when = when.prefix(1).uppercased() + when.dropFirst()
+            if let end = meeting.endTime {
+                when += " to " + end.formatted(date: .omitted, time: .shortened)
+            }
+            parts.append(when)
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func countdown(now: Date, live: Bool) -> String {
+        guard let start = meeting.scheduledFor else { return "Not scheduled" }
+        if live {
+            guard let end = meeting.endTime else { return "Started" }
+            let left = max(1, Int(end.timeIntervalSince(now) / 60))
+            return "\(left) min left"
+        }
+        let seconds = start.timeIntervalSince(now)
+        if seconds < 60 { return "Starting now" }
+        let minutes = Int(seconds / 60)
+        if minutes < 60 { return "In \(minutes) min" }
+        let hours = minutes / 60
+        if hours < 24 { return minutes % 60 == 0 ? "In \(hours) h" : "In \(hours) h \(minutes % 60) min" }
+        let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: now), to: Calendar.current.startOfDay(for: start)).day ?? hours / 24
+        return days == 1 ? "Tomorrow" : "In \(days) days"
+    }
+}
+
+/// A small green "Live" tag for a meeting in progress.
+private struct LiveTag: View {
+    var body: some View {
+        HStack(spacing: 5) {
+            PulsingDot(color: WTheme.positive, size: 6)
+            Text("Live")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(WTheme.positive)
+        }
+    }
+}
+
+/// A dot with a soft ring breathing out of it.
+private struct PulsingDot: View {
+    var color: Color
+    var size: CGFloat = 7
+    @State private var pulse = false
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: size, height: size)
+            .background {
+                Circle()
+                    .fill(color.opacity(0.35))
+                    .scaleEffect(pulse ? 2.6 : 1)
+                    .opacity(pulse ? 0 : 1)
+            }
+            .onAppear {
+                withAnimation(.easeOut(duration: 1.4).repeatForever(autoreverses: false)) { pulse = true }
+            }
+    }
+}
+
+extension CRMMeeting {
+    var durationMinutes: Int? {
+        guard let start = scheduledFor, let end = endTime, end > start else { return nil }
+        return Int(end.timeIntervalSince(start) / 60)
+    }
+
+    func isLive(at now: Date = .now) -> Bool {
+        guard status != "canceled", let start = scheduledFor else { return false }
+        let end = endTime ?? start.addingTimeInterval(30 * 60)
+        return start <= now && now < end
+    }
+
+    var isLive: Bool { isLive() }
 }
 
 // MARK: - Drawer

@@ -32,8 +32,8 @@ struct WarmblyWordmark: View {
                 .fill(Color.primary)
                 .frame(width: markSize, height: markSize * (764 / 746))
             Text("Warmbly")
-                .font(.system(size: markSize * 0.82, weight: .heavy, design: .default))
-                .tracking(-0.4)
+                .font(.system(size: markSize * 0.86, weight: .semibold))
+                .tracking(-markSize * 0.03)
         }
     }
 }
@@ -51,21 +51,14 @@ enum Tone {
         case .rose: WTheme.negative
         case .sky: WTheme.accent
         case .slate: WTheme.paused
-        case .indigo: Color.dynamic(light: 0x4338CA, dark: 0x818CF8)
-        case .orange: Color.dynamic(light: 0xEA580C, dark: 0xFB923C)
+        case .indigo: Color.dynamic(light: 0x5B5BF0, dark: 0x8C8FFA)
+        case .orange: Color.dynamic(light: 0xF2700C, dark: 0xFF9142)
         }
     }
 
+    /// A soft tint of the tone, for pills, tiles and notices.
     var background: Color {
-        switch self {
-        case .emerald: Color.dynamic(light: 0xECFDF5, dark: 0x064E3B)
-        case .amber: Color.dynamic(light: 0xFFFBEB, dark: 0x78350F)
-        case .rose: Color.dynamic(light: 0xFFF1F2, dark: 0x881337)
-        case .sky: Color.dynamic(light: 0xF0F9FF, dark: 0x0C4A6E)
-        case .slate: Color.dynamic(light: 0xF1F5F9, dark: 0x1E293B)
-        case .indigo: Color.dynamic(light: 0xEEF2FF, dark: 0x312E81)
-        case .orange: Color.dynamic(light: 0xFFF7ED, dark: 0x7C2D12)
-        }
+        color.opacity(self == .slate ? 0.12 : 0.11)
     }
 }
 
@@ -78,10 +71,9 @@ struct EyebrowLabel: View {
     init(_ text: String) { self.text = text }
 
     var body: some View {
-        Text(text.uppercased())
-            .font(.system(size: 10, weight: .medium))
-            .tracking(1.4)
-            .foregroundStyle(.tertiary)
+        Text(text)
+            .font(.system(size: 13.5, weight: .semibold))
+            .foregroundStyle(WTheme.inkTertiary)
     }
 }
 
@@ -106,23 +98,13 @@ struct StatusPill: View {
     }
 }
 
-/// The web's `animate-ping` halo behind live dots.
+/// Kept for call sites; state dots are static now, a ping halo reads as noise.
 struct PingEffect: ViewModifier {
     let active: Bool
     let color: Color
-    @State private var animating = false
 
     func body(content: Content) -> some View {
-        content.background {
-            if active {
-                Circle()
-                    .fill(color.opacity(0.45))
-                    .scaleEffect(animating ? 2.4 : 1)
-                    .opacity(animating ? 0 : 0.6)
-                    .animation(.easeOut(duration: 1.1).repeatForever(autoreverses: false), value: animating)
-                    .onAppear { animating = true }
-            }
-        }
+        content
     }
 }
 
@@ -136,9 +118,10 @@ struct StatCell: View {
         VStack(alignment: .leading, spacing: 4) {
             EyebrowLabel(label)
             Text(value)
-                .font(.system(size: 24, weight: .light, design: .default))
+                .font(.system(size: 26, weight: .regular))
+                .tracking(-0.9)
                 .monospacedDigit()
-                .foregroundStyle(tone?.color ?? Color.primary)
+                .foregroundStyle(tone?.color ?? WTheme.ink)
                 .contentTransition(.numericText())
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -302,23 +285,32 @@ extension View {
 struct EmptyStateView: View {
     let title: String
     let message: String
+    var symbol: String = "tray"
     var ctaTitle: String? = nil
     var cta: (() -> Void)? = nil
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 0) {
+            Image(systemName: symbol)
+                .font(.system(size: 18, weight: .regular))
+                .foregroundStyle(WTheme.inkSecondary)
+                .frame(width: 46, height: 46)
+                .background(WTheme.raised, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
+                .padding(.bottom, 14)
             Text(title)
-                .font(.system(size: 14, weight: .medium))
+                .displayFont(17)
+                .foregroundStyle(WTheme.ink)
             Text(message)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 14))
+                .foregroundStyle(WTheme.inkSecondary)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 260)
+                .frame(maxWidth: 270)
+                .padding(.top, 5)
             if let ctaTitle, let cta {
                 Button(ctaTitle, action: cta)
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .padding(.top, 6)
+                    .buttonStyle(InkButtonStyle(size: .small))
+                    .padding(.top, 18)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -332,26 +324,29 @@ struct ErrorStateView: View {
     let retry: () async -> Void
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 0) {
             Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 18))
+                .font(.system(size: 17))
                 .foregroundStyle(WTheme.negative)
-                .frame(width: 36, height: 36)
-                .background(Tone.rose.background, in: RoundedRectangle(cornerRadius: 8))
+                .frame(width: 46, height: 46)
+                .background(Tone.rose.background, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                .padding(.bottom, 14)
             Text(title)
-                .font(.system(size: 14, weight: .medium))
+                .displayFont(17)
+                .foregroundStyle(WTheme.ink)
             if let message {
                 Text(message)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 14))
+                    .foregroundStyle(WTheme.inkSecondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 280)
+                    .padding(.top, 5)
             }
             Button("Try again") {
                 Task { await retry() }
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            .buttonStyle(OutlineButtonStyle(size: .small))
+            .padding(.top, 18)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.vertical, 48)
@@ -410,7 +405,7 @@ struct SkeletonRows: View {
                     }
                     Spacer(minLength: 0)
                 }
-                .foregroundStyle(Color(.systemGray5))
+                .foregroundStyle(WTheme.fill)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
                 .opacity(1.0 - Double(index) * (0.7 / Double(max(rows - 1, 1))))
@@ -441,6 +436,40 @@ enum WFormat {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    /// "now", "12m", "3h", "2d", "5w", then the date: for tight row trailers.
+    static func ago(_ date: Date, now: Date = .now) -> String {
+        let seconds = max(0, now.timeIntervalSince(date))
+        switch seconds {
+        case ..<60: return "now"
+        case ..<3600: return "\(Int(seconds / 60))m"
+        case ..<86400: return "\(Int(seconds / 3600))h"
+        case ..<(86400 * 7): return "\(Int(seconds / 86400))d"
+        case ..<(86400 * 35): return "\(Int(seconds / (86400 * 7)))w"
+        default: return date.formatted(.dateTime.month(.abbreviated).day())
+        }
+    }
+
+    /// The spelled-out `ago`, counted the same way so a row and its detail agree.
+    /// An address's local part as words, so an avatar gets two initials.
+    static func mailboxName(_ email: String?) -> String {
+        guard let email, !email.isEmpty else { return "?" }
+        let local = email.split(separator: "@").first.map(String.init) ?? email
+        return local.split(whereSeparator: { $0 == "." || $0 == "_" || $0 == "-" || $0 == "+" }).joined(separator: " ")
+    }
+
+    static func agoLong(_ date: Date, now: Date = .now) -> String {
+        let seconds = max(0, now.timeIntervalSince(date))
+        func unit(_ n: Int, _ name: String) -> String { "\(n) \(name)\(n == 1 ? "" : "s") ago" }
+        switch seconds {
+        case ..<60: return "just now"
+        case ..<3600: return unit(Int(seconds / 60), "minute")
+        case ..<86400: return unit(Int(seconds / 3600), "hour")
+        case ..<(86400 * 7): return unit(Int(seconds / 86400), "day")
+        case ..<(86400 * 35): return unit(Int(seconds / (86400 * 7)), "week")
+        default: return "on " + date.formatted(.dateTime.month(.abbreviated).day())
+        }
     }
 
     static func percent(_ numerator: Int, of denominator: Int) -> String {

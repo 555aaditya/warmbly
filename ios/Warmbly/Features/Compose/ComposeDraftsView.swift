@@ -30,6 +30,9 @@ struct ComposeDraftsView: View {
                         } label: {
                             row(draft)
                         }
+                        .buttonStyle(.plain)
+                        .listRowBackground(WTheme.canvas)
+                        .listRowSeparatorTint(WTheme.hairline)
                         .swipeActions(edge: .trailing) {
                             Button(role: .destructive) {
                                 Task { await store.delete(env.api, id: draft.id) }
@@ -40,10 +43,13 @@ struct ComposeDraftsView: View {
                     }
                 }
                 .listStyle(.plain)
+                .scrollContentBackground(.hidden)
             }
         }
+        .background(WTheme.canvas)
         .navigationTitle("Drafts")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(WTheme.canvas, for: .navigationBar)
         .task { await store.load(env.api) }
         .refreshable { await store.load(env.api) }
     }
@@ -52,29 +58,31 @@ struct ComposeDraftsView: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 8) {
                 Text(recipientsLine(draft))
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(.primary)
+                    .font(.system(size: 15.5, weight: .medium))
+                    .foregroundStyle(WTheme.ink)
                     .lineLimit(1)
                 Spacer(minLength: 8)
                 Text(UniboxFormat.listTime(draft.updatedAt))
-                    .font(.caption)
+                    .font(WFont.meta(11))
                     .monospacedDigit()
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(WTheme.inkTertiary)
             }
             if let subject = draft.subject, !subject.isEmpty {
                 Text(subject)
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 14))
+                    .foregroundStyle(WTheme.inkSecondary)
                     .lineLimit(1)
             }
             if let snippet = draft.body?.trimmingCharacters(in: .whitespacesAndNewlines), !snippet.isEmpty {
                 Text(snippet)
-                    .font(.footnote)
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(WTheme.inkTertiary)
                     .lineLimit(2)
             }
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 
     private func recipientsLine(_ draft: ComposeDraft) -> String {

@@ -247,7 +247,7 @@ struct CampaignLeadsPageView: View {
                     mainPane
                         .scaleEffect(sidebarOpen ? 0.97 : 1, anchor: .trailing)
                     if sidebarOpen {
-                        Color.black.opacity(0.32)
+                        Color.black.opacity(0.28)
                             .ignoresSafeArea()
                             .transition(.opacity)
                             .onTapGesture { closeSidebar() }
@@ -331,7 +331,7 @@ struct CampaignLeadsPageView: View {
             scopeCaption
             list
         }
-        .background(Color(.systemBackground))
+        .background(WTheme.canvas)
         .overlay(alignment: .bottom) {
             if store.selectionMode {
                 CampaignLeadSelectionBar(
@@ -363,16 +363,17 @@ struct CampaignLeadsPageView: View {
                     openSidebar()
                 } label: {
                     Image(systemName: "line.3.horizontal")
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(.primary)
+                        .font(.system(size: 16, weight: .regular))
+                        .foregroundStyle(WTheme.ink)
                         .frame(width: 38, height: 38)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Open leads menu")
 
-                TextField("Search leads", text: $store.query)
-                    .font(.subheadline)
+                TextField("", text: $store.query, prompt: Text("Search leads").foregroundStyle(WTheme.inkTertiary))
+                    .font(.system(size: 15))
+                    .foregroundStyle(WTheme.ink)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .submitLabel(.search)
@@ -384,7 +385,7 @@ struct CampaignLeadsPageView: View {
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 16))
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(WTheme.inkTertiary)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Clear search")
@@ -395,17 +396,18 @@ struct CampaignLeadsPageView: View {
                     .padding(.trailing, 8)
             }
             .frame(height: 44)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .background(WTheme.raised, in: Capsule())
+            .overlay(Capsule().strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
 
             if canManage {
                 Button {
                     showAddLeads = true
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(.primary)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(WTheme.inkInverse)
                         .frame(width: 44, height: 44)
-                        .background(Color(.secondarySystemBackground), in: Circle())
+                        .background(WTheme.ink, in: Circle())
                 }
                 .buttonStyle(TapScaleStyle())
                 .accessibilityLabel("Add leads")
@@ -415,10 +417,11 @@ struct CampaignLeadsPageView: View {
                 dismiss()
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.primary)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(WTheme.ink)
                     .frame(width: 44, height: 44)
-                    .background(Color(.secondarySystemBackground), in: Circle())
+                    .background(WTheme.raised, in: Circle())
+                    .overlay(Circle().strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
             }
             .buttonStyle(TapScaleStyle())
             .accessibilityLabel("Close leads")
@@ -435,18 +438,18 @@ struct CampaignLeadsPageView: View {
             ZStack(alignment: .topTrailing) {
                 Image(systemName: "slider.horizontal.3")
                     .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(store.hasFilters ? WTheme.accent : .secondary)
+                    .foregroundStyle(store.hasFilters ? WTheme.ink : WTheme.inkTertiary)
                     .frame(width: 32, height: 38)
                     .contentShape(Rectangle())
                 if store.filters.activeCount > 0 {
                     Text("\(store.filters.activeCount)")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.white)
+                        .font(WFont.meta(9, weight: .semibold))
+                        .foregroundStyle(WTheme.inkInverse)
                         .frame(minWidth: 14, minHeight: 14)
-                        .background(WTheme.accent, in: Circle())
+                        .background(WTheme.ink, in: Circle())
                         .offset(x: 4, y: 1)
                 } else if store.hasFilters {
-                    Circle().fill(WTheme.accent).frame(width: 7, height: 7).offset(x: 2, y: 3)
+                    Circle().fill(WTheme.accent).frame(width: 6, height: 6).offset(x: 2, y: 3)
                 }
             }
         }
@@ -459,14 +462,17 @@ struct CampaignLeadsPageView: View {
     private var selectionHeader: some View {
         HStack(spacing: 12) {
             Button("Done") { store.exitSelection() }
-                .fontWeight(.semibold)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(WTheme.ink)
             Spacer()
             Text("\(store.selectedCount) selected")
-                .font(.subheadline.weight(.semibold))
-                .monospacedDigit()
+                .font(WFont.meta(13, weight: .medium))
+                .foregroundStyle(WTheme.ink)
                 .contentTransition(.numericText())
             Spacer()
             Button(store.allLoadedSelected ? "Clear" : "Select all") { store.selectAllLoaded() }
+                .font(.system(size: 15))
+                .foregroundStyle(WTheme.inkSecondary)
         }
         .padding(.horizontal, 16)
         .frame(height: 44)
@@ -480,7 +486,6 @@ struct CampaignLeadsPageView: View {
         HStack(spacing: 6) {
             Text(captionTitle)
                 .font(.caption.weight(.semibold))
-                .tracking(0.9)
                 .foregroundStyle(.secondary)
             if !store.isSearching, !store.hasFilters, store.scopeCount(store.scope) > 0 {
                 Text(WFormat.compact(store.scopeCount(store.scope)))
@@ -504,9 +509,9 @@ struct CampaignLeadsPageView: View {
     }
 
     private var captionTitle: String {
-        if store.isSearching { return "SEARCH RESULTS" }
-        if store.hasFilters { return "FILTERED" }
-        return store.scope.title.uppercased()
+        if store.isSearching { return "Search results" }
+        if store.hasFilters { return "Filtered" }
+        return store.scope.title
     }
 
     // MARK: List
@@ -530,17 +535,19 @@ struct CampaignLeadsPageView: View {
                     HStack(spacing: 8) {
                         Spacer()
                         ProgressView().controlSize(.small)
-                        Text("Loading more…").font(.footnote).foregroundStyle(.secondary)
+                        Text("Loading more").font(WFont.meta(11.5)).foregroundStyle(WTheme.inkTertiary)
                         Spacer()
                     }
                     .padding(.vertical, 6)
                     .listRowSeparator(.hidden)
+                    .listRowBackground(WTheme.canvas)
                     .onAppear { Task { await store.loadMore(env.api, campaignID: campaignID) } }
                 } else {
                     endMarker
                 }
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
             .scrollDismissesKeyboard(.immediately)
             .refreshable { await store.load(env.api, campaignID: campaignID) }
         }
@@ -551,13 +558,15 @@ struct CampaignLeadsPageView: View {
         return HStack {
             Spacer()
             Text("\(count) lead\(count == 1 ? "" : "s")")
-                .font(.footnote)
+                .font(.system(size: 13))
                 .monospacedDigit()
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(WTheme.inkTertiary)
             Spacer()
         }
-        .padding(.vertical, 10)
+        .padding(.top, 14)
+        .padding(.bottom, 90)
         .listRowSeparator(.hidden)
+        .listRowBackground(WTheme.canvas)
     }
 
     @ViewBuilder
@@ -609,8 +618,9 @@ struct CampaignLeadsPageView: View {
             )
         }
         .buttonStyle(.plain)
-        .listRowBackground(store.isSelected(lead.id) ? Tone.sky.background : Color(.systemBackground))
-        .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 16))
+        .listRowBackground(store.isSelected(lead.id) ? WTheme.fill : WTheme.canvas)
+        .listRowSeparatorTint(WTheme.hairline)
+        .listRowInsets(EdgeInsets(top: 4, leading: 18, bottom: 4, trailing: 18))
         .simultaneousGesture(
             LongPressGesture(minimumDuration: 0.4).onEnded { _ in
                 if !store.selectionMode, canManage { store.enterSelection(with: lead.id) }
@@ -628,7 +638,7 @@ struct CampaignLeadsPageView: View {
                 } label: {
                     Label("Select", systemImage: "checkmark.circle")
                 }
-                .tint(WTheme.accent)
+                .tint(WTheme.paused)
             }
         }
     }
@@ -652,9 +662,12 @@ struct CampaignLeadsPageView: View {
         )
         .frame(width: Self.sidebarWidth)
         .frame(maxHeight: .infinity)
-        .background(Color(.systemBackground))
+        .background(WTheme.canvas)
         .clipShape(UnevenRoundedRectangle(bottomTrailingRadius: 26, topTrailingRadius: 26, style: .continuous))
-        .shadow(color: .black.opacity(sidebarOpen ? 0.22 : 0), radius: 30, x: 6, y: 0)
+        .overlay(
+            UnevenRoundedRectangle(bottomTrailingRadius: 26, topTrailingRadius: 26, style: .continuous)
+                .strokeBorder(WTheme.hairlineStrong, lineWidth: 1)
+        )
         .ignoresSafeArea()
         .offset(x: drawerOffset)
         .gesture(

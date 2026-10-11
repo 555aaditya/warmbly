@@ -4,7 +4,7 @@ import SwiftUI
 /// countdown to `scheduledAt` (the backend queues instant sends a short
 /// window into the future) plus an Undo button that cancels the queued task.
 /// When the countdown hits zero it flips briefly to "Sent" and auto-dismisses
-/// through `onExpired`. Styled after the unibox toast (dark capsule).
+/// through `onExpired`. Styled after the unibox toast (ink capsule).
 struct UndoSendBanner: View {
     let scheduledAt: Date
     /// Cancels the queued send; the caller owns dismissal and error handling.
@@ -15,30 +15,24 @@ struct UndoSendBanner: View {
     @State private var isCancelling = false
     @State private var sent = false
 
-    /// Undo reads well on the dark capsule in both schemes (sky-300).
-    private static let undoTint = Color(hex: 0x7DD3FC)
-
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: sent ? "checkmark.circle.fill" : "paperplane.fill")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(sent ? WTheme.positive : Self.undoTint)
+            Image(systemName: sent ? "checkmark.circle.fill" : "paperplane")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(sent ? WTheme.positive : WTheme.inkInverse.opacity(0.7))
                 .contentTransition(.symbolEffect(.replace))
             if sent {
                 Text("Sent")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .font(.system(size: 13.5, weight: .medium))
+                    .foregroundStyle(WTheme.inkInverse)
             } else {
                 TimelineView(.periodic(from: .now, by: 0.5)) { timeline in
                     Text("Sending in \(remaining(at: timeline.date))s")
-                        .font(.footnote.weight(.semibold))
+                        .font(WFont.meta(12.5, weight: .medium))
                         .monospacedDigit()
-                        .foregroundStyle(.white)
+                        .foregroundStyle(WTheme.inkInverse)
                         .contentTransition(.numericText(countsDown: true))
                 }
-                Rectangle()
-                    .fill(.white.opacity(0.25))
-                    .frame(width: 1, height: 16)
                 Button {
                     guard !isCancelling else { return }
                     isCancelling = true
@@ -51,22 +45,25 @@ struct UndoSendBanner: View {
                         if isCancelling {
                             ProgressView()
                                 .controlSize(.small)
-                                .tint(Self.undoTint)
+                                .tint(WTheme.ink)
                         } else {
                             Text("Undo")
-                                .font(.footnote.weight(.bold))
-                                .foregroundStyle(Self.undoTint)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(WTheme.ink)
                         }
                     }
-                    .frame(minWidth: 36)
+                    .padding(.horizontal, 12)
+                    .frame(minWidth: 56, minHeight: 28)
+                    .background(WTheme.inkInverse, in: Capsule())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Undo send")
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .background(.black.opacity(0.82), in: Capsule())
+        .padding(.leading, 16)
+        .padding(.trailing, sent ? 16 : 5)
+        .frame(height: 38)
+        .background(WTheme.ink, in: Capsule())
         .animation(.snappy, value: sent)
         .task(id: scheduledAt) {
             let delay = scheduledAt.timeIntervalSinceNow

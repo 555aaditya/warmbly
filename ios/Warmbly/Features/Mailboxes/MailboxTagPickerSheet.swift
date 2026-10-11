@@ -81,13 +81,15 @@ struct MailboxTagPickerSheet: View {
                                 Text(selected.isEmpty ? confirmLabel : "\(confirmLabel) (\(selected.count))")
                             }
                         }
-                        .fontWeight(.semibold)
+                        .fontWeight(.medium)
+                        .foregroundStyle(WTheme.ink)
                         .disabled(applying || (requiresSelection && selected.isEmpty))
                     }
                 }
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+        .presentationBackground(WTheme.canvas)
         .sensoryFeedback(.selection, trigger: togglePulse)
         .task {
             guard !seeded else { return }
@@ -115,11 +117,14 @@ struct MailboxTagPickerSheet: View {
                 }
                 if let errorMessage {
                     Text(errorMessage)
-                        .font(.footnote)
+                        .font(.system(size: 13))
                         .foregroundStyle(WTheme.negative)
+                        .listRowBackground(WTheme.canvas)
                 }
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(WTheme.canvas)
             .scrollDismissesKeyboard(.immediately)
         }
     }
@@ -135,20 +140,32 @@ struct MailboxTagPickerSheet: View {
             HStack(spacing: 12) {
                 Circle()
                     .fill(Color(uniboxHex: tag.color) ?? WTheme.accent)
-                    .frame(width: 11, height: 11)
+                    .frame(width: 9, height: 9)
                 Text(tag.name ?? "Tag")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(.primary)
+                    .font(.system(size: 15, weight: isPicked ? .medium : .regular))
+                    .foregroundStyle(WTheme.ink)
                     .lineLimit(1)
                 Spacer(minLength: 8)
-                Image(systemName: isPicked ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 21))
-                    .foregroundStyle(isPicked ? WTheme.accent : Color(.systemGray4))
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isPicked ? WTheme.ink : WTheme.raised)
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(isPicked ? Color.clear : WTheme.hairlineStrong, lineWidth: 1)
+                    if isPicked {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(WTheme.inkInverse)
+                            .transition(.scale(scale: 0.5).combined(with: .opacity))
+                    }
+                }
+                .frame(width: 20, height: 20)
             }
-            .padding(.vertical, 3)
+            .padding(.vertical, 5)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .listRowBackground(isPicked ? WTheme.fill : WTheme.canvas)
+        .listRowSeparatorTint(WTheme.hairline)
     }
 
     private var createRow: some View {
@@ -159,17 +176,21 @@ struct MailboxTagPickerSheet: View {
                 if creating {
                     ProgressView().controlSize(.small)
                 } else {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 16))
-                        .foregroundStyle(WTheme.accent)
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(WTheme.inkInverse)
+                        .frame(width: 20, height: 20)
+                        .background(WTheme.ink, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                 }
                 Text("Create \"\(trimmedQuery)\"")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(WTheme.accent)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(WTheme.ink)
                     .lineLimit(1)
             }
+            .padding(.vertical, 5)
         }
         .disabled(creating)
+        .listRowBackground(WTheme.canvas)
     }
 
     /// POST /tags {title, color} with the next palette color, refresh the

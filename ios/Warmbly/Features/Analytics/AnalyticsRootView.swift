@@ -1,5 +1,4 @@
 import SwiftUI
-import Charts
 
 // MARK: - Scopes
 
@@ -14,7 +13,7 @@ enum AnalyticsScope: String, CaseIterable, Identifiable {
         case .overview: "Overview"
         case .deliverability: "Deliverability"
         case .warmup: "Warmup"
-        case .accounts: "Accounts"
+        case .accounts: "Mailboxes"
         }
     }
 
@@ -37,65 +36,32 @@ enum AnalyticsScope: String, CaseIterable, Identifiable {
     }
 }
 
-// MARK: - Trend metric
-
-/// Chart metric, driven by tapping the stat strip cells (bounces are not in
-/// the daily trend payload, so the bounced cell is display-only).
-enum AnalyticsTrendMetric: String, CaseIterable {
-    case sent, opens, clicks, replies
-
-    var title: String {
+extension AnalyticsPeriod {
+    var label: String {
         switch self {
-        case .sent: "Sent"
-        case .opens: "Opens"
-        case .clicks: "Clicks"
-        case .replies: "Replies"
+        case .week: "7 days"
+        case .month: "30 days"
+        case .quarter: "90 days"
         }
     }
-
-    var color: Color {
-        switch self {
-        case .sent: WTheme.accent
-        case .opens: WTheme.positive
-        case .clicks: Tone.indigo.color
-        case .replies: Tone.emerald.color
-        }
-    }
-
-    func value(_ point: AnalyticsTrendPoint) -> Int {
-        switch self {
-        case .sent: point.sent ?? 0
-        case .opens: point.opens ?? 0
-        case .clicks: point.clicks ?? 0
-        case .replies: point.replies ?? 0
-        }
-    }
-}
-
-struct AnalyticsChartPoint: Identifiable {
-    let id: Int
-    let day: Date
-    let value: Int
 }
 
 // MARK: - View
 
-/// Analytics browser, presented as a full-screen cover from Home or More
-/// (like the mailboxes and CRM browsers): a sky hero with the period picker
-/// and headline chips, a slide-in drawer of sections, and the selected
-/// section as a flat full-bleed list on a rounded white sheet. Owns its
-/// NavigationStack; dismissal goes through `onClose` (the environment
-/// DismissAction is unreliable in this app's cover contexts).
+/// Analytics browser, presented full screen from Home or Settings: a glass
+/// header with the drawer of sections, the period and campaign scope, and the
+/// selected section as cards on the grouped page. Owns its NavigationStack;
+/// dismissal goes through `onClose`.
 struct AnalyticsRootView: View {
     var onClose: () -> Void = {}
 
     @Environment(AppEnvironment.self) private var env
     @State private var store = AnalyticsStore()
     @State private var scope: AnalyticsScope = .overview
-    @State private var metric: AnalyticsTrendMetric = .sent
     @State private var sidebarOpen = false
     @State private var sidebarDrag: CGFloat = 0
     @State private var filterOpen = false
+    @State private var shown = false
 
     private static let sidebarWidth: CGFloat = 300
 
@@ -113,27 +79,17 @@ struct AnalyticsRootView: View {
 
     private var noAccess: some View {
         VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                Button {
-                    onClose()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .frame(width: 44, height: 44)
-                        .background(Color(.secondarySystemBackground), in: Circle())
-                }
-                .buttonStyle(TapScaleStyle())
-                .accessibilityLabel("Close analytics")
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 4)
-            EmptyStateView(
+            CoverHeader(title: "Analytics", onClose: onClose)
+            Spacer()
+            CoverEmptyState(
+                symbol: "lock.fill",
+                color: WTheme.inkSecondary,
                 title: "No access",
-                message: "You need the view analytics permission to see this page."
+                message: "Ask a workspace admin for the view analytics permission."
             )
+            Spacer()
         }
+        .background(WTheme.groupedPage)
         .toolbarVisibility(.hidden, for: .navigationBar)
     }
 
@@ -153,10 +109,16 @@ struct AnalyticsRootView: View {
                 drawer(topInset: geo.safeAreaInsets.top)
             }
         }
-        // Own chrome: the sky hero runs to the top edge and carries the
-        // hamburger + close buttons.
         .toolbarVisibility(.hidden, for: .navigationBar)
-        .task { await store.load(env.api) }
+        .task {
+            #if DEBUG
+            if let raw = ProcessInfo.processInfo.environment["WARMBLY_DEBUG_ANALYTICS"], let debug = AnalyticsScope(rawValue: raw) {
+                scope = debug
+            }
+            #endif
+            await store.load(env.api)
+            shown = true
+        }
         .onChange(of: env.realtime.pulse(for: .analytics)) {
             Task { await store.load(env.api) }
         }
@@ -172,8 +134,6 @@ struct AnalyticsRootView: View {
             }
         }
         .sensoryFeedback(.selection, trigger: scope)
-        .sensoryFeedback(.selection, trigger: store.period)
-        .sensoryFeedback(.selection, trigger: metric)
         .sensoryFeedback(.impact(weight: .light), trigger: sidebarOpen)
     }
 
@@ -181,17 +141,43 @@ struct AnalyticsRootView: View {
 
     private var mainPane: some View {
         VStack(spacing: 0) {
-            hero
-            sheet
+            CoverHeader(
+                title: scope == .overview ? "Analytics" : scope.title,
+                subtitle: scope == .accounts
+                    ? "\(store.accounts.count) \(store.accounts.count == 1 ? "mailbox" : "mailboxes")"
+                    : "Last \(store.period.label)",
+                onMenu: openSidebar,
+                onClose: onClose
+            )
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    controls
+                    Group {
+                        switch scope {
+                        case .overview: overview
+                        case .deliverability: AnalyticsDeliverabilityPage(store: store, shown: shown)
+                        case .warmup: AnalyticsWarmupPage(store: store, shown: shown)
+                        case .accounts: AnalyticsAccountsPage(store: store, shown: shown)
+                        }
+                    }
+                    .id(scope)
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .offset(y: 14)),
+                        removal: .opacity
+                    ))
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .padding(.bottom, 60)
+            }
+            .scrollIndicators(.hidden)
+            .defaultScrollAnchor(SettingsDebug.anchor)
+            .refreshable { await store.load(env.api) }
         }
-        .background(alignment: .top) {
-            AirSkyWash().ignoresSafeArea(edges: .top)
-        }
-        .background(Color(.systemBackground))
+        .background(WTheme.groupedPage)
         .simultaneousGesture(
             DragGesture(minimumDistance: 25)
                 .onEnded { value in
-                    // Gmail's edge swipe: open the drawer from the left edge.
                     if !sidebarOpen, value.startLocation.x < 44, value.translation.width > 70 {
                         openSidebar()
                     }
@@ -199,421 +185,317 @@ struct AnalyticsRootView: View {
         )
     }
 
-    // MARK: Hero
-
-    private var hero: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            topRow
-            periodPicker
-            campaignFilterChip
-            heroStats
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 2)
-        .padding(.bottom, 18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var topRow: some View {
-        HStack(spacing: 12) {
-            skyCircleButton("line.3.horizontal", label: "Open analytics menu") {
-                openSidebar()
-            }
-            HStack(spacing: 8) {
-                WarmblyLogo()
-                    .fill(.white)
-                    .frame(width: 21, height: 21 * (764 / 746))
-                Text("Analytics")
-                    .font(.system(size: 20, weight: .heavy))
-                    .tracking(-0.4)
-                    .foregroundStyle(.white)
-                    .fixedSize()
-            }
-            Spacer()
-            PresenceAvatars()
-            skyCircleButton("xmark", label: "Close analytics", size: 15) {
-                onClose()
-            }
-        }
-    }
-
-    private func skyCircleButton(
-        _ symbol: String,
-        label: String,
-        size: CGFloat = 17,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: size, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 40, height: 40)
-                .background(.white.opacity(0.16), in: Circle())
-        }
-        .buttonStyle(TapScaleStyle())
-        .accessibilityLabel(label)
-    }
-
-    /// White-glass capsule row bound to the store period; every load reacts.
-    private var periodPicker: some View {
-        HStack(spacing: 7) {
-            ForEach(AnalyticsPeriod.allCases) { period in
-                let selected = store.period == period
-                Button {
-                    withAnimation(.snappy) { store.period = period }
-                } label: {
-                    Text(period.rawValue)
-                        .font(.footnote.weight(selected ? .semibold : .medium))
-                        .monospacedDigit()
-                        .foregroundStyle(selected ? .white : .white.opacity(0.7))
-                        .padding(.horizontal, 13)
-                        .padding(.vertical, 6)
-                        .background(.white.opacity(selected ? 0.22 : 0.10), in: Capsule())
-                }
-                .buttonStyle(TapScaleStyle())
-                .accessibilityLabel("Last \(period.days) days")
-                .accessibilityAddTraits(selected ? .isSelected : [])
-            }
-        }
-        .padding(.horizontal, 4)
-    }
+    // MARK: Controls
 
     private var scopeLabel: String {
         store.scopeLabel { id in env.session.user?.folders?.first { $0.id == id }?.name }
     }
 
-    /// Opens the campaign filter; the overview's campaign numbers follow it.
-    private var campaignFilterChip: some View {
+    private var controls: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if scope != .accounts {
+                PillSwitcher(
+                    options: AnalyticsPeriod.allCases,
+                    selection: Binding(get: { store.period }, set: { store.period = $0 }),
+                    label: \.label
+                )
+            }
+            if scope == .overview {
+                filterChip
+            }
+        }
+    }
+
+    private var filterChip: some View {
         let scoped = !store.campaignFilter.isEmpty
-        return HStack(spacing: 7) {
+        return HStack(spacing: 8) {
             Button {
                 filterOpen = true
             } label: {
-                HStack(spacing: 6) {
+                HStack(spacing: 7) {
                     Image(systemName: "megaphone.fill")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(scoped ? WTheme.accent : WTheme.inkSecondary)
                     Text(scopeLabel)
-                        .font(.footnote.weight(.semibold))
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(WTheme.ink)
                         .lineLimit(1)
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .bold))
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(WTheme.inkTertiary)
                 }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(.white.opacity(scoped ? 0.26 : 0.12), in: Capsule())
+                .padding(.horizontal, 13)
+                .frame(height: 34)
+                .background(scoped ? WTheme.accentSoft : WTheme.groupedCard, in: Capsule())
             }
             .buttonStyle(TapScaleStyle())
             .accessibilityLabel("Campaign filter: \(scopeLabel)")
-            // Deliverability, warmup and accounts are not campaign data, so the filter skips them.
-            if scoped, scope != .overview {
-                Text("Headline numbers only")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.75))
-                    .lineLimit(1)
-            }
             if scoped {
                 Button {
                     withAnimation(.snappy) { store.campaignFilter = AnalyticsCampaignFilter() }
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 26, height: 26)
-                        .background(.white.opacity(0.12), in: Circle())
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(WTheme.inkSecondary)
+                        .frame(width: 34, height: 34)
+                        .background(WTheme.groupedCard, in: Circle())
                 }
                 .buttonStyle(TapScaleStyle())
+                .transition(.scale.combined(with: .opacity))
                 .accessibilityLabel("Show all campaigns")
             }
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 4)
-    }
-
-    private var heroStats: some View {
-        let stats = store.dashboard?.overallStats
-        return HStack(spacing: 10) {
-            AirStatChip(
-                value: stats.map { WFormat.compact($0.totalEmailsSent ?? 0) } ?? "–",
-                label: "Sent",
-                symbol: "paperplane.fill"
-            )
-            AirStatChip(
-                value: stats?.openRate.map { String(format: "%.0f%%", $0) } ?? "–",
-                label: "Open rate",
-                symbol: "envelope.open.fill"
-            )
-            AirStatChip(
-                value: stats.map { WFormat.compact($0.totalReplies ?? 0) } ?? "–",
-                label: "Replies",
-                symbol: "arrowshape.turn.up.left.fill"
-            )
-        }
-        .padding(.horizontal, 4)
-    }
-
-    // MARK: Sheet
-
-    private var sheetShape: UnevenRoundedRectangle {
-        UnevenRoundedRectangle(topLeadingRadius: 26, topTrailingRadius: 26, style: .continuous)
-    }
-
-    private var sheet: some View {
-        sectionList
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipShape(sheetShape)
-            .background(
-                sheetShape
-                    .fill(Color(.systemBackground))
-                    .ignoresSafeArea(edges: .bottom)
-                    .shadow(color: .black.opacity(0.12), radius: 18, y: -4)
-            )
-    }
-
-    @ViewBuilder
-    private var sectionList: some View {
-        switch scope {
-        case .overview: overviewList.transition(.opacity)
-        case .deliverability: deliverabilityList.transition(.opacity)
-        case .warmup: warmupList.transition(.opacity)
-        case .accounts: accountsList.transition(.opacity)
-        }
-    }
-
-    /// Full-bleed flat row (the row content manages its own gutters).
-    private func fullBleedRow<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        content()
-            .listRowInsets(EdgeInsets())
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color(.systemBackground))
-    }
-
-    /// Breathing room after the last row of each section.
-    private var sectionFooter: some View {
-        Color.clear
-            .frame(height: 24)
-            .listRowInsets(EdgeInsets())
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color(.systemBackground))
-    }
-
-    /// Tertiary trailing text for the scope caption rows.
-    private var periodCaption: some View {
-        Text("last \(store.period.rawValue)")
-            .font(.caption.weight(.medium))
-            .monospacedDigit()
-            .foregroundStyle(.tertiary)
-            .contentTransition(.numericText())
+        .animation(.snappy, value: scoped)
     }
 
     // MARK: Overview
 
     @ViewBuilder
-    private var overviewList: some View {
+    private var overview: some View {
         if store.dashboard != nil {
-            List {
-                AnalyticsSectionCaption("Overview", top: 18) { periodCaption }
-                fullBleedRow { statStrip }
-                fullBleedRow { activeRow }
-                fullBleedRow { chartSection }
-                AnalyticsTopCampaignsSection(campaigns: store.dashboard?.topCampaigns ?? [])
-                AnalyticsActivitySection(items: store.dashboard?.recentActivity ?? [])
-                sectionFooter
+            VStack(alignment: .leading, spacing: 16) {
+                trendCard.reveal(shown, 0)
+                kpiCard.reveal(shown, 1)
+                funnelCard.reveal(shown, 2)
+                if !(store.dashboard?.topCampaigns ?? []).isEmpty {
+                    campaignsCard.reveal(shown, 3)
+                }
+                if !(store.dashboard?.recentActivity ?? []).isEmpty {
+                    activityCard.reveal(shown, 4)
+                }
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .environment(\.defaultMinListRowHeight, 0)
-            .refreshable { await store.load(env.api) }
         } else if let error = store.dashboardError {
             ErrorStateView(title: "Couldn't load analytics", message: error) {
                 await store.load(env.api)
             }
+            .padding(.top, 40)
         } else {
-            ScrollView { SkeletonRows(rows: 10) }
+            AnalyticsLoadingCards()
         }
     }
 
-    // MARK: Deliverability
-
-    private var deliverabilityList: some View {
-        List {
-            AnalyticsDeliverabilitySection(
-                summary: store.deliverability,
-                error: store.deliverabilityError,
-                captionTop: 18
+    private var trendDays: [TrendDay] {
+        var values: [String: TrendDay] = [:]
+        for point in store.dashboard?.dailyTrend ?? [] {
+            guard let raw = point.date else { continue }
+            values[String(raw.prefix(10))] = TrendDay(
+                date: .now,
+                sent: point.sent ?? 0,
+                opens: point.opens ?? 0,
+                clicks: point.clicks ?? 0,
+                replies: point.replies ?? 0
             )
-            sectionFooter
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .environment(\.defaultMinListRowHeight, 0)
-        .refreshable { await store.load(env.api) }
+        return TrendDay.lastDays(store.period.days, values: values)
     }
 
-    // MARK: Warmup
-
-    private var warmupList: some View {
-        List {
-            AnalyticsWarmupSection(
-                warmup: store.warmup,
-                error: store.warmupError,
-                periodLabel: store.period.rawValue,
-                captionTop: 18
-            )
-            sectionFooter
-        }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .environment(\.defaultMinListRowHeight, 0)
-        .refreshable { await store.load(env.api) }
+    private var trendCard: some View {
+        TrendChart(days: trendDays, shown: shown, caption: "Last \(store.period.label), drag to see a day")
+            .coverCard()
     }
 
-    // MARK: Accounts
+    // MARK: KPIs
 
-    private var accountsList: some View {
-        List {
-            AnalyticsAccountsSection(
-                accounts: store.accounts,
-                counts: store.dashboard?.accountHealth,
-                error: store.accountsError,
-                isLoading: store.isLoading,
-                captionTop: 18
-            )
-            sectionFooter
-        }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .environment(\.defaultMinListRowHeight, 0)
-        .refreshable { await store.load(env.api) }
+    private struct KPI {
+        let label: String
+        let value: Double
+        let format: (Double) -> String
+        let delta: Double?
+        let points: Bool
+        var lowerIsBetter = false
+        let series: [Double]
+        let tint: Color
     }
 
-    // MARK: Stat strip
-
-    private var statStrip: some View {
+    private var current: AnalyticsTotals {
         let stats = store.dashboard?.overallStats
-        let sent = stats?.totalEmailsSent ?? 0
-        let opens = stats?.totalOpens ?? 0
-        let machine = stats?.machineOpens ?? 0
-        let clicks = stats?.totalClicks ?? 0
-        let replies = stats?.totalReplies ?? 0
-        let bounces = stats?.totalBounces ?? 0
-        let bounceRate = stats?.bounceRate ?? 0
+        return AnalyticsTotals(
+            sent: stats?.totalEmailsSent ?? 0,
+            opens: stats?.totalOpens ?? 0,
+            clicks: stats?.totalClicks ?? 0,
+            replies: stats?.totalReplies ?? 0
+        )
+    }
 
-        var openCaption = WFormat.percent(opens, of: sent)
-        if machine > 0 { openCaption += " · \(WFormat.compact(machine)) auto" }
+    private var kpis: [KPI] {
+        let now = current
+        let before = store.previous
+        let days = trendDays
+        func rate(_ part: (TrendDay) -> Int) -> [Double] {
+            days.map { $0.sent > 0 ? Double(part($0)) / Double($0.sent) * 100 : 0 }
+        }
+        let pct: (Double) -> String = { String(format: "%.1f%%", $0) }
+        let stats = store.dashboard?.overallStats
+        return [
+            KPI(label: "Sent", value: Double(now.sent), format: { WFormat.compact(Int($0.rounded())) },
+                delta: before.flatMap { DeltaLabel.percent(now.sent, $0.sent) }, points: false,
+                series: days.map { Double($0.sent) }, tint: WTheme.accent),
+            KPI(label: "Open rate", value: stats?.openRate ?? 0, format: pct,
+                delta: DeltaLabel.points(stats?.openRate, before?.openRate), points: true,
+                series: rate(\.opens), tint: WTheme.special),
+            KPI(label: "Reply rate", value: stats?.replyRate ?? 0, format: pct,
+                delta: DeltaLabel.points(stats?.replyRate, before?.replyRate), points: true,
+                series: rate(\.replies), tint: WTheme.positive),
+            KPI(label: "Click rate", value: stats?.clickRate ?? 0, format: pct,
+                delta: DeltaLabel.points(stats?.clickRate, before?.clickRate), points: true,
+                series: rate(\.clicks), tint: Tone.orange.color),
+        ]
+    }
 
-        return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 0) {
-                statButton(.sent, label: "Sent", value: WFormat.compact(sent), caption: "last \(store.period.rawValue)")
-                stripDivider
-                statButton(.opens, label: "Opened", value: WFormat.compact(opens), caption: openCaption)
-                stripDivider
-                statButton(.clicks, label: "Clicked", value: WFormat.compact(clicks), caption: WFormat.percent(clicks, of: sent))
-                stripDivider
-                statButton(.replies, label: "Replied", value: WFormat.compact(replies), caption: WFormat.percent(replies, of: sent))
-                stripDivider
-                AnalyticsStatCell(
-                    label: "Bounced",
-                    value: WFormat.compact(bounces),
-                    caption: WFormat.percent(bounces, of: sent),
-                    tone: bounceRate >= 5 ? .rose : (bounceRate >= 2 ? .amber : nil)
-                )
+    private var kpiCard: some View {
+        let items = kpis
+        return VStack(alignment: .leading, spacing: 0) {
+            ForEach(0 ..< 2, id: \.self) { row in
+                HStack(spacing: 0) {
+                    kpiCell(items[row * 2], index: row * 2)
+                        .padding(.trailing, 16)
+                    Rectangle().fill(WTheme.hairline).frame(width: 1)
+                    kpiCell(items[row * 2 + 1], index: row * 2 + 1)
+                        .padding(.leading, 16)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                if row == 0 { Hairline() }
             }
-            // Cells carry 14pt internal padding; 6 more lands the first
-            // column on the shared 20pt gutter.
-            .padding(.horizontal, 6)
+            Hairline().padding(.top, 2)
+            factsLine
+                .padding(.top, 14)
         }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 6)
+        .padding(.bottom, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(WTheme.groupedCard, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 
-    private func statButton(_ target: AnalyticsTrendMetric, label: String, value: String, caption: String) -> some View {
-        Button {
-            withAnimation(.snappy) { metric = target }
-        } label: {
-            AnalyticsStatCell(label: label, value: value, caption: caption, selected: metric == target)
+    private func kpiCell(_ kpi: KPI, index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Circle().fill(kpi.tint).frame(width: 6, height: 6)
+                Text(kpi.label)
+                    .font(.system(size: 13.5, weight: .medium))
+                    .foregroundStyle(WTheme.inkSecondary)
+                    .lineLimit(1)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                CountUpText(value: shown ? kpi.value : 0, format: kpi.format)
+                    .font(.system(size: 28, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(WTheme.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .animation(.easeOut(duration: 1).delay(Double(index) * 0.05), value: shown)
+                    .animation(.easeOut(duration: 0.6), value: kpi.value)
+                Spacer(minLength: 0)
+                if store.previous != nil {
+                    DeltaLabel(change: kpi.delta, points: kpi.points, lowerIsBetter: kpi.lowerIsBetter)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .transition(.opacity)
+                }
+            }
+            Sparkline(values: kpi.series, color: kpi.tint, delay: 0.25 + Double(index) * 0.08)
+                .frame(height: 30)
+                .id("\(store.period.rawValue)-\(index)")
         }
-        .buttonStyle(.plain)
+        .padding(.vertical, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var stripDivider: some View {
-        Divider().frame(height: 40)
-    }
-
-    private var activeRow: some View {
+    private var factsLine: some View {
         let stats = store.dashboard?.overallStats
-        // Sending accounts are never narrowed by the campaign filter; say so when it is on.
-        let accounts = store.campaignFilter.isEmpty ? "sending accounts" : "sending accounts in workspace"
-        return Text("\(stats?.activeCampaigns ?? 0) active campaigns · \(stats?.activeAccounts ?? 0) \(accounts)")
-            .font(.footnote.weight(.medium))
-            .monospacedDigit()
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 20)
-            .padding(.top, 10)
+        let campaigns = stats?.activeCampaigns ?? 0
+        let mailboxes = stats?.activeAccounts ?? 0
+        let bounce = stats?.bounceRate ?? 0
+        let bold: (String) -> Text = { Text($0).foregroundStyle(WTheme.ink).fontWeight(.semibold) }
+        let bounceText = Text(String(format: "%.1f%%", bounce))
+            .foregroundStyle(bounce >= 5 ? WTheme.negative : bounce >= 2 ? WTheme.warning : WTheme.ink)
+            .fontWeight(.semibold)
+        return Text("\(bold("\(campaigns)")) active \(campaigns == 1 ? "campaign" : "campaigns")  ·  \(bold("\(mailboxes)")) sending \(mailboxes == 1 ? "mailbox" : "mailboxes")  ·  \(bounceText) bounced")
+            .font(.system(size: 13.5))
+            .foregroundStyle(WTheme.inkSecondary)
+            .lineSpacing(3)
     }
 
-    // MARK: Trend chart
+    // MARK: Funnel
 
-    private var chartPoints: [AnalyticsChartPoint] {
-        let trend = store.dashboard?.dailyTrend ?? []
-        return trend.enumerated().compactMap { index, point in
-            guard let day = AnalyticsDay.parse(point.date) else { return nil }
-            return AnalyticsChartPoint(id: index, day: day, value: metric.value(point))
-        }
-    }
-
-    /// Catmull-Rom line + gradient area, matching the Home trend card.
-    private var chartSection: some View {
-        let points = chartPoints
-        return VStack(alignment: .leading, spacing: 10) {
-            EyebrowLabel("\(metric.title) per day")
-                .padding(.horizontal, 20)
-            if points.count > 1 {
-                Chart(points) { point in
-                    AreaMark(
-                        x: .value("Day", point.day),
-                        y: .value(metric.title, point.value)
-                    )
-                    .interpolationMethod(.catmullRom)
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [metric.color.opacity(0.32), metric.color.opacity(0.02)],
-                            startPoint: .top,
-                            endPoint: .bottom
+    private var funnelCard: some View {
+        let now = current
+        let steps: [(label: String, symbol: String, value: Int, color: Color)] = [
+            ("Sent", "paperplane.fill", now.sent, WTheme.accent),
+            ("Opened", "envelope.open.fill", now.opens, WTheme.special),
+            ("Clicked", "cursorarrow.click", now.clicks, Tone.orange.color),
+            ("Replied", "arrowshape.turn.up.left.fill", now.replies, WTheme.positive),
+        ]
+        let base = max(1, now.sent)
+        return VStack(alignment: .leading, spacing: 16) {
+            CardTitle("From send to reply", caption: "How far each email got")
+            VStack(spacing: 14) {
+                ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                    VStack(alignment: .leading, spacing: 7) {
+                        HStack(spacing: 8) {
+                            Image(systemName: step.symbol)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(step.color)
+                                .frame(width: 18)
+                            Text(step.label)
+                                .font(.system(size: 15))
+                                .foregroundStyle(WTheme.ink)
+                            Spacer()
+                            CountUpText(value: shown ? Double(step.value) : 0, format: { WFormat.compact(Int($0.rounded())) })
+                                .font(.system(size: 15, weight: .semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(WTheme.ink)
+                                .animation(.easeOut(duration: 0.9).delay(0.2 + Double(index) * 0.1), value: shown)
+                            Text(index == 0 ? "100%" : WFormat.percent(step.value, of: now.sent))
+                                .font(.system(size: 13))
+                                .monospacedDigit()
+                                .foregroundStyle(WTheme.inkTertiary)
+                                .frame(width: 46, alignment: .trailing)
+                        }
+                        GrowBar(
+                            fraction: Double(step.value) / Double(base),
+                            color: step.color,
+                            shown: shown,
+                            delay: 0.2 + Double(index) * 0.12,
+                            height: 8
                         )
-                    )
-                    LineMark(
-                        x: .value("Day", point.day),
-                        y: .value(metric.title, point.value)
-                    )
-                    .interpolationMethod(.catmullRom)
-                    .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                    .foregroundStyle(metric.color)
-                }
-                .chartXAxis {
-                    AxisMarks(values: .automatic(desiredCount: 4)) { _ in
-                        AxisGridLine().foregroundStyle(Color(.separator).opacity(0.4))
-                        AxisValueLabel(format: .dateTime.month(.abbreviated).day())
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(Color.secondary)
+                        .padding(.leading, 26)
                     }
                 }
-                .chartYAxis {
-                    AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { _ in
-                        AxisGridLine().foregroundStyle(Color(.separator).opacity(0.4))
-                        AxisValueLabel()
-                            .font(.system(size: 10))
-                            .foregroundStyle(Color.secondary)
-                    }
-                }
-                .frame(height: 180)
-                .padding(.horizontal, 20)
-            } else {
-                Text("Not enough activity to chart yet.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 120)
             }
         }
-        .padding(.top, 14)
-        .padding(.bottom, 14)
+        .coverCard()
+    }
+
+    // MARK: Campaigns
+
+    private var campaignsCard: some View {
+        let campaigns = Array((store.dashboard?.topCampaigns ?? []).prefix(5))
+        return VStack(alignment: .leading, spacing: 4) {
+            CardTitle("Top campaigns", caption: "Ranked by sends this period")
+                .padding(.bottom, 8)
+            ForEach(Array(campaigns.enumerated()), id: \.element.id) { index, campaign in
+                if index > 0 { Hairline().padding(.leading, 52) }
+                AnalyticsCampaignRow(campaign: campaign, rank: index + 1, shown: shown)
+            }
+        }
+        .coverCard()
+    }
+
+    // MARK: Activity
+
+    private var activityCard: some View {
+        let items = Array((store.dashboard?.recentActivity ?? []).prefix(8))
+        return VStack(alignment: .leading, spacing: 4) {
+            CardTitle("Latest from your recipients")
+                .padding(.bottom, 8)
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                if index > 0 { Hairline().padding(.leading, 52) }
+                AnalyticsActivityRow(item: item)
+            }
+        }
+        .coverCard()
     }
 
     // MARK: Drawer
@@ -625,8 +507,7 @@ struct AnalyticsRootView: View {
             topInset: topInset,
             revealed: sidebarOpen
         ) { newScope in
-            withAnimation(.spring(response: 0.38, dampingFraction: 0.8)) { scope = newScope }
-            // Let the highlight capsule slide to the tapped row before closing.
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.86)) { scope = newScope }
             Task {
                 try? await Task.sleep(for: .milliseconds(280))
                 closeSidebar()
@@ -670,63 +551,128 @@ struct AnalyticsRootView: View {
     }
 }
 
-// MARK: - Stat strip cell
+// MARK: - Rows
 
-/// StatCell plus a rate caption and a selected underline (acts as the chart
-/// metric filter).
-struct AnalyticsStatCell: View {
-    let label: String
-    let value: String
-    let caption: String
-    var tone: Tone? = nil
-    var selected: Bool = false
+/// A ranked campaign: its status, sends, and reply rate as a small ring.
+struct AnalyticsCampaignRow: View {
+    let campaign: AnalyticsTopCampaign
+    let rank: Int
+    var shown: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            EyebrowLabel(label)
-            Text(value)
-                .font(.system(size: 22, weight: .bold, design: .rounded))
+        let status = CampaignStatusInfo.from(campaign.status)
+        let reply = campaign.replyRate ?? 0
+        return HStack(spacing: 12) {
+            Text("\(rank)")
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-                .foregroundStyle(tone?.color ?? Color.primary)
-                .contentTransition(.numericText())
-            Text(caption)
-                .font(.caption.weight(.medium))
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .contentTransition(.numericText())
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .frame(minWidth: 96, alignment: .leading)
-        .overlay(alignment: .bottom) {
-            if selected {
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(WTheme.accent)
-                    .frame(height: 2)
-                    .padding(.horizontal, 14)
+                .foregroundStyle(rank == 1 ? WTheme.accent : WTheme.inkSecondary)
+                .frame(width: 34, height: 34)
+                .background(rank == 1 ? WTheme.accentSoft : WTheme.fill, in: Circle())
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 7) {
+                    Text(campaign.name ?? "Untitled campaign")
+                        .font(.system(size: 15.5, weight: .medium))
+                        .foregroundStyle(WTheme.ink)
+                        .lineLimit(1)
+                    StatusPill(text: status.label.prefix(1).uppercased() + status.label.dropFirst(), tone: status.tone)
+                        .fixedSize()
+                }
+                Text("\(WFormat.compact(campaign.emailsSent ?? 0)) sent  ·  \(AnalyticsFmt.rate(campaign.openRate)) opened")
+                    .font(.system(size: 13))
+                    .monospacedDigit()
+                    .foregroundStyle(WTheme.inkSecondary)
+                    .lineLimit(1)
             }
+            Spacer(minLength: 6)
+            SweepRing(fraction: reply / 100, color: WTheme.positive, shown: shown, lineWidth: 4, delay: 0.3 + Double(rank) * 0.08) {
+                Text("\(Int(reply.rounded()))%")
+                    .font(.system(size: 11, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(WTheme.ink)
+            }
+            .frame(width: 40, height: 40)
+            .accessibilityLabel("\(Int(reply.rounded())) percent replied")
         }
-        .contentShape(Rectangle())
+        .padding(.vertical, 10)
     }
 }
 
-/// Compact labeled number used inside the section grids.
-struct AnalyticsMiniStat: View {
-    let label: String
-    let value: String
-    var tone: Tone? = nil
+/// One thing a recipient did, with what it was and when.
+struct AnalyticsActivityRow: View {
+    let item: AnalyticsActivityItem
+
+    private var kind: (verb: String, symbol: String, color: Color) {
+        switch item.type {
+        case "opened": ("opened", "envelope.open.fill", WTheme.special)
+        case "clicked": ("clicked a link", "cursorarrow.click", Tone.orange.color)
+        case "replied": ("replied", "arrowshape.turn.up.left.fill", WTheme.positive)
+        case "bounced": ("bounced", "exclamationmark.triangle.fill", WTheme.negative)
+        default: ("was sent an email", "paperplane.fill", WTheme.accent)
+        }
+    }
+
+    private var name: String {
+        let email = item.contactEmail ?? "Someone"
+        let local = email.split(separator: "@").first.map(String.init) ?? email
+        return local.split(whereSeparator: { $0 == "." || $0 == "_" || $0 == "-" })
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            EyebrowLabel(label)
-            Text(value)
-                .font(.system(size: 18, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(tone?.color ?? Color.primary)
-                .contentTransition(.numericText())
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
+        let kind = kind
+        return HStack(spacing: 12) {
+            WAvatar(name: name, seed: item.contactID ?? item.contactEmail ?? "", size: 38)
+                .overlay(alignment: .bottomTrailing) {
+                    Image(systemName: kind.symbol)
+                        .font(.system(size: 8.5, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 18, height: 18)
+                        .background(kind.color, in: Circle())
+                        .overlay(Circle().stroke(WTheme.groupedCard, lineWidth: 2))
+                        .offset(x: 4, y: 4)
+                }
+            VStack(alignment: .leading, spacing: 3) {
+                Text("\(Text(name).fontWeight(.semibold).foregroundStyle(WTheme.ink)) \(kind.verb)")
+                    .font(.system(size: 15))
+                    .foregroundStyle(WTheme.inkSecondary)
+                    .lineLimit(1)
+                Text(item.campaignName ?? item.contactEmail ?? "")
+                    .font(.system(size: 13))
+                    .foregroundStyle(WTheme.inkTertiary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 6)
+            if let timestamp = item.timestamp {
+                Text(WFormat.ago(timestamp))
+                    .font(.system(size: 13))
+                    .monospacedDigit()
+                    .foregroundStyle(WTheme.inkTertiary)
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 10)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Grey placeholder cards with a shimmer, while the first load runs.
+struct AnalyticsLoadingCards: View {
+    var body: some View {
+        VStack(spacing: 16) {
+            ForEach([240.0, 190, 170], id: \.self) { height in
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(WTheme.groupedCard)
+                    .frame(height: height)
+                    .overlay(alignment: .topLeading) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            RoundedRectangle(cornerRadius: 6).fill(WTheme.fill).frame(width: 120, height: 14)
+                            RoundedRectangle(cornerRadius: 6).fill(WTheme.fill).frame(width: 80, height: 26)
+                        }
+                        .padding(18)
+                    }
+            }
+        }
+        .skeletonShimmer()
     }
 }

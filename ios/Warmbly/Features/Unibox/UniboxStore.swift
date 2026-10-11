@@ -24,6 +24,10 @@ private struct UniboxDataEnvelope<T: Codable & Sendable>: Codable, Sendable {
     var data: [T]?
 }
 
+private struct UniboxDraftStub: Codable, Sendable {
+    var id: String
+}
+
 // MARK: - Conversation list store
 
 @MainActor
@@ -39,7 +43,12 @@ final class UniboxStore {
     private(set) var hasLoaded = false
 
     var query = ""
-    var scope: UniboxScope = .all
+    var scope: UniboxScope = .inbox
+
+    /// Mailbox ids per mailbox tag, for tag scopes (`GET /v1/emails`).
+    private(set) var tagMailboxes: [String: [String]] = [:]
+    /// Unsent compose drafts (`GET /v1/unibox/drafts`).
+    private(set) var composeDraftCount = 0
 
     /// Drawer hero stat; only fetched when the member can view analytics.
     var includeSentStats = false
@@ -66,6 +75,28 @@ final class UniboxStore {
     var scheduledCount: Int { overview?.scheduledPending ?? 0 }
     var mailboxes: [UniboxMailboxCount] { overview?.mailboxes ?? [] }
     var categories: [UniboxGroupCount] { overview?.categories ?? [] }
+    var tags: [UniboxGroupCount] { overview?.tags ?? [] }
+
+    func folderCount(_ folder: String) -> UniboxFolderCount? {
+        overview?.folders?.first { $0.folder == folder }
+    }
+
+    /// Category ids a premade view covers, by lowercased label title.
+    func viewCategoryIDs(_ view: UniboxRail.View) -> [String] {
+        categories.filter { view.labels.contains(($0.title ?? "").lowercased()) }.map(\.id)
+    }
+
+    /// The sum of unread over a view's labels, like the web rail.
+    func viewUnread(_ view: UniboxRail.View) -> Int {
+        if view.automated { return overview?.automatedUnread ?? 0 }
+        return categories.filter { view.labels.contains(($0.title ?? "").lowercased()) }.reduce(0) { $0 + ($1.unread ?? 0) }
+    }
+
+    /// A scope that resolves to nothing (a tag on no mailbox) skips the request.
+    private var scopeIsEmpty: Bool {
+        if case let .tag(id, _) = scope { return (tagMailboxes[id] ?? []).isEmpty }
+        return false
+    }
 
     // MARK: Query building
 
@@ -77,25 +108,48 @@ final class UniboxStore {
 
         switch scope {
         case .all:
-            break
+            params["include_archived"] = "true"
         case .unread:
             params["unseen"] = "true"
+            params["automated"] = "false"
         case .today:
             params["since"] = UniboxFormat.dayParam(daysBack: 0)
+            params["automated"] = "false"
         case .week:
             params["since"] = UniboxFormat.dayParam(daysBack: 6)
+            params["automated"] = "false"
         case .awaiting:
             params["awaiting_reply"] = "true"
+        case .agentDrafts:
+            params["agent_drafts"] = "true"
         case .snoozed:
             params["snoozed"] = "true"
         case .scheduled:
             break // handled by the scheduled screen, not the list query
         case .uncategorized:
             params["uncategorized"] = "true"
+        case let .folder(folder):
+            params["folder"] = folder
+            if folder == "inbox" { params["automated"] = "false" }
         case let .mailbox(id, _):
             params["email_ids"] = id
+            params["automated"] = "false"
+        case let .tag(id, _):
+            params["email_ids"] = (tagMailboxes[id] ?? []).joined(separator: ",")
+            params["automated"] = "false"
         case let .category(id, _, _):
             params["category_ids"] = id
+        case let .view(id):
+            if let view = UniboxRail.views.first(where: { $0.id == id }) {
+                if view.automated {
+                    params["automated"] = "true"
+                } else {
+                    let ids = viewCategoryIDs(view)
+                    // No such labels yet: the nil uuid matches nothing.
+                    params["category_ids"] = ids.isEmpty ? "00000000-0000-0000-0000-000000000000" : ids.joined(separator: ",")
+                    params["automated"] = "false"
+                }
+            }
         }
 
         let parsed = UniboxQueryParser.parse(query)
@@ -139,6 +193,39 @@ final class UniboxStore {
         overview = (try? await api.get("unibox/overview")) ?? overview
     }
 
+    /// Tag scopes filter by the mailboxes carrying the tag.
+    func loadTagMailboxes(_ api: APIClient) async {
+        guard !tags.isEmpty else { return }
+        guard let page: ListResponse<EmailAccount> = try? await api.get("emails", query: ["limit": "200"]) else { return }
+        var map: [String: [String]] = [:]
+        for account in page.data {
+            for tag in account.tags ?? [] { map[tag, default: []].append(account.id) }
+        }
+        tagMailboxes = map
+    }
+
+    func loadComposeDrafts(_ api: APIClient) async {
+        guard let envelope: UniboxDataEnvelope<UniboxDraftStub> = try? await api.get("unibox/drafts") else { return }
+        withAnimation(.snappy) { composeDraftCount = envelope.data?.count ?? 0 }
+    }
+
+    /// Marks every message in a folder read (`PATCH /v1/unibox/seen`).
+    func markFolderRead(_ api: APIClient, folder: String) async {
+        let _: UniboxMarkSeenRequest? = try? await api.patch(
+            "unibox/seen",
+            body: UniboxMarkSeenRequest(emailIDs: [], seen: true, folder: folder)
+        )
+        if case .folder(folder) = scope {
+            withAnimation(.snappy) {
+                for index in messages.indices {
+                    messages[index].seen = true
+                    messages[index].hasUnread = false
+                }
+            }
+        }
+        await loadOverview(api)
+    }
+
     /// Fleet-wide sends today (campaign + warmup), summed from
     /// `GET /v1/analytics/accounts` for the drawer hero.
     func loadSentStats(_ api: APIClient) async {
@@ -159,6 +246,21 @@ final class UniboxStore {
         await loadOverview(api)
         if let unread = overview?.unread { badges.uniboxUnread = unread }
         Task { await loadSentStats(api) }
+        Task { await loadComposeDrafts(api) }
+        if case .tag = scope, tagMailboxes.isEmpty { await loadTagMailboxes(api) }
+
+        if scopeIsEmpty {
+            guard gen == generation else { return }
+            withAnimation(.snappy) {
+                messages = []
+                nextCursor = nil
+                hasMore = false
+            }
+            errorMessage = nil
+            hasLoaded = true
+            isLoading = false
+            return
+        }
 
         do {
             let page: UniboxListPage = try await api.get("unibox", query: params(cursor: nil))
@@ -510,6 +612,24 @@ final class UniboxComposerStore {
             idempotent: true
         )
         return response
+    }
+
+    /// Sends the inbox agent's draft; a nil body sends it as written.
+    func approve(_ api: APIClient, draftID: String, body: String?) async throws -> UniboxSendResponse {
+        isSending = true
+        errorMessage = nil
+        defer { isSending = false }
+        let response: UniboxSendResponse = try await api.post(
+            "unibox/agent-drafts/\(draftID)/approve",
+            body: AgentDraftApproveBody(body: body),
+            idempotent: true
+        )
+        return response
+    }
+
+    /// Best effort: a draft someone already handled is fine to leave.
+    func discard(_ api: APIClient, draftID: String) async {
+        let _: EmptyBody? = try? await api.post("unibox/agent-drafts/\(draftID)/discard")
     }
 
     func setError(_ message: String) { errorMessage = message }

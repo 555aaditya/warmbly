@@ -1,4 +1,4 @@
-import Foundation
+import SwiftUI
 
 /// Loads the four analytics surfaces in parallel; each section fails
 /// independently so one broken endpoint never blanks the whole screen.
@@ -10,6 +10,8 @@ final class AnalyticsStore {
     var campaignFilter = AnalyticsCampaignFilter()
 
     private(set) var dashboard: DashboardAnalytics?
+    /// The period before this one, from the next longer range; nil for 90 days.
+    private(set) var previous: AnalyticsTotals?
     private(set) var deliverability: DeliverabilitySummary?
     private(set) var warmup: WarmupAnalytics?
     private(set) var accounts: [AccountHealthRow] = []
@@ -77,11 +79,15 @@ final class AnalyticsStore {
         var query: [String: String?] = ["period": period.rawValue]
         if !filter.campaigns.isEmpty { query["campaign_ids"] = filter.campaigns.sorted().joined(separator: ",") }
         if !filter.folders.isEmpty { query["folder_ids"] = filter.folders.sorted().joined(separator: ",") }
+        let wanted = period
+        async let comparison: DashboardAnalytics? = loadComparison(api, query: query)
         do {
             let result: DashboardAnalytics = try await api.get("analytics/dashboard", query: query)
+            let longer = await comparison
             // A newer filter is already on its way; this answer describes the old one.
-            guard filter == campaignFilter else { return }
+            guard filter == campaignFilter, wanted == period else { return }
             dashboard = result
+            previous = longer.map { AnalyticsTotals.before(days: wanted.days, in: $0.dailyTrend ?? []) }
             dashboardError = nil
             // Drop selections the server no longer recognises (deleted, or another workspace's).
             if let scope = result.scope {
@@ -95,6 +101,19 @@ final class AnalyticsStore {
             guard filter == campaignFilter else { return }
             dashboardError = error.localizedDescription
         }
+    }
+
+    /// The next longer range, whose older days are this period's predecessor.
+    private func loadComparison(_ api: APIClient, query: [String: String?]) async -> DashboardAnalytics? {
+        let longer: AnalyticsPeriod? = switch period {
+        case .week: .month
+        case .month: .quarter
+        case .quarter: nil
+        }
+        guard let longer else { return nil }
+        var query = query
+        query["period"] = longer.rawValue
+        return try? await api.get("analytics/dashboard", query: query)
     }
 
     private func loadDeliverability(_ api: APIClient) async {
@@ -130,10 +149,32 @@ final class AnalyticsStore {
         }
     }
 
+    /// A mailbox's avatar by id, branded once the health rows have loaded.
+    func mailboxAvatar(id: String, email: String?, size: CGFloat) -> MailboxAvatar {
+        let row = accounts.first { $0.id == id }
+        return MailboxAvatar(
+            email: email ?? row?.email ?? "",
+            avatarURL: row?.avatarURL,
+            brand: row?.resolvedBrand ?? MailboxBrand(provider: nil, mailHost: nil),
+            seed: id,
+            size: size
+        )
+    }
+
     private func loadAccounts(_ api: APIClient) async {
         do {
-            let envelope: AnalyticsDataEnvelope<AccountHealthRow> = try await api.get("analytics/accounts")
-            accounts = envelope.data ?? []
+            async let health: AnalyticsDataEnvelope<AccountHealthRow> = api.get("analytics/accounts")
+            async let list: ListResponse<EmailAccount> = api.get("emails", query: ["limit": "200"])
+            let envelope = try await health
+            let mailboxes = Dictionary(((try? await list)?.data ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            accounts = (envelope.data ?? []).map { row in
+                var row = row
+                if let mailbox = mailboxes[row.id] {
+                    row.brand = mailbox.brand
+                    row.avatarURL = mailbox.avatarURL
+                }
+                return row
+            }
             accountsError = nil
         } catch {
             accountsError = error.localizedDescription

@@ -3,7 +3,7 @@ import SwiftUI
 /// House label picker (web ThreadLabelMenu / CategoryPicker parity): a
 /// search-or-create header, a removable assigned-chips row, and color-dot
 /// rows with trailing checkmarks. Toggles save immediately (optimistic,
-/// reverting on error) — there is no Save button. Three modes: bound to an
+/// reverting on error); there is no Save button. Three modes: bound to an
 /// open thread, standalone for a list row, and bulk for multi-select.
 struct UniboxLabelPicker: View {
     enum Mode {
@@ -65,19 +65,21 @@ struct UniboxLabelPicker: View {
         NavigationStack {
             VStack(spacing: 0) {
                 searchHeader
-                Divider()
                 if !selected.isEmpty {
                     assignedChips
-                    Divider()
                 }
+                Hairline()
                 content
             }
+            .background(WTheme.canvas)
             .navigationTitle("Labels")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(WTheme.canvas, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
-                        .fontWeight(.semibold)
+                        .fontWeight(.medium)
+                        .foregroundStyle(WTheme.ink)
                 }
             }
             .safeAreaInset(edge: .bottom) {
@@ -96,29 +98,39 @@ struct UniboxLabelPicker: View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.tertiary)
-            TextField(isBulk ? "Label conversations…" : "Label conversation…", text: $query)
-                .font(.subheadline)
-                .focused($searchFocused)
-                .autocorrectionDisabled()
-                .onSubmit {
-                    if !queryMatchesExisting {
-                        Task { await createAndSelect() }
-                    }
+                .foregroundStyle(WTheme.inkTertiary)
+            TextField(text: $query) {
+                Text(isBulk ? "Label conversations" : "Label conversation")
+                    .foregroundStyle(WTheme.inkTertiary)
+            }
+            .font(.system(size: 15))
+            .foregroundStyle(WTheme.ink)
+            .focused($searchFocused)
+            .autocorrectionDisabled()
+            .onSubmit {
+                if !queryMatchesExisting {
+                    Task { await createAndSelect() }
                 }
+            }
             if !query.isEmpty {
                 Button {
                     query = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 15))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(WTheme.inkTertiary)
                 }
                 .accessibilityLabel("Clear search")
             }
         }
+        .padding(.horizontal, 14)
+        .frame(height: 44)
+        .background(WTheme.raised, in: Capsule())
+        .overlay(Capsule().strokeBorder(searchFocused ? WTheme.ink.opacity(0.35) : WTheme.hairlineStrong, lineWidth: 1))
+        .animation(.easeOut(duration: 0.18), value: searchFocused)
         .padding(.horizontal, 16)
-        .frame(height: 46)
+        .padding(.top, 6)
+        .padding(.bottom, 12)
     }
 
     /// Currently assigned labels as removable chips.
@@ -133,23 +145,25 @@ struct UniboxLabelPicker: View {
                         HStack(spacing: 5) {
                             Circle().fill(tint).frame(width: 7, height: 7)
                             Text(label.title ?? "Label")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(tint)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(WTheme.ink)
                             Image(systemName: "xmark")
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundStyle(.secondary)
+                                .font(.system(size: 8, weight: .semibold))
+                                .foregroundStyle(WTheme.inkTertiary)
                         }
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 5)
-                        .background(tint.opacity(0.12), in: Capsule())
+                        .padding(.horizontal, 10)
+                        .frame(height: 26)
+                        .background(WTheme.raised, in: Capsule())
+                        .overlay(Capsule().strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Remove \(label.title ?? "label")")
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 8)
+            .padding(.bottom, 12)
         }
+        .transition(.opacity)
     }
 
     private var selectedLabels: [UniboxLabel] {
@@ -180,11 +194,13 @@ struct UniboxLabelPicker: View {
                 }
                 if let errorMessage {
                     Text(errorMessage)
-                        .font(.footnote)
+                        .font(.system(size: 13))
                         .foregroundStyle(WTheme.negative)
+                        .listRowBackground(WTheme.canvas)
                 }
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
             .scrollDismissesKeyboard(.immediately)
         }
     }
@@ -193,24 +209,39 @@ struct UniboxLabelPicker: View {
         Button {
             toggle(option.id)
         } label: {
-            HStack(spacing: 10) {
+            HStack(spacing: 12) {
                 Circle()
                     .fill(Color(uniboxHex: option.color) ?? WTheme.accent)
-                    .frame(width: 11, height: 11)
+                    .frame(width: 9, height: 9)
                 Text(option.name ?? "Label")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(.primary)
+                    .font(.system(size: 15))
+                    .foregroundStyle(WTheme.ink)
                 Spacer(minLength: 8)
-                if selected.contains(option.id) {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(WTheme.accent)
-                        .transition(.scale.combined(with: .opacity))
-                }
+                checkSquare(on: selected.contains(option.id))
             }
+            .padding(.vertical, 3)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .listRowBackground(WTheme.canvas)
+        .listRowSeparatorTint(WTheme.hairline)
+    }
+
+    /// Square check in the web picker's language: ink when on, hairline when off.
+    private func checkSquare(on: Bool) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(on ? WTheme.ink : WTheme.raised)
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .strokeBorder(on ? WTheme.ink : WTheme.hairlineStrong, lineWidth: 1)
+            if on {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(WTheme.inkInverse)
+                    .transition(.scale.combined(with: .opacity))
+            }
+        }
+        .frame(width: 20, height: 20)
     }
 
     private var createRow: some View {
@@ -221,17 +252,22 @@ struct UniboxLabelPicker: View {
                 if creating {
                     ProgressView().controlSize(.small)
                 } else {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 16))
-                        .foregroundStyle(WTheme.accent)
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(WTheme.inkInverse)
+                        .frame(width: 20, height: 20)
+                        .background(WTheme.ink, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
                 }
                 Text("Create \"\(trimmedQuery)\"")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(WTheme.accent)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(WTheme.ink)
                     .lineLimit(1)
             }
+            .padding(.vertical, 3)
         }
         .disabled(creating)
+        .listRowBackground(WTheme.canvas)
+        .listRowSeparatorTint(WTheme.hairline)
     }
 
     // MARK: Bulk footer
@@ -240,7 +276,7 @@ struct UniboxLabelPicker: View {
     private var bulkFooter: some View {
         if case let .bulk(count, onApply) = mode {
             VStack(spacing: 0) {
-                Divider()
+                Hairline()
                 Button {
                     Task {
                         applying = true
@@ -251,23 +287,16 @@ struct UniboxLabelPicker: View {
                 } label: {
                     HStack(spacing: 8) {
                         if applying {
-                            ProgressView().controlSize(.small).tint(.white)
+                            ProgressView().controlSize(.small).tint(WTheme.inkInverse)
                         }
                         Text(applying ? "Labeling…" : "Label \(count) conversation\(count == 1 ? "" : "s")")
-                            .font(.subheadline.weight(.semibold))
                     }
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
-                    .background(
-                        selected.isEmpty ? Color(.systemGray3) : WTheme.accent,
-                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    )
                 }
+                .buttonStyle(InkButtonStyle(size: .regular, fullWidth: true))
                 .disabled(selected.isEmpty || applying)
                 .padding(16)
             }
-            .background(.bar)
+            .background(WTheme.canvas)
         }
     }
 

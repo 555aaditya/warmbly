@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/app/appattest"
 	"github.com/warmbly/warmbly/internal/app/token"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
@@ -29,7 +30,7 @@ func (s *authService) RegistrationStart(ctx context.Context, data *AuthData, ori
 	}
 
 	// The caller's 400, not an incident. See LoginStart.
-	if xerr := s.captcha.Verify(ctx, data.Turnstile, ipaddr); xerr != nil {
+	if xerr := s.verifyHuman(ctx, appattest.ActionRegister, data.Turnstile, data.AppAttest, ipaddr); xerr != nil {
 		return nil, xerr
 	}
 

@@ -42,12 +42,12 @@ struct OrgPickerView: View {
         HStack(spacing: 12) {
             HStack(spacing: 8) {
                 WarmblyLogo()
-                    .fill(.white)
+                    .fill(WTheme.onSky)
                     .frame(width: 27, height: 28)
                 Text("Warmbly")
                     .font(.system(size: 20, weight: .heavy))
                     .tracking(-0.4)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(WTheme.onSky)
                     .fixedSize()
             }
             .shadow(color: Color(hex: 0x0C4A6E).opacity(0.25), radius: 8, y: 3)
@@ -58,10 +58,10 @@ struct OrgPickerView: View {
                 Task { await env.session.logout() }
             }
             .font(.system(size: 13.5, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.9))
+            .foregroundStyle(WTheme.onSky.opacity(0.9))
             .padding(.horizontal, 14)
             .frame(height: 34)
-            .background(.white.opacity(0.16), in: Capsule())
+            .background(WTheme.skyTile(0.16), in: Capsule())
             .buttonStyle(PressableButtonStyle())
         }
         .padding(.horizontal, 16)
@@ -74,17 +74,17 @@ struct OrgPickerView: View {
 
             VStack(spacing: 12) {
                 ZStack {
-                    Circle().fill(.white.opacity(0.16))
-                    Circle().strokeBorder(.white.opacity(0.3), lineWidth: 1)
+                    Circle().fill(WTheme.skyTile(0.16))
+                    Circle().strokeBorder(WTheme.skyEdge(0.3), lineWidth: 1)
                     Image(systemName: "person.2.fill")
                         .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(WTheme.onSky)
                 }
                 .frame(width: 54, height: 54)
 
                 Text("Choose a workspace")
                     .font(.system(size: 15.5, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(WTheme.onSky)
             }
             .shadow(color: Color(hex: 0x0C4A6E).opacity(0.25), radius: 6, y: 2)
             .scaleEffect(badgeAppeared ? 1 : 0.9)

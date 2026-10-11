@@ -2,18 +2,18 @@ import Foundation
 
 /// Server configuration, persisted in UserDefaults (thread-safe) so it can be
 /// read from any isolation domain without shared mutable state. Values are
-/// editable from the login screen's connection sheet.
+/// editable from the sign-in screen's Server sheet.
 enum AppConfig {
-    /// Shipped builds default to the hosted SaaS API; debug builds default to
-    /// the local dev backend. Self-hosters override the origin in-app, so one
-    /// binary serves the SaaS, a self-hosted instance, or a local stack.
-    #if DEBUG
-    static let defaultOrigin = "http://localhost:8080"
-    static let defaultTurnstileToken = "warmbly-local-turnstile-bypass"
-    #else
-    static let defaultOrigin = "https://api.warmbly.com"
+    static let cloudOrigin = "https://api.warmbly.com"
+    static let localOrigin = "http://localhost:8080"
+    /// The captcha value local dev backends accept in place of a widget token.
+    static let localTurnstileToken = "warmbly-local-turnstile-bypass"
+
+    /// Every build signs in to Warmbly Cloud until someone picks another
+    /// server, so one binary serves the SaaS, a self-hosted instance or a
+    /// local stack.
+    static let defaultOrigin = cloudOrigin
     static let defaultTurnstileToken = ""
-    #endif
 
     /// Bare origin, no path. The `/v1` prefix is applied in APIClient,
     /// mirroring the web's `API_BASE_URL = ${API_URL}/v1`.
@@ -41,6 +41,18 @@ enum AppConfig {
     static var lastOrganizationID: String? {
         get { UserDefaults.standard.string(forKey: "last_org_id") }
         set { UserDefaults.standard.set(newValue, forKey: "last_org_id") }
+    }
+
+    /// The web dashboard for a path: the hosted app beside the API, else the
+    /// same origin a self-hosted instance serves it from.
+    static func dashboardURL(_ path: String) -> URL? {
+        var origin = serverOrigin.trimmingCharacters(in: .whitespaces)
+        if origin.contains("://api.") {
+            origin = origin.replacingOccurrences(of: "://api.", with: "://app.")
+        } else if origin.hasSuffix("localhost:8080") {
+            origin = origin.replacingOccurrences(of: "localhost:8080", with: "localhost:5173")
+        }
+        return URL(string: origin + path)
     }
 
     static var apiBaseURL: URL? {

@@ -34,14 +34,17 @@ Local service map:
 2. Pick the **Warmbly** scheme and an iOS 26 simulator.
 3. Run (Cmd-R).
 
-On a simulator the defaults already point at `http://localhost:8080`, and `Info.plist` allows local (non-HTTPS) networking via `NSAllowsLocalNetworking`, so no ATS changes are needed.
+Every build starts on Warmbly Cloud, so open the gear on the sign-in screen once and pick **Local development**; the choice persists. `Info.plist` allows local (non-HTTPS) networking via `NSAllowsLocalNetworking`, so no ATS changes are needed.
 
 ## First run
 
-The app opens on an animated welcome screen; **Get started** begins account creation, **I already have an account** goes to sign-in. The gear button (top-right on the welcome screen, and on the email step's card) opens **Connection settings**:
+The app opens on an animated welcome screen; **Get started** begins account creation, **I already have an account** goes to sign-in. The gear button (top-right on sign-in) opens the **Server** sheet, which offers three choices:
 
-- **Server origin** — bare origin, no path. Default `http://localhost:8080`. The app appends `/v1` itself.
-- **Turnstile token** — pre-filled with the dev bypass token `warmbly-local-turnstile-bypass`. The dev backend accepts it so you don't need a real captcha widget. (Production is captcha-gated and needs a real token.)
+- **Warmbly Cloud**: the default, `https://api.warmbly.com`.
+- **Self-hosted**: any origin you type, bare with no path. The app appends `/v1` itself and adds `https://` when the scheme is missing (`http://` for localhost and LAN addresses).
+- **Local development** (debug builds): `http://localhost:8080`, with the dev bypass token `warmbly-local-turnstile-bypass`, because the simulator can't use App Attest.
+
+Under the choices, the sheet reads the server's public `GET /v1/auth/config` and reports whether it answers. A self-hosted server that asks for a captcha but takes no App Attest proof (`app_attest` false) is marked "Email sign-in off": the app never renders Turnstile, so email and password sign-in there needs `APP_ATTEST_APP_IDS` on the server, or a dev backend's bypass token under **Advanced**. Apple, Google and passkey sign-in work regardless.
 
 Then sign in with a seeded account:
 
@@ -70,11 +73,10 @@ First-time social sign-ins auto-provision the user, workspace, and trial server-
 
 ## Pointing at another host (staging, self-hosted)
 
-The server is an in-app runtime setting, not a build-time constant, so one binary serves everyone: the hosted SaaS, a self-hosted instance, or a local stack. Users switch hosts from the login screen's Connection settings; nobody rebuilds the app to reach their own infrastructure.
+The server is an in-app runtime setting, not a build-time constant, so one binary serves everyone: the hosted SaaS, a self-hosted instance, or a local stack. Users switch hosts from the Server sheet on the sign-in screen; nobody rebuilds the app to reach their own infrastructure.
 
-- Shipped (Release) builds default the origin to `https://api.warmbly.com`, so ordinary customers just log in and never open the setting.
-- Debug builds default to `http://localhost:8080` for the native dev stack.
-- Enter any other origin (a staging box, a self-hosted instance) in Connection settings; it persists in `UserDefaults`. "Reset to default" returns to the build's default.
+- Every build defaults the origin to Warmbly Cloud (`https://api.warmbly.com`), so ordinary customers just log in and never open the setting.
+- Pick **Local development** for the native dev stack, or **Self-hosted** for any other origin (a staging box, a self-hosted instance); the choice persists in `UserDefaults`. Picking Warmbly Cloud again clears the bypass token and realtime override.
 - App Transport Security: a remote/custom host must be `https://`. Plain `http://` is allowed only to localhost and LAN/reserved addresses (dev and on-device testing). See the [README caveat](README.md).
 
 ## Running on a physical device
@@ -99,12 +101,37 @@ Because there is no iOS SDK on CI-less machines, the fast local signal for Swift
 cd ios && find Warmbly -name '*.swift' -print0 | xargs -0 swiftc -parse
 ```
 
-A real typecheck happens when you build in Xcode. Conventions to keep the code consistent:
+A real typecheck happens when you build in Xcode.
+
+### Scripted simulator runs
+
+Debug builds read launch environment variables so a script can open the app signed in on a given tab without tapping through sign-in (both are compiled out of Release builds):
+
+- `WARMBLY_DEBUG_TOKEN`: the JSON body returned by `POST /v1/auth/login/confirm`. It is written to the Keychain on launch, and the push permission prompt is skipped.
+- `WARMBLY_DEBUG_TAB`: `home`, `inbox`, `campaigns`, `contacts` or `more`.
+- `WARMBLY_DEBUG_HOME`: the Home hero style to render, `immersive` (the default), `card` or `fade`.
+- `WARMBLY_DEBUG_SCROLL`: opens Home, the settings hub, a settings page or Analytics scrolled to the `center` or `bottom`, for screenshots below the hero.
+- `WARMBLY_DEBUG_THREAD`: with `WARMBLY_DEBUG_TAB=inbox`, `1` opens the newest conversation once the list loads `end` also scrolls it to the bottom, where an inbox agent's drafted reply sits, and `edit` opens that draft in the reply composer.
+- `WARMBLY_DEBUG_DRAWER`: `1` opens the drawer on launch (Inbox, Campaigns or Contacts, whichever tab is open, or Deals, Tasks and Meetings when one is opened from settings).
+- `WARMBLY_DEBUG_CAMPAIGN`: with `WARMBLY_DEBUG_TAB=campaigns`, opens the campaign whose name contains the value (the first campaign when nothing matches).
+- `WARMBLY_DEBUG_CONTACT`: with `WARMBLY_DEBUG_TAB=contacts`, opens the contact whose name or address contains the value. `WARMBLY_DEBUG_SORT` sets the contacts sort by its API name (`first_name`, `created_at`, ...).
+- `WARMBLY_DEBUG_SETTINGS`: with `WARMBLY_DEBUG_TAB=more`, opens a settings page (`profile`, `notifications`, `security`, `billing`, `team`, `templates` or `activity`) or a full-screen browser (`analytics`, `mailboxes`, `deals`, `tasks` or `meetings`). `WARMBLY_DEBUG_NOTIFICATIONS=preferences` opens the notifications page on its preferences. `WARMBLY_DEBUG_ANALYTICS` picks the analytics page (`overview`, `deliverability`, `warmup` or `accounts`), and `WARMBLY_DEBUG_ANALYTICS_ACCOUNT=1` then opens a mailbox's health. `WARMBLY_DEBUG_TEMPLATE=1` opens the first template and `WARMBLY_DEBUG_AUDIT_ENTRY=1` the newest activity entry. With `mailboxes`, `WARMBLY_DEBUG_CONNECT` opens the add-a-mailbox flow on a step (`provider`, `google`, `twostep`, `apppassword`, `appconnect`, `account`, `imap`, `smtp`, `grants`, `users`, `vendors`, `vendorkey`, `vendormailboxes`, `file`, `filereview` or `running`); every step past `provider` uses sample data, including an admin grant, a vendor catalog and a file preview, and `home` opens the first step with that data.
+- `WARMBLY_DEBUG_PHASE`: opens a screen from before the app, leaving the stored session alone: `launching` holds the splash, `signedout` shows sign-in, `onboarding` the first-run questions and `workspace` the create-a-workspace step. With `signedout`, `WARMBLY_DEBUG_AUTH` opens a later sign-in step (`signup`, `password`, `verify`, `twofa` or `reset`), or `server` to open the Server sheet; with `onboarding`, `WARMBLY_DEBUG_ONBOARDING` opens `referral`, `role` or `team`.
+- `WARMBLY_DEBUG_ASSISTANT`: opens Remie on launch. `1` opens it empty, any other text is sent as the first message, and `demo` or `demo-approval` plays a scripted run (tool steps, a streamed answer and, for the second, an approval card) without calling the AI provider, which the local stack does not configure.
+
+`simctl` forwards variables prefixed with `SIMCTL_CHILD_`:
+
+```
+SIMCTL_CHILD_WARMBLY_DEBUG_TOKEN="$(cat token.json)" SIMCTL_CHILD_WARMBLY_DEBUG_TAB=inbox \
+  xcrun simctl launch booted com.warmbly.app
+xcrun simctl io booted screenshot inbox.png
+``` Conventions to keep the code consistent:
 
 - New Codable models declare explicit `CodingKeys` (the decoder does not convert snake_case) and copy the Go json tags exactly. Prefer optional fields so a missing key never fails a whole screen.
 - Reach the app graph with `@Environment(AppEnvironment.self) private var env` → `env.api` (the `/v1` client), `env.session`, `env.realtime`, `env.badges`.
 - Every list: load with `.task`, reload on the matching `env.realtime.pulse(for:)`, and support `.refreshable`. Gate mutating actions with `env.session.can(.somePermission)`.
 - Copy is sentence case, terse, and avoids em dashes.
+- Style with the `WTheme` tokens and `DesignSystem/` primitives, never raw `.white`/`.black` or system grouped backgrounds: `WTheme.canvas`/`raised`/`fill` surfaces, `hairline`/`hairlineStrong` borders, `ink`/`inkSecondary`/`inkTertiary` text, `InkButtonStyle` for the primary action, `WFont.meta` for meta (`WFont.code` only for real code), sentence case everywhere (no uppercased labels). List tabs use `GlassHeaderBar` and drawers `DrawerWorkspaceHeader`. Settings pages sit on `WTheme.groupedPage` with `groupedCard` cards (`SettingsPage`, `SettingsSection`, and `coverCard` from `SettingsCoverKit.swift`); a list that needs swipe actions is an `.insetGrouped` `List` with `CoverSectionHeader` headers instead. Sky (`WTheme.accent`) is for data and live state, not chrome.
 
 ## Troubleshooting
 
@@ -116,8 +143,9 @@ A real typecheck happens when you build in Xcode. Conventions to keep the code c
 | Stuck on the workspace picker | Your account has 0 or several orgs. Create one or pick one; a fresh login always starts with no org selected and the app switches you in. |
 | Lists never update live | Realtime not connected. See [Verifying realtime works](#verifying-realtime-works). |
 | A screen is empty for a teammate account | Permission-gated. Some data (e.g. campaign analytics) is owner-only server-side; the app surfaces this rather than erroring. |
-| Captcha error on login | The bypass token was cleared. Reset it to `warmbly-local-turnstile-bypass` in Connection settings. |
+| Captcha error on login | The server verifies a captcha and got neither an App Attest proof nor a bypass token. In the simulator against a dev backend, set its `TURNSTILE_BYPASS_TOKEN` under Advanced; on a device, the server needs `APP_ATTEST_APP_IDS` naming the app (and `APP_ATTEST_ALLOW_DEVELOPMENT=true` for an Xcode build); a self-host can also run with `CAPTCHA_PROVIDER=none`. |
+| "Couldn't verify this copy of the app" | The server refused the App Attest proof (`app_attest_failed`). A development-signed build needs `APP_ATTEST_ALLOW_DEVELOPMENT=true`, and `APP_ATTEST_APP_IDS` must name `<team id>.com.warmbly.app` for the team that signed it. |
 
 ## What stays on the web
 
-By design, a few flows link out instead of being reimplemented on mobile: mailbox OAuth connect (Gmail/Outlook), campaign sequence editing, and plan changes/billing management. SMTP/IMAP mailbox connect does work natively. See the [README](README.md#known-limits) for the full list.
+By design, a few flows link out instead of being reimplemented on mobile: setting up a new admin grant, campaign sequence editing, and plan changes/billing management. Mailbox connect works natively with app passwords, existing admin grants (connecting a grant's mailboxes asks for a recent sign-in through `POST /v1/auth/reauth`), inbox vendor keys, file and pasted imports (`POST /emails/imports/preview`, then `POST /emails/imports`) and Warmbly Cloud workspace mailboxes; per-mailbox Google or Microsoft sign-in is not offered. See the [README](README.md#known-limits) for the full list.

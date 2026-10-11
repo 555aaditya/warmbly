@@ -42,6 +42,12 @@ const (
 	passkeyIPWindow       = 15 * time.Minute
 	passkeyIPDefaultLimit = 300
 
+	// The native app's challenge and key registration are page furniture in the
+	// same way, so they get a budget of their own; the request a challenge is
+	// spent on stays on /auth.
+	appAttestIPWindow       = 15 * time.Minute
+	appAttestIPDefaultLimit = 300
+
 	// The remaining public routes (unsubscribe, invitation preview, fleet
 	// enrolment, the analytics proxy) carry their authorization in a
 	// high-entropy token rather than a session, so this budget is not what
@@ -78,6 +84,13 @@ func (h *Handler) CLIAuthIPRateLimitMiddleware() gin.HandlerFunc {
 func (h *Handler) PasskeyChallengeIPRateLimitMiddleware() gin.HandlerFunc {
 	return h.ipRateLimiter("passkey_ip:", passkeyIPDefaultLimit, "PASSKEY_IP_RATE_LIMIT", passkeyIPWindow,
 		"Too many passkey sign-in requests from this address. Try again later.", false)
+}
+
+// AppAttestIPRateLimitMiddleware throttles the native app's challenge and key
+// registration per source IP, on a key of its own.
+func (h *Handler) AppAttestIPRateLimitMiddleware() gin.HandlerFunc {
+	return h.ipRateLimiter("app_attest_ip:", appAttestIPDefaultLimit, "APP_ATTEST_IP_RATE_LIMIT", appAttestIPWindow,
+		"Too many app verification requests from this address. Try again later.", false)
 }
 
 // AuthIPRateLimitMiddleware throttles the public /auth group per source IP.

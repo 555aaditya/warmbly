@@ -19,6 +19,10 @@ type DeploymentAuthConfig struct {
 	// install cannot reach challenges.cloudflare.com.
 	Captcha bool `json:"captcha"`
 
+	// AppAttest reports whether the native app may prove itself with App Attest
+	// instead of the captcha. The app never renders Turnstile.
+	AppAttest bool `json:"app_attest"`
+
 	// PasswordLogin is false when the deployment authenticates only through
 	// OIDC or passkeys.
 	PasswordLogin bool `json:"password_login"`
@@ -132,6 +136,7 @@ func (h *Handler) AuthConfig(c *gin.Context) {
 
 	c.JSON(http.StatusOK, DeploymentAuthConfig{
 		Captcha:           config.CaptchaProvider() != "none",
+		AppAttest:         h.AppAttestService.Enabled(),
 		PasswordLogin:     !policy.DisablePasswordLogin,
 		LoginCode:         policy.LoginCode,
 		Registration:      registration,

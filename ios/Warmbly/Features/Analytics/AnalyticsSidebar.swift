@@ -1,10 +1,9 @@
 import SwiftUI
 
 /// Navigation drawer for the analytics browser, mirroring the mailboxes /
-/// contacts / campaigns sidebars: a slim sky hero with live totals, then the
-/// analytics sections as pill rows on a rounded white sheet. The selected
-/// pill slides between rows in the section's tone and rows cascade in when
-/// the drawer opens.
+/// contacts / campaigns sidebars: an ink header on the canvas wash with live
+/// totals as hairline chips, then the analytics sections as rows. The
+/// selected row's fill slides between rows and rows cascade in on open.
 struct AnalyticsSidebar: View {
     let store: AnalyticsStore
     let selection: AnalyticsScope
@@ -26,66 +25,14 @@ struct AnalyticsSidebar: View {
                 .padding(.top, 8)
                 .padding(.bottom, 40)
             }
-            .background {
-                UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous)
-                    .fill(Color(.systemBackground))
-                    .shadow(color: .black.opacity(0.1), radius: 14, y: -4)
-            }
         }
-        .background(alignment: .top) {
-            AirSkyWash().frame(height: 340)
-        }
-        .background(Color(.systemBackground))
+        .background(WTheme.canvas)
     }
 
     // MARK: Hero
 
     private var hero: some View {
-        let sent = store.dashboard?.overallStats?.totalEmailsSent ?? 0
-        return VStack(alignment: .leading, spacing: 13) {
-            HStack(spacing: 8) {
-                WarmblyLogo()
-                    .fill(.white)
-                    .frame(width: 21, height: 21 * (764 / 746))
-                Text("Analytics")
-                    .font(.system(size: 17.5, weight: .heavy))
-                    .tracking(-0.4)
-                    .foregroundStyle(.white)
-            }
-            Text("Sends, opens, replies and health")
-                .font(.footnote.weight(.medium))
-                .foregroundStyle(.white.opacity(0.82))
-                .lineLimit(1)
-            HStack(spacing: 6) {
-                heroBadge(symbol: "paperplane.fill", text: "\(WFormat.compact(sent)) sent")
-                if store.warmingCount > 0 {
-                    heroBadge(symbol: "flame.fill", text: "\(WFormat.compact(store.warmingCount)) warming", live: true)
-                } else if !store.accounts.isEmpty {
-                    heroBadge(symbol: "envelope.fill", text: "\(WFormat.compact(store.accounts.count)) accounts")
-                }
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.top, topInset + 12)
-        .padding(.bottom, 16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func heroBadge(symbol: String, text: String, live: Bool = false) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: symbol)
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.9))
-                .modifier(PingEffect(active: live, color: .white))
-            Text(text)
-                .font(.footnote.weight(.medium))
-                .monospacedDigit()
-                .foregroundStyle(.white)
-                .contentTransition(.numericText())
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5.5)
-        .background(.white.opacity(0.16), in: Capsule())
+        DrawerWorkspaceHeader(topInset: topInset)
     }
 
     private func sectionLabel(_ text: String) -> some View {
@@ -106,41 +53,40 @@ struct AnalyticsSidebar: View {
 
     private func row(index: Int, scope: AnalyticsScope) -> some View {
         let selected = selection == scope
-        // Only the accounts row carries a count; it turns rose when any
-        // account has health issues, mirroring the sheet's counts pills.
+        // Only the accounts row carries a count; rose when any account has issues.
         let count = scope == .accounts ? store.accounts.count : 0
         let countColor: Color? = scope == .accounts && store.issueCount > 0 ? Tone.rose.color : nil
         return Button {
             onSelect(scope)
         } label: {
-            HStack(spacing: 13) {
+            HStack(spacing: 12) {
                 Image(systemName: scope.icon)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(selected ? scope.tone.color : Color.secondary)
-                    .frame(width: 24)
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(selected ? WTheme.ink : WTheme.inkTertiary)
+                    .frame(width: 22)
                 Text(scope.title)
-                    .font(.subheadline.weight(selected ? .semibold : .medium))
-                    .foregroundStyle(selected ? scope.tone.color : Color.primary)
+                    .font(.system(size: 15, weight: selected ? .medium : .regular))
+                    .foregroundStyle(selected ? WTheme.ink : WTheme.inkSecondary)
                     .lineLimit(1)
                 Spacer(minLength: 8)
                 if count > 0 {
                     Text(WFormat.compact(count))
-                        .font(.footnote.weight(countColor != nil || selected ? .semibold : .medium))
+                        .font(WFont.meta(12, weight: .medium))
                         .monospacedDigit()
-                        .foregroundStyle(countColor ?? (selected ? scope.tone.color : Color.secondary))
+                        .foregroundStyle(countColor ?? (selected ? WTheme.ink : WTheme.inkTertiary))
                         .contentTransition(.numericText())
                 }
             }
-            .padding(.horizontal, 16)
-            .frame(height: 44)
+            .padding(.horizontal, 14)
+            .frame(height: 42)
             .background {
                 if selected {
-                    Capsule()
-                        .fill(scope.tone.background)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(WTheme.fill)
                         .matchedGeometryEffect(id: "analyticsdrawer-active", in: activeNS)
                 }
             }
-            .contentShape(Capsule())
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(TapScaleStyle())
         .accessibilityElement(children: .ignore)

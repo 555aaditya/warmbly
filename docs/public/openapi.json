@@ -775,6 +775,133 @@
         }
       }
     },
+    "/auth/app-attest/challenge": {
+      "post": {
+        "operationId": "auth_app_attest_challenge",
+        "summary": "Mint an App Attest challenge",
+        "description": "Returns a single-use challenge, valid for five minutes, for the native iOS app to make an App Attest attestation or assertion over. Has its own per-IP budget (APP_ATTEST_IP_RATE_LIMIT).",
+        "tags": [
+          "auth"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "A fresh challenge.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "challenge"
+                  ],
+                  "properties": {
+                    "challenge": {
+                      "type": "string",
+                      "description": "Base64url challenge. Single-use; expires after five minutes."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "App Attest is off on this instance (app_attest_unavailable).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/app-attest/keys": {
+      "post": {
+        "operationId": "auth_app_attest_register_key",
+        "summary": "Register an App Attest key",
+        "description": "Registers the native iOS app install's App Attest key, once per install. The attestation must be made over a client data hash of SHA-256 of the UTF-8 bytes of the challenge. The server verifies the certificate chain against Apple's App Attest root, the nonce, the app id, a counter of 0, the environment and the key id. A key id can be registered once.",
+        "tags": [
+          "auth"
+        ],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "key_id",
+                  "attestation",
+                  "challenge"
+                ],
+                "properties": {
+                  "key_id": {
+                    "type": "string",
+                    "description": "Base64 of the 32-byte App Attest key identifier."
+                  },
+                  "attestation": {
+                    "type": "string",
+                    "description": "Base64 attestation object from DCAppAttestService.attestKey."
+                  },
+                  "challenge": {
+                    "type": "string",
+                    "description": "A challenge from /auth/app-attest/challenge."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Key registered."
+          },
+          "400": {
+            "description": "The attestation did not verify, or the key id is already registered (app_attest_failed).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "App Attest is off on this instance (app_attest_unavailable).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/auth/logout": {
       "post": {
         "operationId": "auth_logout",
@@ -27847,9 +27974,32 @@
           }
         }
       },
+      "AppAttestProof": {
+        "type": "object",
+        "description": "The native iOS app's Apple App Attest proof, sent instead of a Turnstile token on the captcha-gated auth calls. The assertion is made over a client data hash of SHA-256 of the UTF-8 string \"warmbly-app-attest/v1\\n\" + action + \"\\n\" + challenge, where action is login, register, reset_password or reset_password_confirm.",
+        "required": [
+          "key_id",
+          "assertion",
+          "challenge"
+        ],
+        "properties": {
+          "key_id": {
+            "type": "string",
+            "description": "The registered App Attest key identifier, base64."
+          },
+          "assertion": {
+            "type": "string",
+            "description": "The base64 assertion from DCAppAttestService.generateAssertion."
+          },
+          "challenge": {
+            "type": "string",
+            "description": "A fresh, single-use challenge from /auth/app-attest/challenge."
+          }
+        }
+      },
       "AuthCredentials": {
         "type": "object",
-        "description": "Email/password credentials with a Cloudflare Turnstile token. Used for login start and registration start.",
+        "description": "Email/password credentials with a Cloudflare Turnstile token or an App Attest proof. Used for login start and registration start.",
         "required": [
           "email",
           "password"
@@ -27867,7 +28017,10 @@
           },
           "turnstile": {
             "type": "string",
-            "description": "Cloudflare Turnstile challenge token."
+            "description": "Cloudflare Turnstile challenge token. Required when the deployment runs a captcha, unless app_attest is sent."
+          },
+          "app_attest": {
+            "$ref": "#/components/schemas/AppAttestProof"
           }
         }
       },
@@ -28014,7 +28167,10 @@
           },
           "turnstile": {
             "type": "string",
-            "description": "Cloudflare Turnstile challenge token."
+            "description": "Cloudflare Turnstile challenge token. Required when the deployment runs a captcha, unless app_attest is sent."
+          },
+          "app_attest": {
+            "$ref": "#/components/schemas/AppAttestProof"
           }
         }
       },
@@ -28037,7 +28193,10 @@
           },
           "turnstile": {
             "type": "string",
-            "description": "Cloudflare Turnstile challenge token."
+            "description": "Cloudflare Turnstile challenge token. Required when the deployment runs a captcha, unless app_attest is sent."
+          },
+          "app_attest": {
+            "$ref": "#/components/schemas/AppAttestProof"
           }
         }
       },

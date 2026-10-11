@@ -26,6 +26,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/admin"
 	"github.com/warmbly/warmbly/internal/app/adminoutreach"
 	"github.com/warmbly/warmbly/internal/app/advanced"
+	"github.com/warmbly/warmbly/internal/app/appattest"
 	"github.com/warmbly/warmbly/internal/app/unsublink"
 	"github.com/warmbly/warmbly/internal/observability/errs"
 
@@ -212,6 +213,7 @@ func main() {
 	var uniboxService unibox.UniboxService
 	var cipherService cipher.CipherService
 	var passkeyService passkey.Service
+	var appAttestService *appattest.Service
 	var encryptedKeys encryptedkeys.Store
 	var storageBackendRepo repository.StorageBackendRepository
 	var fleetNodeRepo repository.FleetNodeRepository
@@ -954,6 +956,12 @@ func main() {
 		// gate can issue a pending challenge.
 		twofaService = twofa.NewService(repository.NewTOTPRepository(primaryDB.Pool), userRepostory, tokenService, cache, twofa.DeriveKey(authCfg.TwoFASecret))
 		authService.WireTwoFA(twofaService)
+		// The native app proves itself with App Attest where a browser solves Turnstile.
+		appAttestService = appattest.New(repository.NewAppAttestRepository(primaryDB.Pool), cache, appattest.Config{
+			AppIDs:           authCfg.AppAttestAppIDs,
+			AllowDevelopment: authCfg.AppAttestAllowDevelopment,
+		})
+		authService.WireAppAttest(appAttestService)
 
 		// Deployment-level auth policy: whether an emailed code gates a login,
 		// whether signups are open, whether verification is required. Resolved
@@ -2338,6 +2346,7 @@ func main() {
 
 		TokenService:         tokenService,
 		PasskeyService:       passkeyService,
+		AppAttestService:     appAttestService,
 		UserService:          userService,
 		EmailService:         emailService,
 		MailboxImportService: mailboxImportService,

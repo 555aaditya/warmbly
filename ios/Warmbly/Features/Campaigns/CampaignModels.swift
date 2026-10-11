@@ -323,7 +323,7 @@ struct CampaignStatusInfo {
         case "active":
             CampaignStatusInfo(label: "running", tone: .emerald, isLive: true)
         case "completed":
-            CampaignStatusInfo(label: "finished", tone: .emerald, isLive: false)
+            CampaignStatusInfo(label: "finished", tone: .sky, isLive: false)
         case "paused":
             CampaignStatusInfo(label: "paused", tone: .amber, isLive: false)
         case "paused_no_accounts":
@@ -757,9 +757,41 @@ struct CampaignLeadCounts: Codable, Sendable {
     var total: Int?
     var queued: Int?
     var processing: Int?
+    var completed: Int?
     var replied: Int?
     var bounced: Int?
+    var failed: Int?
     var unsubscribed: Int?
+    var paused: Int?
+    var undeliverable: Int?
+    var contacted: Int?
+
+    /// Leads whose flow has ended: every step sent, or stopped by a reply,
+    /// bounce, unsubscribe, failure or a refused address.
+    var finished: Int {
+        (completed ?? 0) + (replied ?? 0) + (bounced ?? 0) + (unsubscribed ?? 0) + (failed ?? 0) + (undeliverable ?? 0)
+    }
+
+    /// Share of leads finished, 0...1; nil with no leads.
+    var progress: Double? {
+        guard let total, total > 0 else { return nil }
+        return min(1, Double(finished) / Double(total))
+    }
+}
+
+/// How the campaigns list is ordered (client-side, like the web).
+enum CampaignSort: String, CaseIterable, Identifiable {
+    case newest, oldest, name
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .newest: "Newest first"
+        case .oldest: "Oldest first"
+        case .name: "Name (A–Z)"
+        }
+    }
 }
 
 /// The Leads browser's status scopes, mirroring the contacts browse scopes but
