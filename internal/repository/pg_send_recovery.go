@@ -186,7 +186,7 @@ func (r *taskRepository) ApplySendResult(ctx context.Context, result models.Send
 	// Receipt stamping is idempotent; an already-applied failure cannot be refunded again.
 	repairDeadLetter := status == "dead_lettered" && previous != nil && *previous == state && state == "sent"
 	if !repairDeadLetter && (applied != nil || (previous != nil && *previous != "unknown")) {
-		if previous != nil && state != "unknown" && state != *previous {
+		if previous != nil && *previous != "unknown" && state != "unknown" && state != *previous {
 			tag, err := tx.Exec(ctx, `UPDATE send_recovery_resolutions
 				SET conflict_detected_at=COALESCE(conflict_detected_at,clock_timestamp()),conflicting_result_state=COALESCE(conflicting_result_state,$2)
 				WHERE recovery_task_id=$1 AND recorded_locally_at IS NOT NULL

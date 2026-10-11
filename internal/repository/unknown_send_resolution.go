@@ -95,7 +95,7 @@ func (r *taskRepository) ListUnappliedSendResults(ctx context.Context, limit int
 	 AND (t.send_result_applied_at IS NULL OR (`+repairableSendDeadLetterPredicate+`))
 	 UNION ALL
 	 SELECT t.id,t.created_at,t.send_result_state,t.send_result_applied_at,t.send_executor_result,1 FROM send_recovery_resolutions r JOIN tasks t ON t.id=r.recovery_task_id
-	 WHERE r.previous_reason='unknown' AND r.conflict_detected_at IS NULL AND r.confirmed_result IS NOT NULL
+	 WHERE r.previous_reason='unknown' AND r.conflict_detected_at IS NULL AND r.confirmed_result IS NOT NULL AND r.recorded_locally_at IS NOT NULL
 	 AND t.send_executor_result IS NOT NULL AND t.send_result_applied_at IS NOT NULL AND t.status<>'cancelled'
 	 UNION ALL
 	 SELECT t.id,t.created_at,t.send_result_state,t.send_result_applied_at,w.dispatch_result,1 FROM warmup_tasks w JOIN tasks t ON t.id=w.task_id
@@ -103,7 +103,7 @@ func (r *taskRepository) ListUnappliedSendResults(ctx context.Context, limit int
 	 AND (t.send_result_applied_at IS NULL OR (`+repairableSendDeadLetterPredicate+`))
 	 UNION ALL
 	 SELECT t.id,t.created_at,t.send_result_state,t.send_result_applied_at,w.dispatch_result,1 FROM send_recovery_resolutions r JOIN tasks t ON t.id=r.recovery_task_id JOIN warmup_tasks w ON w.task_id=t.id
-	 WHERE r.previous_reason='unknown' AND r.conflict_detected_at IS NULL AND r.confirmed_result IS NOT NULL
+	 WHERE r.previous_reason='unknown' AND r.conflict_detected_at IS NULL AND r.confirmed_result IS NOT NULL AND r.recorded_locally_at IS NOT NULL
 	 AND w.dispatch_result IS NOT NULL AND t.send_result_applied_at IS NOT NULL AND t.status<>'cancelled'
 	 UNION ALL
 	 SELECT t.id,t.created_at,t.send_result_state,t.send_result_applied_at,r.confirmed_result,2 FROM send_recovery_resolutions r JOIN tasks t ON t.id=r.recovery_task_id

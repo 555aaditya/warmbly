@@ -67,7 +67,9 @@ func TestLiveWarmupRecoversOldPreparationResultAfterDeferral(t *testing.T) {
 	if _, err := r.AuthorizeWarmupDispatch(ctx, f.task, f.sender, worker); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.ApplySendResult(ctx, result, apply); err != nil {
+	// Reproduce the released backend's unaudited conflict projection, not the current writer.
+	if _, err := f.pool.Exec(ctx, `UPDATE email_accounts SET send_recovery_hold=true,send_recovery_reason='conflict',send_recovery_task_id=$2
+		WHERE id=$1 AND (NOT send_recovery_hold OR (send_recovery_reason='unknown' AND send_recovery_task_id=$2))`, f.sender, f.task); err != nil {
 		t.Fatal(err)
 	}
 	var reason string

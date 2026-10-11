@@ -234,3 +234,149 @@ func TestLiveImportSendRecoveryHistoryCannotReconcileUnknownOutcome(t *testing.T
 		t.Fatalf("explicit confirmation left known conflict rows unresolved: count=%d error=%v", count, err)
 	}
 }
+
+func TestLiveImportedHistoryDoesNotRepeatAuthoritativeWorkerResult(t *testing.T) {
+	for _, source := range []string{"executor", "warmup"} {
+		for _, sent := range []bool{false, true} {
+			for _, fresh := range []bool{false, true} {
+				name := source + map[bool]string{false: "/failed", true: "/sent"}[sent] + map[bool]string{false: "/independent", true: "/after fresh confirmation"}[fresh]
+				t.Run(name, func(t *testing.T) {
+					svc, pool := liveImportService(t)
+					dest := newTenantFixture(t, pool)
+					ctx := t.Context()
+					mailbox, task, audit := uuid.New(), uuid.New(), uuid.New()
+					if _, err := pool.Exec(ctx, `INSERT INTO email_accounts(id,user_id,organization_id,email,name,signature_plain,signature_html,provider)
+						VALUES($1,$2,$3,$4,'Imported','','','smtp_imap')`, mailbox, dest.owner, dest.org, mailbox.String()+"@example.test"); err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM email_accounts WHERE id=$1`, mailbox) })
+					kind := "email"
+					if source == "warmup" {
+						kind = "warmup"
+					}
+					failure := &models.EmailSendError{Code: "RECIPIENT_REJECTED"}
+					history := models.SendEmailResult{TaskID: task, Success: !sent, MessageID: "history@example.test"}
+					evidence := "operator_confirmed_sent"
+					if sent {
+						history.Error, evidence = failure, "operator_confirmed_not_sent"
+					}
+					archive := tenantArchive(t, map[string][]map[string]any{
+						"tasks": {{"id": task, "email_account_id": mailbox, "task_type": kind, "status": "completed", "message_id": "", "completed_at": time.Now().UTC().Add(-5 * time.Minute), "send_result_state": "unknown"}},
+						"send_recovery_resolutions": {{"id": audit, "organization_id": dest.org, "email_account_id": mailbox, "recovery_task_id": task,
+							"previous_reason": "unknown", "evidence_type": evidence, "confirmation_reference": "Source confirmation history", "confirmed_result": history,
+							"recorded_locally_at": time.Now().UTC().Add(365 * 24 * time.Hour)}},
+					})
+					if _, err := svc.ImportFrom(ctx, dest.org, archive, ImportOptions{Conflict: models.OrgImportConflictOverwrite, ActorUserID: dest.owner}, nil); err != nil {
+						t.Fatal(err)
+					}
+					repo := repository.NewTaskRepository(pool).(interface {
+						ListUnappliedSendResults(context.Context, int) ([]models.SendEmailResult, error)
+						ApplySendResult(context.Context, models.SendEmailResult, func(context.Context) error) error
+					})
+					results, err := repo.ListUnappliedSendResults(ctx, 1)
+					if err != nil || len(results) != 0 {
+						t.Fatalf("imported history gained execution authority: results=%v error=%v", results, err)
+					}
+					if _, err := pool.Exec(ctx, `UPDATE email_accounts SET status='active',send_recovery_hold=true,send_recovery_reason='unknown',send_recovery_task_id=$2 WHERE id=$1`, mailbox, task); err != nil {
+						t.Fatal(err)
+					}
+					var historyBefore string
+					if err := pool.QueryRow(ctx, `SELECT to_jsonb(r)::text FROM send_recovery_resolutions r WHERE id=$1`, audit).Scan(&historyBefore); err != nil {
+						t.Fatal(err)
+					}
+					calls := 0
+					apply := func(context.Context) error { calls++; return nil }
+					var appliedBefore time.Time
+					if fresh {
+						resolution := models.SendRecoveryResolution{HeldTaskID: task, HeldReason: "unknown", EvidenceType: evidence, ConfirmationReference: "Fresh local provider confirmation"}
+						if !sent {
+							resolution.MessageID = "fresh@example.test"
+						}
+						emailRepo := repository.NewEmailRepostory(&db.DB{Pool: pool}, nil)
+						if _, xerr := emailRepo.Update(ctx, dest.org.String(), mailbox.String(), &models.UpdateEmail{SendRecoveryResolution: &resolution}); xerr != nil {
+							t.Fatal(xerr)
+						}
+						results, err = repo.ListUnappliedSendResults(ctx, 1)
+						if err != nil || len(results) != 1 || results[0].TaskID != task || results[0].Success != !sent {
+							t.Fatalf("fresh local confirmation unavailable: results=%v error=%v", results, err)
+						}
+						if err := repo.ApplySendResult(ctx, results[0], apply); err != nil {
+							t.Fatal(err)
+						}
+						if err := pool.QueryRow(ctx, `SELECT send_result_applied_at FROM tasks WHERE id=$1`, task).Scan(&appliedBefore); err != nil {
+							t.Fatal(err)
+						}
+					}
+					worker := models.SendEmailResult{TaskID: task, Success: sent, MessageID: "native@example.test"}
+					if !sent {
+						worker.Error = failure
+					}
+					raw, err := json.Marshal(worker)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if source == "executor" {
+						_, err = pool.Exec(ctx, `UPDATE tasks SET send_executor_result=$2 WHERE id=$1`, task, raw)
+					} else {
+						_, err = pool.Exec(ctx, `INSERT INTO warmup_tasks(task_id,dispatch_result)VALUES($1,$2)`, task, raw)
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					results, err = repo.ListUnappliedSendResults(ctx, 1)
+					if err != nil || len(results) != 1 || results[0].TaskID != task || results[0].Success != sent {
+						t.Fatalf("independent authoritative worker result unavailable: results=%v error=%v", results, err)
+					}
+					if err := repo.ApplySendResult(ctx, results[0], apply); err != nil {
+						t.Fatal(err)
+					}
+					results, err = repo.ListUnappliedSendResults(ctx, 1)
+					if err != nil || len(results) != 0 {
+						t.Errorf("applied worker result repeats via imported history: results=%v error=%v", results, err)
+					}
+					var state, historyAfter string
+					var appliedAt time.Time
+					var held bool
+					var conflicts int
+					if err := pool.QueryRow(ctx, `SELECT t.send_result_state,t.send_result_applied_at,ea.send_recovery_hold,
+						(SELECT count(*) FROM send_recovery_resolutions r WHERE r.recovery_task_id=t.id AND r.recorded_locally_at IS NOT NULL AND r.conflict_detected_at IS NOT NULL AND r.conflict_resolved_at IS NULL),
+						(SELECT to_jsonb(r)::text FROM send_recovery_resolutions r WHERE r.id=$2)
+						FROM tasks t JOIN email_accounts ea ON ea.id=t.email_account_id WHERE t.id=$1`, task, audit).Scan(&state, &appliedAt, &held, &conflicts, &historyAfter); err != nil {
+						t.Fatal(err)
+					}
+					wantSent, wantConflicts := sent, 0
+					if fresh {
+						wantSent, wantConflicts = !sent, 1
+					}
+					wantState := "failed"
+					if wantSent {
+						wantState = "sent"
+					}
+					if state != wantState || calls != 1 || held != fresh || conflicts != wantConflicts || historyAfter != historyBefore || fresh && !appliedAt.Equal(appliedBefore) {
+						t.Fatalf("state=%s callbacks=%d held=%v conflicts=%d history preserved=%v original application preserved=%v", state, calls, held, conflicts, historyAfter == historyBefore, appliedAt.Equal(appliedBefore))
+					}
+					newer := uuid.New()
+					newRaw, err := json.Marshal(models.SendEmailResult{TaskID: newer, Success: true})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := pool.Exec(ctx, `INSERT INTO tasks(id,email_account_id,task_type,status,message_id,send_result_state,send_executor_result)
+						VALUES($1,$2,'email','completed','','unknown',$3)`, newer, mailbox, newRaw); err != nil {
+						t.Fatal(err)
+					}
+					results, err = repo.ListUnappliedSendResults(ctx, 1)
+					if err != nil || len(results) != 1 || results[0].TaskID != newer {
+						t.Fatalf("imported history starves newer result in batch of one: results=%v error=%v", results, err)
+					}
+					if err := repo.ApplySendResult(ctx, results[0], apply); err != nil {
+						t.Fatal(err)
+					}
+					results, err = repo.ListUnappliedSendResults(ctx, 1)
+					if err != nil || len(results) != 0 || calls != 2 {
+						t.Fatalf("newer result did not settle idempotently: results=%v callbacks=%d error=%v", results, calls, err)
+					}
+				})
+			}
+		}
+	}
+}
