@@ -11,6 +11,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/cipher"
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/arrivaldiag"
 )
 
 func NewDurableEmailMessageMapRepository(d *db.DB, c cipher.CipherService) *pgEmailMessageMapRepository {
@@ -125,9 +126,13 @@ func (r *pgEmailMessageMapRepository) HasPendingArrival(ctx context.Context, use
 
 // DeliverArrivals invokes the existing consumer handlers, retaining every failed stage.
 func (r *pgEmailMessageMapRepository) DeliverArrivals(ctx context.Context, deliver func(context.Context, models.JobEventType, any) error) error {
+	return deliverArrivalBatch(ctx, func() (bool, error) { return r.deliverArrival(ctx, nil, deliver) })
+}
+
+func deliverArrivalBatch(ctx context.Context, deliverOne func() (bool, error)) error {
 	var first error
 	for i := 0; i < 32; i++ {
-		found, err := r.deliverArrival(ctx, nil, deliver)
+		found, err := deliverOne()
 		if err != nil && first == nil {
 			first = err
 		}
@@ -162,6 +167,7 @@ func (r *pgEmailMessageMapRepository) deliverArrival(ctx context.Context, target
 		args = []any{target.user, target.email, target.id}
 	}
 	// Claim without retaining a connection while handlers use their repositories.
+	finish := arrivaldiag.Begin(ctx, arrivaldiag.Claim)
 	err := r.db.QueryRow(ctx, `WITH candidate AS (SELECT o.user_id,o.email_id,o.message_id
 		FROM sync_arrival_outbox o JOIN email_accounts a ON a.id=o.email_id AND a.user_id=o.user_id AND a.organization_id=o.organization_id
 		WHERE o.retry_at<=now() AND (o.locked_until IS NULL OR o.locked_until<now())`+scope+`
@@ -169,50 +175,69 @@ func (r *pgEmailMessageMapRepository) deliverArrival(ctx context.Context, target
 		UPDATE sync_arrival_outbox o SET lease=gen_random_uuid(),locked_until=now()+interval '1 minute'
 		FROM candidate c WHERE o.user_id=c.user_id AND o.email_id=c.email_id AND o.message_id=c.message_id
 		RETURNING o.user_id,o.email_id,o.organization_id,o.message_id,o.payload,o.stage,o.lease`, args...).Scan(&user, &email, &org, &key, &payload, &stage, &lease)
+	finish()
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
+	finish = arrivaldiag.Begin(ctx, arrivaldiag.KeyLookup)
 	sealed, err := r.cipher.Cipher(ctx, org)
+	finish()
 	var raw string
 	if err == nil {
+		finish = arrivaldiag.Begin(ctx, arrivaldiag.Decrypt)
 		raw, err = sealed.Decrypt(ctx, payload)
+		finish()
 	}
 	var pending PendingArrival
 	if err == nil {
+		finish = arrivaldiag.Begin(ctx, arrivaldiag.Decode)
 		err = json.Unmarshal([]byte(raw), &pending)
+		finish()
 	}
 	if err == nil {
 		events := []struct {
 			kind    models.JobEventType
 			body    any
 			present bool
+			measure arrivaldiag.Stage
 		}{
-			{models.JobEventTypeNewEmail, pending.Arrival, true},
-			{models.JobEventTypeInboundBounce, pending.Bounce, pending.Bounce != nil},
-			{models.JobEventTypeInboundComplaint, pending.Complaint, pending.Complaint != nil},
+			{models.JobEventTypeNewEmail, pending.Arrival, true, arrivaldiag.NewEmail},
+			{models.JobEventTypeInboundBounce, pending.Bounce, pending.Bounce != nil, arrivaldiag.Bounce},
+			{models.JobEventTypeInboundComplaint, pending.Complaint, pending.Complaint != nil, arrivaldiag.Complaint},
 		}
 		for stage < len(events) {
 			e := events[stage]
 			if e.present {
-				if err = deliver(ctx, e.kind, e.body); err != nil {
+				finish = arrivaldiag.Begin(ctx, e.measure)
+				err = deliver(ctx, e.kind, e.body)
+				finish()
+				if err != nil {
 					break
 				}
 			}
 			stage++
-			if _, updateErr := r.db.Exec(ctx, `UPDATE sync_arrival_outbox SET stage=$5
-				WHERE user_id=$1 AND email_id=$2 AND message_id=$3 AND lease=$4`, user, email, key, lease, stage); updateErr != nil {
+			finish = arrivaldiag.Begin(ctx, arrivaldiag.Checkpoint)
+			_, updateErr := r.db.Exec(ctx, `UPDATE sync_arrival_outbox SET stage=$5
+				WHERE user_id=$1 AND email_id=$2 AND message_id=$3 AND lease=$4`, user, email, key, lease, stage)
+			finish()
+			if updateErr != nil {
 				return true, updateErr
 			}
 		}
 	}
 	if err == nil {
+		finish = arrivaldiag.Begin(ctx, arrivaldiag.Retire)
 		_, err = r.db.Exec(ctx, `DELETE FROM sync_arrival_outbox WHERE user_id=$1 AND email_id=$2 AND message_id=$3 AND lease=$4`, user, email, key, lease)
+		finish()
 	} else {
-		if _, updateErr := r.db.Exec(ctx, `UPDATE sync_arrival_outbox SET locked_until=NULL,retry_at=now()+interval '15 seconds'
-			WHERE user_id=$1 AND email_id=$2 AND message_id=$3 AND lease=$4`, user, email, key, lease); updateErr != nil {
+		finish = arrivaldiag.Begin(ctx, arrivaldiag.Retry)
+		_, updateErr := r.db.Exec(ctx, `UPDATE sync_arrival_outbox SET locked_until=NULL,retry_at=now()+interval '15 seconds'
+			WHERE user_id=$1 AND email_id=$2 AND message_id=$3 AND lease=$4`, user, email, key, lease)
+		finish()
+		if updateErr != nil {
 			return true, updateErr
 		}
 	}
