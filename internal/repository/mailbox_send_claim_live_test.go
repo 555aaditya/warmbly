@@ -15,7 +15,7 @@ import (
 
 func TestLiveMailboxSendClaimAdmitsOnePerGap(t *testing.T) {
 	_, pool := liveContactDB(t)
-	requireSchemaVersion(t, pool, 288)
+	requireSchemaVersion(t, pool, 289)
 	ctx := context.Background()
 	f := newWarmupUsageFixture(t, pool)
 	t.Cleanup(func() {
@@ -64,7 +64,7 @@ func TestLiveMailboxSendClaimAdmitsOnePerGap(t *testing.T) {
 
 func TestLiveMailboxSendClaimWaitsOutAReservedSend(t *testing.T) {
 	_, pool := liveContactDB(t)
-	requireSchemaVersion(t, pool, 288)
+	requireSchemaVersion(t, pool, 289)
 	ctx := context.Background()
 	f := newWarmupUsageFixture(t, pool)
 	t.Cleanup(func() {
