@@ -251,6 +251,23 @@ jobs:
             grep -q "^--- PASS: $test " monitoring-clock.log
           done
 
+      - name: Warmup generic execution authority regressions (PostgreSQL)
+        env:
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+        run: |
+          go test -race -v -p 1 ./internal/api/handler -run '^TestLiveWarmupGeneric' -count=1 | tee warmup-generic-execution.log
+          if grep -q -- '--- SKIP:' warmup-generic-execution.log; then
+            echo "Warmup generic execution regressions must execute without skips"
+            exit 1
+          fi
+          for test in TestLiveWarmupGenericStartAfterPartialImport \
+            TestLiveWarmupGenericCancellationPreservesOtherHolds \
+            TestLiveWarmupGenericStartAndLateResult \
+            TestLiveWarmupGenericStartAfterCompatibleOverwrite \
+            TestLiveWarmupGenericCannotRepeatStartedWarmupClaim; do
+            grep -q "^--- PASS: $test " warmup-generic-execution.log
+          done
+
       - name: Warmup charge and authoritative result regressions (PostgreSQL)
         env:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
