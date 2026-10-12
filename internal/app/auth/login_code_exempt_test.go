@@ -45,6 +45,19 @@ func TestExemptAccountSkipsTheLoginCode(t *testing.T) {
 	}
 }
 
+// A flagged verdict only ever asks for the code, so the exemption outranks it;
+// the verdict is still recorded when the sign-in completes.
+func TestExemptAccountSkipsTheCodeWhenFlagged(t *testing.T) {
+	s := svc(exemptUsers{exempt: true}, config.LoginCodeNewDevice)
+	if s.loginCodeRequired(context.Background(), uuid.New(), "", authrisk.Verdict{Flagged: true, Reason: "impossible_travel"}) {
+		t.Error("a flagged sign-in must not bring the code back for an exempt account")
+	}
+	s = svc(exemptUsers{exempt: false}, config.LoginCodeNewDevice)
+	if !s.loginCodeRequired(context.Background(), uuid.New(), "", authrisk.Verdict{Flagged: true, Reason: "impossible_travel"}) {
+		t.Error("a flagged sign-in on a normal account must still get the code")
+	}
+}
+
 // "always" is the mode that would otherwise make a vendor review impossible,
 // so the exemption is checked before the policy rather than inside it.
 func TestNonExemptAccountStillGetsTheCode(t *testing.T) {

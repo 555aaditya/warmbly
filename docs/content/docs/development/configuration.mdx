@@ -161,7 +161,7 @@ TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Sign in with Google in the browser. Both are required; unrelated to the `BOX_GOOGLE_*` mailbox client. The same client carries a Google Workspace administrator's sign-in that [proves a domain](/development/whole-domain-connect/#proving-the-domain) for a whole-domain connect, asking only for `openid` and `email`; that sign-in signs nobody in | unset | yes |
 | `GOOGLE_REDIRECT_URI` | Redirect URI registered at Google. Served by the API, not the dashboard. An administrator's domain proof returns here too and is handed back to the dashboard window that opened it, so no second URI is registered | `API_PUBLIC_URL` plus `/v1/auth/google/callback` | yes |
 | `GOOGLE_IOS_CLIENT_ID` | Additional Google client id accepted from the iOS app. Native only: it does not enable the browser button | unset | yes |
-| `APPLE_APP_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_KEY_SECRET` | Sign in with Apple. `APPLE_APP_ID` is the Services ID | unset | yes |
+| `APPLE_APP_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_KEY_SECRET` | Sign in with Apple. `APPLE_APP_ID` is the Services ID; `APPLE_KEY_SECRET` is the `.p8` file as PEM or base64 (`base64 -i AuthKey_XXXX.p8` keeps it on one line) | unset | yes |
 | `APPLE_REDIRECT_URI` | Return URL registered at Apple. Must be HTTPS | `API_PUBLIC_URL` plus `/v1/auth/apple/callback` | yes |
 | `APPLE_IOS_BUNDLE_ID` | Bundle id accepted from the iOS app | `com.warmbly.app` | yes |
 | `OIDC_ISSUER_URL` | Generic OpenID Connect issuer. Discovery runs at boot | unset | yes |
@@ -538,7 +538,7 @@ Before giving assessors access:
 - Set the assessment frontend's `WARMBLY_API_URL` to the shared API, and use an exact `WARMBLY_APP_URL` origin without a trailing slash.
 - Allow the assessment hostname on the existing Cloudflare Turnstile widget. A widget restricted to `app.warmbly.com` does not cover its sibling assessment hostname. Keep CAPTCHA enabled.
 - Append the assessment origin to the realtime service's `CHECK_ORIGIN_HOSTS`, preserving its existing origins. The API origin allowlist does not configure websocket origin checks.
-- For password-only assessor accounts, use **Admin > Testers**. These accounts are exempt from the emailed login-code step, but still use CAPTCHA and existing permission checks. Accounts with 2FA enabled still need their second factor.
+- For password-only assessor accounts, use **Admin > Testers**, or turn on **Skip emailed sign-in code** on an existing account's page under **Users**. These accounts are exempt from the emailed login-code step, but still use CAPTCHA and existing permission checks. Accounts with 2FA enabled still need their second factor.
 - Keep the existing `WEBAUTHN_RP_ID` unchanged. An `app.warmbly.com` passkey RP ID cannot serve a sibling assessment hostname, and changing it invalidates existing credentials. Reviewers can use email/password; passkey support across both hosts needs a separate migration decision.
 
 This is not a global rewrite of every primary-dashboard link. Dashboard Google/Apple/OIDC login remains primary-dashboard routed; assessment reviewers should use email/password. Server-generated notifications, Slack-launched links, CLI/bootstrap links and self-hosted Cloud broker returns retain their canonical instance routing. Cloud broker return origins remain bound to the registered instance, not the hosted assessment dashboard.
@@ -808,7 +808,7 @@ Session replay masks what is typed into a password field in the browser, before 
 
 | Variable | What it does | Default |
 |---|---|---|
-| `APNS_KEY` or `APNS_KEY_PATH`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_TOPIC` | Mobile push on backend and consumer. Partial configuration disables push with a warning, never a crash | unset |
+| `APNS_KEY` or `APNS_KEY_PATH`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_TOPIC` | Mobile push on backend and consumer. `APNS_KEY` is the `.p8` file as PEM or base64, and `APNS_TOPIC` the app's bundle id. Partial configuration disables push with a warning, never a crash | unset |
 
 ## Updates
 

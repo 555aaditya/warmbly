@@ -146,6 +146,43 @@ xcrun simctl io booted screenshot inbox.png
 | Captcha error on login | The server verifies a captcha and got neither an App Attest proof nor a bypass token. In the simulator against a dev backend, set its `TURNSTILE_BYPASS_TOKEN` under Advanced; on a device, the server needs `APP_ATTEST_APP_IDS` naming the app (and `APP_ATTEST_ALLOW_DEVELOPMENT=true` for an Xcode build); a self-host can also run with `CAPTCHA_PROVIDER=none`. |
 | "Couldn't verify this copy of the app" | The server refused the App Attest proof (`app_attest_failed`). A development-signed build needs `APP_ATTEST_ALLOW_DEVELOPMENT=true`, and `APP_ATTEST_APP_IDS` must name `<team id>.com.warmbly.app` for the team that signed it. |
 
+## Releasing to TestFlight and the App Store
+
+The app ships for iPhone only. Every merge to `main` that touches `ios/` runs `.github/workflows/ios-release.yml` on a `macos-26` runner: it archives a Release build, signs it with cloud-managed certificates through an App Store Connect API key, and uploads it to TestFlight. The build number is the workflow's run number; the version is `MARKETING_VERSION` in the project. **Run workflow** on the Actions tab uploads a build without a merge. Promoting a build to the App Store stays a manual step in App Store Connect.
+
+### One-time setup
+
+In the Apple Developer portal and App Store Connect:
+
+1. Under **Certificates, Identifiers & Profiles > Identifiers**, register the App ID `com.warmbly.app` with Push Notifications, Sign in with Apple and App Attest.
+2. In App Store Connect, create the app (iOS, bundle id `com.warmbly.app`, SKU `warmbly-ios`).
+3. Under **Users and Access > Integrations > App Store Connect API**, create a team key with the **Admin** role (cloud-managed signing creates certificates, which needs Admin). Download the `.p8` once and note the key id and the issuer id.
+4. On the app's **TestFlight** tab, create an internal group and add your testers; new builds reach them automatically.
+
+In GitHub, create an environment named `app-store` (**Settings > Environments**), limit its deployment branches to `main`, and add:
+
+```sh
+gh variable set APPLE_TEAM_ID --env app-store --body "<team id>"
+gh secret set ASC_KEY_ID --env app-store --body "<key id>"
+gh secret set ASC_ISSUER_ID --env app-store --body "<issuer id>"
+base64 -i AuthKey_<key id>.p8 | gh secret set ASC_KEY_P8 --env app-store
+```
+
+Environment secrets never reach a pull request from a fork, and the job only runs in `warmbly/warmbly`. Delete the `.p8` from your machine once it is stored.
+
+### Before the first submission
+
+- **Review account.** Create an account for App Review on the production instance, then turn on **Skip emailed sign-in code** for it in the admin panel (or `warmblyctl user login-code-exempt`), so a reviewer can sign in with only the password. Give them a workspace with sample mailboxes and campaigns, and put the credentials in the review notes.
+- **App Attest.** The production backend must accept the App Store build: `APP_ATTEST_APP_IDS` defaults to `APPLE_TEAM_ID.APPLE_IOS_BUNDLE_ID`, so setting `APPLE_TEAM_ID` is enough.
+- **Store listing.** iPhone screenshots (6.9-inch), the privacy policy URL `https://warmbly.com/privacy/`, a support URL, and the App Privacy answers, which match `Warmbly/PrivacyInfo.xcprivacy`: email address, name, emails and other user content, linked to the user, used for app functionality, no tracking.
+- **Billing.** The app shows the plan, usage and credits and sells nothing; it carries no purchase link, because plans are bought outside the App Store.
+
+### Shipping a version
+
+Bump `MARKETING_VERSION` in the project (Xcode: target > General > Version) in the change that starts the new version. Each merge after that is another build of the same version in TestFlight. When one is ready, attach it to a new version in App Store Connect and submit it for review.
+
+A fork that wants its own build changes `PRODUCT_BUNDLE_IDENTIFIER`, registers that App ID, and sets up its own `app-store` environment; the job's repository check needs the fork's name too.
+
 ## What stays on the web
 
-By design, a few flows link out instead of being reimplemented on mobile: setting up a new admin grant, campaign sequence editing, and plan changes/billing management. Mailbox connect works natively with app passwords, existing admin grants (connecting a grant's mailboxes asks for a recent sign-in through `POST /v1/auth/reauth`), inbox vendor keys, file and pasted imports (`POST /emails/imports/preview`, then `POST /emails/imports`) and Warmbly Cloud workspace mailboxes; per-mailbox Google or Microsoft sign-in is not offered. See the [README](README.md#known-limits) for the full list.
+By design, a few flows stay on the dashboard instead of being reimplemented on mobile: setting up a new admin grant, campaign sequence editing, and changing a plan or payment method (the app shows billing read-only). Mailbox connect works natively with app passwords, existing admin grants (connecting a grant's mailboxes asks for a recent sign-in through `POST /v1/auth/reauth`), inbox vendor keys, file and pasted imports (`POST /emails/imports/preview`, then `POST /emails/imports`) and Warmbly Cloud workspace mailboxes; per-mailbox Google or Microsoft sign-in is not offered. See the [README](README.md#known-limits) for the full list.

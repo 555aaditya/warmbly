@@ -582,7 +582,7 @@ func main() {
 		// are present but init fails, so Apple simply stays unavailable.
 		var appleAuthClient socialauth.AppleCodeExchanger
 		if authCfg.AppleAppID != "" || authCfg.AppleKeySecret != "" {
-			appleAuthInstance, appleErr := appleauth.NewFromBase64(
+			appleAuthInstance, appleErr := appleauth.New(
 				authCfg.AppleAppID,
 				authCfg.AppleTeamID,
 				authCfg.AppleKeyID,

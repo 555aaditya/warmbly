@@ -7,9 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
-	"crypto/x509"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +18,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/warmbly/warmbly/internal/pkg/applekey"
 )
 
 // ErrUnregistered means APNs no longer knows the device token (app deleted,
@@ -60,7 +60,7 @@ type Client struct {
 	bearerAt time.Time
 }
 
-// FromEnv builds a client from APNS_KEY (PEM contents) or APNS_KEY_PATH, plus
+// FromEnv builds a client from APNS_KEY (the .p8 as PEM or base64) or APNS_KEY_PATH, plus
 // APNS_KEY_ID, APNS_TEAM_ID, and APNS_TOPIC (the app bundle id). Returns nil
 // when unconfigured so callers can treat push as absent.
 func FromEnv() (*Client, error) {
@@ -83,7 +83,7 @@ func FromEnv() (*Client, error) {
 	if keyPEM == "" || keyID == "" || teamID == "" || topic == "" {
 		return nil, errors.New("apns: partial config; need APNS_KEY (or APNS_KEY_PATH), APNS_KEY_ID, APNS_TEAM_ID, APNS_TOPIC")
 	}
-	key, err := parseP8(keyPEM)
+	key, err := applekey.Parse(keyPEM)
 	if err != nil {
 		return nil, err
 	}
@@ -94,22 +94,6 @@ func FromEnv() (*Client, error) {
 		topic:  topic,
 		http:   &http.Client{Timeout: 10 * time.Second},
 	}, nil
-}
-
-func parseP8(pemStr string) (*ecdsa.PrivateKey, error) {
-	block, _ := pem.Decode([]byte(pemStr))
-	if block == nil {
-		return nil, errors.New("apns: key is not PEM")
-	}
-	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("apns: parse key: %w", err)
-	}
-	key, ok := parsed.(*ecdsa.PrivateKey)
-	if !ok {
-		return nil, errors.New("apns: key is not ECDSA (expected an Apple .p8)")
-	}
-	return key, nil
 }
 
 func (c *Client) providerToken() (string, error) {

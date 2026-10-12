@@ -558,7 +558,7 @@ GOOGLE_REDIRECT_URI=https://api.example.com/v1/auth/google/callback
 APPLE_APP_ID=...            # the Services ID, not the app's bundle id
 APPLE_TEAM_ID=...
 APPLE_KEY_ID=...
-APPLE_KEY_SECRET=...
+APPLE_KEY_SECRET=...        # the Sign in with Apple .p8, as PEM or base64 (base64 -i AuthKey_XXXX.p8)
 # Optional. Defaults to <API_PUBLIC_URL>/v1/auth/apple/callback
 APPLE_REDIRECT_URI=https://api.example.com/v1/auth/apple/callback
 ```
@@ -568,6 +568,8 @@ The provider returns the browser to a route the **backend** serves, which is why
 </Callout>
 
 Register that URI as an authorized redirect URI on a **Web application** client in the Google Cloud console, and as a Return URL on the Services ID in the Apple developer console. Apple additionally requires HTTPS, so Sign in with Apple cannot run against a plain-http local install.
+
+On the Apple side, group the Services ID and the key under the iOS app's App ID as their primary App ID, so a person gets the same Apple identity on the web and in the app and both sign in to one account. Register your sending domain and from address under **Sign in with Apple for Email Communication** too, or people who choose Hide My Email never receive their sign-in codes.
 
 Once either is configured, `GET /auth/config` advertises it and the login screen renders the button. First sign-in provisions the account, its organization and its trial, and answers to `DISABLE_REGISTRATION` and `SSO_AUTO_PROVISION` exactly like a password signup does.
 

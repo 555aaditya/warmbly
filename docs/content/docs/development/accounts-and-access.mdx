@@ -102,7 +102,7 @@ Under `new_device` the code step offers **Remember this device for 30 days**. Ti
 
 ### Excusing one account
 
-`AUTH_LOGIN_CODE` is instance-wide and read at boot, which is a problem when one person outside your team has to sign in and cannot read your mail: a vendor's reviewer during an OAuth verification, an auditor, a support engineer. Turning codes off for everyone, for as long as the review takes, is a large change to make for one account.
+`AUTH_LOGIN_CODE` is instance-wide and read at boot, which is a problem when one person outside your team has to sign in and cannot read your mail: an App Store reviewer signing in to the iOS app, a vendor's reviewer during an OAuth verification, an auditor, a support engineer. Turning codes off for everyone, for as long as the review takes, is a large change to make for one account.
 
 Exempt that account instead:
 
@@ -111,7 +111,13 @@ warmblyctl user login-code-exempt --email reviewer@example.com \\
   --reason "Google OAuth verification" --by you@example.com
 ```
 
-A reason is required, and so is `--by`: this command talks to Postgres directly and has no signed-in operator, so the account accountable for the exemption is named explicitly. The admin panel records the acting admin and asks for nothing. The database refuses a blank reason either way. The exemption removes the emailed code and nothing else: the password, the captcha and the sign-in risk assessment all still apply, and a transport that cannot deliver still short-circuits ahead of it. A failed lookup is not read as an exemption.
+Or, in the admin panel, open the account under **Users** and turn on **Skip emailed sign-in code** in its **Sign-in** section. That needs the platform `manage_testers` permission and a recent confirmation of your own identity, and it asks for the reason.
+
+Only an instance operator can set it: no dashboard, API key or workspace role can change it, and a [workspace import](/guides/workspace-export-import/) never carries it, because accounts are matched by email on the destination rather than copied.
+
+A reason is required, and so is `--by`: this command talks to Postgres directly and has no signed-in operator, so the account accountable for the exemption is named explicitly. The admin panel records the acting admin and asks for nothing. The database refuses a blank reason either way. The exemption removes the emailed code and nothing else: the password, the captcha or App Attest check, the per-address attempt limit and two-factor authentication all still apply, as do bans. The sign-in risk assessment still runs and is recorded, but a sign-in it flags does not bring the code back for an exempt account, because asking for the code is the only thing a flag does. A transport that cannot deliver still short-circuits ahead of it. A failed lookup is not read as an exemption.
+
+Turning the switch off ends the exemption and signs out every session the account holds, exactly like revoking it under **Testers**.
 
 The admin panel has the same thing under **Testers**: create one, see the password once, and revoke an exemption when the reason no longer holds. The password a tester is created with works for a period you choose, 1 to 90 days (30 by default), and stops working on that date; the list shows when. Revoking a tester ends the exemption, clears that password and signs out every session the account holds. The account itself survives a revoke, so anything it did stays attributable, and so does any workspace membership it was given: remove the member from the workspace, or ban the account, to end its access entirely. An account exempted with `warmblyctl` has no handed-out password, so revoking it from the panel ends the exemption and its sessions and leaves its own password alone.
 

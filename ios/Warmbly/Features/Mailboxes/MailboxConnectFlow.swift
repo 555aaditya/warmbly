@@ -2835,6 +2835,8 @@ private extension View {
 /// Confirms the account holder before a change that needs a recent sign-in,
 /// then hands control back so the caller retries.
 struct ReauthSheet: View {
+    var reason = "Connecting a whole domain's mailboxes needs a recent sign-in."
+    var actionTitle = "Confirm and connect"
     var onConfirmed: () -> Void
 
     @Environment(AppEnvironment.self) private var env
@@ -2852,7 +2854,7 @@ struct ReauthSheet: View {
                     Text("Confirm it's you")
                         .displayFont(26)
                         .foregroundStyle(WTheme.ink)
-                    Text("Connecting a whole domain's mailboxes needs a recent sign-in.")
+                    Text(reason)
                         .font(.system(size: 14.5))
                         .foregroundStyle(WTheme.inkSecondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -2920,7 +2922,7 @@ struct ReauthSheet: View {
                 if busy {
                     ProgressView().tint(WTheme.inkInverse)
                 } else {
-                    Text("Confirm and connect")
+                    Text(actionTitle)
                 }
             }
             .buttonStyle(InkButtonStyle(size: .large, fullWidth: true))

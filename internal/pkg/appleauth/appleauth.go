@@ -7,10 +7,7 @@ package appleauth
 import (
 	"context"
 	"crypto/ecdsa"
-	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +17,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/warmbly/warmbly/internal/pkg/applekey"
 )
 
 const (
@@ -55,17 +54,12 @@ type Client struct {
 	tokenURL string
 }
 
-// NewFromBase64 builds a client from the base64-encoded contents of the
-// AuthKey_<keyID>.p8 file, the form it takes in an env var.
-func NewFromBase64(clientID, teamID, keyID, keyB64 string) (*Client, error) {
+// New builds a client from the AuthKey_<keyID>.p8 file, as PEM or base64.
+func New(clientID, teamID, keyID, keyValue string) (*Client, error) {
 	if clientID == "" || teamID == "" || keyID == "" {
 		return nil, errors.New("appleauth: client id, team id and key id are required")
 	}
-	pemBytes, err := base64.StdEncoding.DecodeString(strings.TrimSpace(keyB64))
-	if err != nil {
-		return nil, fmt.Errorf("appleauth: decoding key: %w", err)
-	}
-	key, err := parsePrivateKey(pemBytes)
+	key, err := applekey.Parse(keyValue)
 	if err != nil {
 		return nil, err
 	}
@@ -77,22 +71,6 @@ func NewFromBase64(clientID, teamID, keyID, keyB64 string) (*Client, error) {
 		http:     &http.Client{Timeout: 10 * time.Second},
 		tokenURL: tokenEndpoint,
 	}, nil
-}
-
-func parsePrivateKey(pemBytes []byte) (*ecdsa.PrivateKey, error) {
-	block, _ := pem.Decode(pemBytes)
-	if block == nil {
-		return nil, errors.New("appleauth: key is not PEM encoded")
-	}
-	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("appleauth: parsing key: %w", err)
-	}
-	key, ok := parsed.(*ecdsa.PrivateKey)
-	if !ok {
-		return nil, errors.New("appleauth: key is not an ECDSA private key")
-	}
-	return key, nil
 }
 
 func (c *Client) clientSecret(now time.Time) (string, error) {

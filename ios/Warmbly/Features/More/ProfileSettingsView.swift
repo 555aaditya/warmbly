@@ -65,6 +65,7 @@ struct ProfileSettingsView: View {
             nameSection
             passwordSection
             sessionsSection
+            DeleteAccountSection()
         }
         .task {
             seedIfNeeded()

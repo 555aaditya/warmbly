@@ -1,8 +1,7 @@
 import SwiftUI
 
 /// The plan you are on and what it includes, usage against what the server
-/// enforces, AI credits, the other plans, the referral code, and the way to
-/// change any of it on the web.
+/// enforces, AI credits and the referral code. Read only: the app sells nothing.
 struct BillingView: View {
     @Environment(AppEnvironment.self) private var env
 
@@ -12,7 +11,6 @@ struct BillingView: View {
     @State private var credits: CreditBalance?
     @State private var creditUsage: CreditUsage?
     @State private var referral: ReferralSummary?
-    @State private var plans: [MorePlan] = []
     @State private var loaded = false
     @State private var errorMessage: String?
     @State private var shown = false
@@ -53,13 +51,9 @@ struct BillingView: View {
             if credits != nil || creditUsage != nil {
                 creditsSection
             }
-            if catalog.count > 1 {
-                plansSection
-            }
             if referral?.code != nil {
                 referralSection
             }
-            manageSection
         }
         .refreshable { await load() }
         .onAppear { shown = true }
@@ -176,7 +170,7 @@ struct BillingView: View {
         if subscription?.status == "past_due" {
             return Notice(
                 tone: .rose, symbol: "exclamationmark.triangle.fill", title: "Payment failed",
-                body: "The card on file couldn't be charged. Update it on the web dashboard to keep sending."
+                body: "The card on file couldn't be charged."
             )
         }
         if subscription?.cancelAtPeriodEnd == true, subscription?.status != "canceled" {
@@ -184,7 +178,7 @@ struct BillingView: View {
             return Notice(
                 tone: .amber, symbol: "calendar.badge.exclamationmark",
                 title: end.map { "Ends on \($0)" } ?? "Ends with this period",
-                body: "The plan stays fully active until then. Resume it on the web dashboard and nothing changes."
+                body: "The plan stays fully active until then."
             )
         }
         return nil
@@ -499,121 +493,6 @@ struct BillingView: View {
         return parts.isEmpty ? nil : parts.joined(separator: ". ") + "."
     }
 
-    // MARK: Plans
-
-    /// The public monthly plans, cheapest first.
-    private var catalog: [MorePlan] {
-        plans
-            .filter { $0.isPublic != false && $0.duration != "year" }
-            .sorted { ($0.price ?? 0) < ($1.price ?? 0) }
-    }
-
-    private var yearlySavings: Int? {
-        plans.compactMap { $0.duration == "year" ? $0.savings : nil }.max().map { Int($0) }
-    }
-
-    private var plansSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            EyebrowLabel("Plans")
-                .padding(.leading, 16)
-            ScrollView(.horizontal) {
-                HStack(spacing: 12) {
-                    ForEach(catalog, id: \.id) { plan in
-                        planTile(plan)
-                    }
-                }
-                .scrollTargetLayout()
-            }
-            .scrollIndicators(.hidden)
-            .scrollTargetBehavior(.viewAligned)
-            .contentMargins(.horizontal, 16, for: .scrollContent)
-            .padding(.horizontal, -16)
-            Text(yearlySavings.map { "Save up to \($0)% billed yearly. Plans change on the web dashboard." } ?? "Plans change on the web dashboard.")
-                .font(.system(size: 13))
-                .foregroundStyle(WTheme.inkSecondary)
-                .padding(.horizontal, 16)
-                .padding(.top, 2)
-        }
-        .reveal(shown, 3)
-    }
-
-    @ViewBuilder
-    private func planTile(_ plan: MorePlan) -> some View {
-        let current = plan.id != nil && plan.id == subscription?.planID
-        let style = PlanStyle(plan.name, trialing: false)
-        let tile = VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                SettingsIcon(symbol: style.symbol, color: style.color, size: 32)
-                Spacer()
-                if current {
-                    Text("Current")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(WTheme.accent)
-                        .padding(.horizontal, 8)
-                        .frame(height: 22)
-                        .background(Tone.sky.background, in: Capsule())
-                }
-            }
-            Text(plan.name ?? "Plan")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(WTheme.ink)
-                .padding(.top, 12)
-            HStack(alignment: .firstTextBaseline, spacing: 3) {
-                Text("$\(Int(plan.discountedPrice.flatMap { $0 > 0 ? $0 : nil } ?? plan.price ?? 0))")
-                    .font(.system(size: 24, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(WTheme.ink)
-                Text("/ month")
-                    .font(.system(size: 13))
-                    .foregroundStyle(WTheme.inkSecondary)
-            }
-            .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 7) {
-                if let sends = plan.dailyEmails {
-                    perk("\(sends.formatted()) sends a day")
-                }
-                if let credits = plan.monthlyCredits, credits > 0 {
-                    perk("\(credits.formatted()) AI credits a month")
-                }
-                if (plan.dedicatedWorkers ?? 0) > 0 {
-                    perk("Sending kept apart")
-                } else {
-                    perk("Unlimited mailboxes")
-                }
-            }
-            .padding(.top, 14)
-            Spacer(minLength: 0)
-        }
-        .padding(16)
-        .frame(width: 236, height: 200, alignment: .topLeading)
-        .background(WTheme.groupedCard, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay {
-            if current {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(WTheme.accent.opacity(0.55), lineWidth: 1.5)
-            }
-        }
-        if !current, let url = AppConfig.dashboardURL("/app/settings/billing") {
-            Link(destination: url) { tile }
-                .buttonStyle(TapScaleStyle())
-                .accessibilityHint("Opens the web dashboard")
-        } else {
-            tile
-        }
-    }
-
-    private func perk(_ text: String) -> some View {
-        HStack(spacing: 7) {
-            Image(systemName: "checkmark")
-                .font(.system(size: 10.5, weight: .bold))
-                .foregroundStyle(WTheme.positive)
-            Text(text)
-                .font(.system(size: 13.5))
-                .foregroundStyle(WTheme.inkSecondary)
-                .lineLimit(1)
-        }
-    }
-
     // MARK: Referral
 
     private var referralSection: some View {
@@ -705,26 +584,6 @@ struct BillingView: View {
         return (Double(cents) / 100).formatted(.currency(code: currency).precision(.fractionLength(0)))
     }
 
-    // MARK: Manage
-
-    @ViewBuilder
-    private var manageSection: some View {
-        if let url = AppConfig.dashboardURL("/app/settings/billing") {
-            SettingsSection(footer: "Billing changes are made on the web dashboard and apply everywhere.") {
-                Link(destination: url) {
-                    SettingsRow(icon: "sparkles", color: WTheme.accent, title: isSubscribed ? "Change plan" : "Choose a plan", accessory: .external)
-                }
-                .buttonStyle(MoreRowPressStyle())
-                if isSubscribed {
-                    Link(destination: url) {
-                        SettingsRow(icon: "creditcard.fill", color: SettingsPalette.security, title: "Payment method and invoices", accessory: .external)
-                    }
-                    .buttonStyle(MoreRowPressStyle())
-                }
-            }
-        }
-    }
-
     // MARK: Derived
 
     private var planName: String {
@@ -735,11 +594,6 @@ struct BillingView: View {
 
     private var isTrialing: Bool {
         subscription?.status == "trialing" || trial?.isInTrial == true
-    }
-
-    private var isSubscribed: Bool {
-        guard !isTrialing, let status = subscription?.status else { return false }
-        return ["active", "past_due"].contains(status) && (subscription?.plan?.price ?? 0) > 0
     }
 
     private var statusChip: (label: String, tone: Tone)? {
@@ -805,9 +659,8 @@ struct BillingView: View {
             async let bal: CreditBalance = env.api.get("subscription/credits")
             async let use: CreditUsage = env.api.get("subscription/credits/usage")
             async let ref: ReferralSummary = env.api.get("subscription/referral")
-            async let cat: PlansResponse = env.api.get("plans")
             let subscription = try await sub
-            let fresh = (try? await tr, try? await lim, try? await bal, try? await use, try? await ref, try? await cat)
+            let fresh = (try? await tr, try? await lim, try? await bal, try? await use, try? await ref)
             withAnimation(.snappy) {
                 self.subscription = subscription
                 trial = fresh.0
@@ -815,7 +668,6 @@ struct BillingView: View {
                 credits = fresh.2
                 creditUsage = fresh.3
                 referral = fresh.4
-                plans = fresh.5?.plans ?? plans
             }
         } catch {
             errorMessage = (error as? APIError)?.errorDescription ?? error.localizedDescription

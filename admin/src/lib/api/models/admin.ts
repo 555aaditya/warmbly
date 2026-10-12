@@ -576,6 +576,12 @@ export interface AdminUserDetail {
     banned_at?: string | null;
     created_at: string;
     updated_at: string;
+    /** Excused from the emailed sign-in code by an operator. */
+    login_code_exempt?: boolean;
+    login_code_exempt_reason?: string | null;
+    login_code_exempt_at?: string | null;
+    /** Set only on a tester whose password was handed out. */
+    password_expires_at?: string | null;
     organization_count: number;
     email_account_count: number;
     campaign_count: number;

@@ -28,7 +28,7 @@ func testClient(t *testing.T, tokenURL string) (*Client, *ecdsa.PrivateKey) {
 		t.Fatal(err)
 	}
 	p8 := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
-	c, err := NewFromBase64("com.example.service", "TEAM123", "KEY123", base64.StdEncoding.EncodeToString(p8))
+	c, err := New("com.example.service", "TEAM123", "KEY123", base64.StdEncoding.EncodeToString(p8))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,14 +36,14 @@ func testClient(t *testing.T, tokenURL string) (*Client, *ecdsa.PrivateKey) {
 	return c, key
 }
 
-func TestNewFromBase64RejectsBadKeys(t *testing.T) {
-	if _, err := NewFromBase64("id", "team", "key", "not base64!"); err == nil {
+func TestNewRejectsBadKeys(t *testing.T) {
+	if _, err := New("id", "team", "key", "not base64!"); err == nil {
 		t.Error("expected an error for invalid base64")
 	}
-	if _, err := NewFromBase64("id", "team", "key", base64.StdEncoding.EncodeToString([]byte("no pem here"))); err == nil {
+	if _, err := New("id", "team", "key", base64.StdEncoding.EncodeToString([]byte("no pem here"))); err == nil {
 		t.Error("expected an error for a non-PEM key")
 	}
-	if _, err := NewFromBase64("", "team", "key", ""); err == nil {
+	if _, err := New("", "team", "key", ""); err == nil {
 		t.Error("expected an error for a missing client id")
 	}
 }
