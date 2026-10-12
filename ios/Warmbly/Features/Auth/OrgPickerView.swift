@@ -128,8 +128,12 @@ struct OrgPickerView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             UnevenRoundedRectangle(cornerRadii: .init(topLeading: 36, topTrailing: 36))
-                .fill(Color(.systemBackground)
+                .fill(WTheme.canvas
                     .shadow(.drop(color: Color(hex: 0x0F172A).opacity(0.28), radius: 34, y: -6)))
+                .overlay(
+                    UnevenRoundedRectangle(cornerRadii: .init(topLeading: 36, topTrailing: 36))
+                        .stroke(WTheme.sheetEdge, lineWidth: 1)
+                )
                 .padding(.bottom, -600)
                 .ignoresSafeArea()
         }

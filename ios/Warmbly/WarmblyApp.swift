@@ -4,7 +4,7 @@ import SwiftUI
 struct WarmblyApp: App {
     @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
     @State private var env = AppEnvironment()
-    @AppStorage(AppearancePreference.storageKey) private var appearance = AppearancePreference.system
+    @AppStorage(AppearancePreference.storageKey) private var appearance = AppearancePreference.standard
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {

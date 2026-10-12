@@ -212,11 +212,11 @@ struct HomeView: View {
         Image("SheerSky")
             .resizable()
             .scaledToFill()
-            .overlay(WTheme.night.opacity(colorScheme == .dark ? 0.5 : 0))
             .overlay {
-                // A veil behind the text so it reads on the darker folds.
+                // A veil behind the text so it reads on the folds; the night photo needs less.
+                let veil: [Double] = colorScheme == .dark ? [0.32, 0.08, 0] : [0.62, 0.28, 0.08]
                 LinearGradient(
-                    colors: [WTheme.canvas.opacity(0.62), WTheme.canvas.opacity(0.28), WTheme.canvas.opacity(0.08)],
+                    colors: [WTheme.canvas.opacity(veil[0]), WTheme.canvas.opacity(veil[1]), WTheme.canvas.opacity(veil[2])],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )

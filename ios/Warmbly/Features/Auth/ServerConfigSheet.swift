@@ -1,10 +1,11 @@
 import SwiftUI
 
-/// Where the app signs in: Warmbly Cloud unless someone picks their own
-/// server. The app proves itself with App Attest rather than a captcha; only a
+/// The signed-out settings: how the app looks, and where it signs in (Warmbly
+/// Cloud unless someone picks their own server). The app proves itself with App Attest rather than a captcha; only a
 /// dev backend takes a bypass token, for the simulator, which cannot attest.
 struct ServerConfigSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @AppStorage(AppearancePreference.storageKey) private var appearance = AppearancePreference.standard
 
     enum Choice: Hashable { case cloud, selfHosted, local }
 
@@ -86,6 +87,11 @@ struct ServerConfigSheet: View {
                 header
                     .padding(.bottom, 22)
 
+                sectionLabel("Appearance")
+                AppearanceSegments(selection: $appearance)
+                    .padding(.bottom, 26)
+
+                sectionLabel("Server")
                 options
 
                 status
@@ -123,10 +129,10 @@ struct ServerConfigSheet: View {
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Server")
+                Text("Settings")
                     .displayFont(28)
                     .foregroundStyle(WTheme.ink)
-                Text("Where this app signs in.")
+                Text("How the app looks and where it signs in.")
                     .font(.system(size: 15))
                     .foregroundStyle(WTheme.inkSecondary)
             }
@@ -141,6 +147,14 @@ struct ServerConfigSheet: View {
             .buttonStyle(PressableButtonStyle())
             .accessibilityLabel("Close")
         }
+    }
+
+    private func sectionLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(WTheme.inkSecondary)
+            .padding(.horizontal, 6)
+            .padding(.bottom, 8)
     }
 
     // MARK: Options

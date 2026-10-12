@@ -139,8 +139,12 @@ struct OnboardingFlowView: View {
             // The tail below keeps the sheet sealed to the screen edge even
             // mid-animation while the keyboard moves.
             UnevenRoundedRectangle(cornerRadii: .init(topLeading: 36, topTrailing: 36))
-                .fill(Color(.systemBackground)
+                .fill(WTheme.canvas
                     .shadow(.drop(color: Color(hex: 0x0F172A).opacity(0.28), radius: 34, y: -6)))
+                .overlay(
+                    UnevenRoundedRectangle(cornerRadii: .init(topLeading: 36, topTrailing: 36))
+                        .stroke(WTheme.sheetEdge, lineWidth: 1)
+                )
                 .padding(.bottom, -600)
                 .ignoresSafeArea()
         }
@@ -193,10 +197,10 @@ struct OnboardingFlowView: View {
                     }
                 }
                 .font(.system(size: 16.5, weight: .medium))
-                .foregroundStyle(WTheme.inkInverse)
+                .foregroundStyle(!canAdvance && !busy ? WTheme.inkTertiary : WTheme.inkInverse)
                 .frame(maxWidth: .infinity)
                 .frame(height: 54)
-                .background(WTheme.ink.opacity(!canAdvance && !busy ? 0.18 : 1), in: Capsule())
+                .background(!canAdvance && !busy ? WTheme.fill : WTheme.ink, in: Capsule())
             }
             .buttonStyle(PressableButtonStyle())
             .disabled(busy || !canAdvance)

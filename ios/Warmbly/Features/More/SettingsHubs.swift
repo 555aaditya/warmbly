@@ -62,7 +62,7 @@ private struct HubAccess {
 struct SettingsTilesHub: View {
     @Environment(AppEnvironment.self) private var env
     let ctx: SettingsHubContext
-    @AppStorage(AppearancePreference.storageKey) private var appearance = AppearancePreference.system
+    @AppStorage(AppearancePreference.storageKey) private var appearance = AppearancePreference.standard
     @State private var appeared = false
 
     private var store: SettingsHubStore { ctx.store }

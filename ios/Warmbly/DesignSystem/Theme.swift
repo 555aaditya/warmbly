@@ -26,26 +26,33 @@ extension Color {
 
 /// Warmbly brand palette: the marketing site's ink-on-white (slate neutrals,
 /// near-black actions, hairlines) with sky kept for data and live state.
-/// Dark mode uses zinc on true black.
+/// Dark mode uses zinc on charcoal, with cards raised a visible step.
 enum WTheme {
     // Neutrals
-    static let canvas = Color.dynamic(light: 0xFFFFFF, dark: 0x09090B)
-    static let surface = Color.dynamic(light: 0xF6F6F7, dark: 0x141416)
-    static let raised = Color.dynamic(light: 0xFFFFFF, dark: 0x18181B)
-    static let fill = Color.dynamic(light: 0xF0F0F2, dark: 0x1F1F23)
+    static let canvas = Color.dynamic(light: 0xFFFFFF, dark: 0x131315)
+    static let surface = Color.dynamic(light: 0xF6F6F7, dark: 0x1A1A1D)
+    static let raised = Color.dynamic(light: 0xFFFFFF, dark: 0x1F1F22)
+    static let fill = Color.dynamic(light: 0xF0F0F2, dark: 0x29292D)
     static let ink = Color.dynamic(light: 0x111113, dark: 0xF7F7F8)
-    static let inkInverse = Color.dynamic(light: 0xFFFFFF, dark: 0x09090B)
-    static let inkSecondary = Color.dynamic(light: 0x6E6E76, dark: 0xA1A1A9)
-    static let inkTertiary = Color.dynamic(light: 0xA3A3AB, dark: 0x6B6B73)
-    static let hairline = Color.dynamic(light: 0xEFEFF1, dark: 0x1F1F23)
-    static let hairlineStrong = Color.dynamic(light: 0xE4E4E7, dark: 0x2A2A2F)
+    static let inkInverse = Color.dynamic(light: 0xFFFFFF, dark: 0x131315)
+    static let inkSecondary = Color.dynamic(light: 0x6E6E76, dark: 0xA8A8B0)
+    static let inkTertiary = Color.dynamic(light: 0xA3A3AB, dark: 0x7C7C85)
+    static let hairline = Color.dynamic(light: 0xEFEFF1, dark: 0x27272B)
+    static let hairlineStrong = Color.dynamic(light: 0xE4E4E7, dark: 0x343439)
 
     // iOS grouped settings: a grey page with white cards (dark: black page, grey cards).
-    static let groupedPage = Color.dynamic(light: 0xF2F2F7, dark: 0x09090B)
-    static let groupedCard = Color.dynamic(light: 0xFFFFFF, dark: 0x1A1A1D)
+    static let groupedPage = Color.dynamic(light: 0xF2F2F7, dark: 0x131315)
+    static let groupedCard = Color.dynamic(light: 0xFFFFFF, dark: 0x202024)
 
-    /// The dark-mode brand backdrop for launch, sign-in and onboarding.
-    static let night = Color(hex: 0x09090B)
+    /// The rim of a sheet raised over the sky photo; only dark mode needs one.
+    static let sheetEdge = Color(UIColor { $0.userInterfaceStyle == .dark
+        ? UIColor.white.withAlphaComponent(0.1)
+        : UIColor.clear })
+
+    /// Body for floating glass chrome: in dark mode, content scrolling under it stays quiet.
+    static let glassTint = Color(UIColor { $0.userInterfaceStyle == .dark
+        ? UIColor(red: 0.13, green: 0.13, blue: 0.14, alpha: 0.85)
+        : UIColor.clear })
 
     /// Ink on the sign-in sky: dark on the light photo, white on the night.
     static let onSky = Color.dynamic(light: 0x111827, dark: 0xFFFFFF)
@@ -60,7 +67,7 @@ enum WTheme {
     // Accent (sky)
     static let accent = Color.dynamic(light: 0x0A8DE6, dark: 0x3DB8FF)
     static let accentDeep = Color.dynamic(light: 0x0670C2, dark: 0x0EA5E9)
-    static let accentSoft = Color.dynamic(light: 0xE6F4FE, dark: 0x0C2233)
+    static let accentSoft = Color.dynamic(light: 0xE6F4FE, dark: 0x112B3F)
 
     // Status
     static let positive = Color.dynamic(light: 0x12A150, dark: 0x32D583) // green
