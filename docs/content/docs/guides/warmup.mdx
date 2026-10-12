@@ -77,7 +77,7 @@ Providers may strip headers or replace identifiers. Exact authorized lineage and
 
 When an SMTP relay rewrites a Message-ID, a valid recipient-bound verification token, the expected sender address and a confirmed send can authorize one received copy. Replies and message-specific DKIM verification use that copy's received identifier. Headerless arrivals still require an exact confirmed identifier for new diagnostic lineage; a matching subject or mailbox pair alone does not authorize a reply. Arrivals held before send confirmation or during a verification outage are retained and retried automatically while their token remains valid.
 
-New mailboxes default off. Independent send/receive controls and shared daily/rolling limits are on the Warmup tab. Start/resume enables diagnostic sending, Pause preserves separately authorized receiving, and Stop disables both while retaining ramp history and holds. Recipient-only cannot reply. Existing NULL stays legacy until explicit action; unrelated edits do not relabel it. New controls cannot re-enable legacy synthetic behavior. Cloud controls require updated Cloud replicas. See [send safety](/development/send-safety/).
+New mailboxes default off. Independent send/receive controls and shared daily/rolling limits are on the Warmup tab. Start/resume enables disclosed automated sending and, when starting from Off or legacy, receiving with provider-supported spam rescue, reads, importance and stars or flags. Pause preserves separately authorized receiving, and Stop disables both while retaining ramp history and holds. Recipient-only cannot reply. Sender-only does not authorize recipient engagement. Existing receive-enabled diagnostic mailboxes also use these actions after the consumer, backend and workers are upgraded; no new setting or data migration is needed. Existing NULL stays legacy until explicit action; unrelated edits do not relabel it. Cloud controls require updated Cloud replicas. See [send safety](/development/send-safety/).
 
 ### When a send fails
 
@@ -186,7 +186,7 @@ The **inbox rate** is inbox plus category tabs over everything delivered in the 
 
 The rate is taken at Google, Microsoft and Yahoo only, the providers that judge a mailbox. Smaller mail hosts run their own filters, so their spam folders never count toward it: a mailbox whose warmup mail only reached small hosts shows no rate rather than one built from them. Other mail hosts are still shown: their inbox rate sits right under the headline in the drawer and on **Deliverability**, and they appear in the daily charts, the counts and the per-provider breakdown. It only appears once `20` deliveries at those three are in the window, the same sample the pool needs before it acts on spam placement. Until then the mailbox shows how far along it is (`8/20`) rather than a percentage that would swing on every delivery. The mailbox's health score is capped at its inbox rate, so a mailbox with some mail in spam reads `97`, not a flat `100`.
 
-Filter by provider to distinguish observations from gaps. Historical rescued counts are legacy requests, not confirmed moves or benefits. Diagnostic mode does not rescue spam. Unconfirmed means not observed after timeout, not verified failure. First-folder evidence is separate from housekeeping; absent historical folders stay unknown. Days are UTC. See [warmup placement](/api/reference/analytics/#get-warmup-placement).
+Filter by provider to distinguish observations from gaps. Historical rescued counts are requests, not confirmed moves or benefits. Receiving-authorized warmup can request spam rescue, but placement remains the originally observed folder, not a rewritten success after a move. Unconfirmed means not observed after timeout, not verified failure. First-folder evidence is separate from housekeeping; absent historical folders stay unknown. Days are UTC. See [warmup placement](/api/reference/analytics/#get-warmup-placement).
 
 </Fold>
 
@@ -242,7 +242,7 @@ Replies thread properly with a real `Re:` subject and `In-Reply-To` header, and 
 
 Receiving warmup mail can also prompt an answer directly. When a verified warmup email arrives, the recipient sometimes points its next scheduled send back at whoever wrote, 25 minutes to 5 hours later and inside its own warmup hours. That is a re-pointing, not extra work: each mailbox has one warmup send queued at a time, so a reply-back moves that send earlier and aims it, and can never push a send the mailbox had already planned sooner. The chance is the recipient's own reply rate, drawn once when the reply is scheduled rather than again when it sends, and it stops before a thread reaches its message cap so replies cannot answer replies indefinitely.
 
-Scheduling respects windows, provider feedback, shared limits and spacing. Jitter distributes load, not human identities. Diagnostic mode schedules no synthetic read, star, importance or spam-rescue actions.
+Scheduling respects windows, provider feedback, shared limits and spacing. Jitter distributes load, not human identities. Receiving participation allows probabilistic spam rescue, reads, importance and stars or flags on verified warmup messages. Filing and selected spam rescues are requested immediately; reads, importance and stars are durably scheduled after a randomized dwell. Current receiving permission and worker assignment are checked again at execution time. These actions are automation, not human feedback or a guaranteed reputation improvement.
 
 </Fold>
 
@@ -261,12 +261,12 @@ The filing is per mailbox, on the **Warmup** tab of its drawer:
 | Setting | What your mail client shows |
 |---------|------------------------------|
 | **Its own folder** (default) | One folder, `Warmbly` unless you rename it, holding every warmup message in and out. Nothing warmup-related in Inbox or Sent. |
-| **Leave it in the inbox** | Diagnostics stay where the provider placed them, including spam. |
+| **Leave it in the inbox** | Warmup stays where the provider placed it unless selected for spam rescue into Inbox. |
 | **Archive it** | Out of the inbox with no folder of its own: findable by search, listed in All Mail on Gmail. |
 
 The folder is created the first time it is needed, and it is also the answer to "what is this message?": nothing but warmup is filed there, so the folder itself is what identifies warmup traffic in a mail client. If another tool already made a folder you use for this, name that one instead and warmup joins it rather than adding a second.
 
-Diagnostic mode leaves spam as spam and emits no not-junk signals. Filing is housekeeping, not engagement evidence. Historical NULL/legacy retains existing behavior until explicit action. Upgrade all workers before relying on new restrictions.
+Spam rescue is provider-specific: Gmail removes Spam and supports Important and Starred labels; Microsoft moves verified Junk messages to Inbox and supports high importance and a follow-up flag; IMAP moves messages out of recognized Spam/Junk folders and uses flags plus best-effort not-junk keywords. IMAP does not have a universal Gmail-style Important label, and SMTP-only mailboxes cannot perform recipient-side actions without mailbox access. A move is not proof that a provider learned a positive reputation signal. Filing remains housekeeping, not engagement evidence. Historical NULL/legacy retains existing behavior until explicit action. Upgrade the consumer, backend and workers together; previously skipped engagement is not replayed onto old mail.
 
 Mail that arrives somewhere unexpected is still handled. A server-side rule, or another warmup tool's filter, can put warmup mail in a folder of its own choosing before Warmbly sees it; the message is found there and filed from there, and one already sitting in the destination is left alone rather than moved onto itself.
 

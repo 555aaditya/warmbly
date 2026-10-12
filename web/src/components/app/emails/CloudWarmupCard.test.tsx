@@ -32,10 +32,12 @@ describe.each([true, false])("Cloud diagnostic participation with workspace conn
         await waitFor(() => expect(fixtures.patch).toHaveBeenCalledWith("mailbox", fixtures.participation));
     });
 
-    it("labels receive-only as sending paused, without claiming replies are authorized", () => {
+    it("discloses receiving actions while keeping receive-only sending paused", () => {
         fixtures.participation = { mode: "diagnostic", send: false, receive: true };
         draw();
         expect(screen.getByText("Diagnostic sending paused in Cloud")).toBeInTheDocument();
         expect(screen.getByText(/Receive-only does not authorize replies/)).toBeInTheDocument();
+        expect(screen.getByText(/Receiving allows probabilistic spam rescue, reads, importance and stars or flags where supported/)).toBeInTheDocument();
+        expect(screen.getByText(/not a guaranteed reputation improvement/)).toBeInTheDocument();
     });
 });

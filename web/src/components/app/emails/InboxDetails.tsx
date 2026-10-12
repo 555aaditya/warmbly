@@ -1268,7 +1268,7 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
             onError: (e) => toast.error(buildError(e as unknown as AppError)),
         });
         if (action === "start" || action === "resume") {
-            confirm.show("Authorize automated diagnostic sends and replies? Starting from Off also enables receiving diagnostic tests. Tests are disclosed automation, not organic engagement or a proven reputation boost. Provider policies still apply.", execute);
+            confirm.show("Authorize automated warmup sends and replies? Starting from Off also enables receiving tests with spam rescue, reads, importance and stars or flags where supported. Tests are disclosed automation, not organic engagement or a proven reputation boost. Provider policies still apply.", execute);
         } else execute();
     };
 
@@ -1374,9 +1374,9 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
                     </select>
                     {form.test_mode === "diagnostic" && <>
                         <label className="flex items-center justify-between text-xs">Allow diagnostic sending and replies<Toggle value={!!form.test_send_enabled} onChange={(v) => update({ test_send_enabled: v })} /></label>
-                        <label className="flex items-center justify-between text-xs">Allow receiving diagnostic tests<Toggle value={!!form.test_receive_enabled} onChange={(v) => update({ test_receive_enabled: v })} /></label>
+                        <label className="flex items-center justify-between text-xs">Allow receiving tests and automated mailbox actions<Toggle value={!!form.test_receive_enabled} onChange={(v) => update({ test_receive_enabled: v })} /></label>
                     </>}
-                    <p className="text-xs text-slate-500">Save to apply. Sending also requires an active schedule and sender role. Receive-only does not authorize replies. Diagnostic mode does not star, mark read or rescue spam. Off also stops placement tests, not legitimate campaign mail.</p>
+                    <p className="text-xs text-slate-500">Save to apply. Sending also requires an active schedule and sender role. Receiving allows automated spam rescue, reads, importance and stars or flags where supported. Receive-only does not authorize replies. Actions are probabilistic, not human engagement or a guaranteed reputation improvement. Off also stops placement tests, not legitimate campaign mail.</p>
                     <label className="block text-xs">Shared daily send limit (all send types; 0 uses configured caps)<input type="number" min={0} value={form.shared_daily_limit ?? 0} onChange={(e) => update({ shared_daily_limit: Number(e.target.value) })} className="ml-2 w-20 rounded border border-slate-200" /></label>
                     <label className="block text-xs">Recipients in rolling 24 hours (To/CC/BCC; 0 uses configured caps)<input type="number" min={0} value={form.rolling_recipient_limit ?? 0} onChange={(e) => update({ rolling_recipient_limit: Number(e.target.value) })} className="ml-2 w-20 rounded border border-slate-200" /></label>
                 </div>

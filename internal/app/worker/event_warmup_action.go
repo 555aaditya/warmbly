@@ -92,6 +92,21 @@ func (w *WorkerService) HandleWarmupAction(ctx context.Context, action models.Wa
 			exists = false
 		}
 	}
+	if gate, ok := w.SyncContextRepository.(repository.WarmupActionAdmission); exists && ok &&
+		(hasWarmupAction(action.Actions, models.WarmupActionMarkRead) || hasWarmupAction(action.Actions, models.WarmupActionRescueFromSpam) ||
+			hasWarmupAction(action.Actions, models.WarmupActionMarkImportant) || hasWarmupAction(action.Actions, models.WarmupActionStar)) {
+		worker, err := uuid.Parse(w.ID)
+		if err != nil {
+			return err
+		}
+		action.Actions, err = gate.PermittedWarmupActions(ctx, action.EmailID, worker, action.Actions)
+		if err != nil {
+			return err
+		}
+		if len(action.Actions) == 0 {
+			return nil
+		}
+	}
 	var err error
 	switch {
 	case !exists:

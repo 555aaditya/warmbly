@@ -69,7 +69,7 @@ export default function CloudWarmupCard({ mailboxId, email, provider }: { mailbo
                     <button
                         type="button"
                         disabled={busy}
-                        onClick={() => confirm.show("Authorize disclosed automated diagnostic sending and receiving in Warmbly Cloud? This is not organic engagement or proof of improved reputation.", () => void run(() => enroll.mutateAsync(mailboxId), `${email} enrolled for diagnostics`))}
+                        onClick={() => confirm.show("Authorize disclosed automated warmup sending and receiving in Warmbly Cloud, including spam rescue, reads, importance and stars or flags where supported? This is not organic engagement or proof of improved reputation.", () => void run(() => enroll.mutateAsync(mailboxId), `${email} enrolled for diagnostics`))}
                         className="shrink-0 h-7 px-2.5 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-[12px] font-medium inline-flex items-center gap-1.5 transition-colors disabled:opacity-60"
                     >
                         {busy ? <Loader2Icon className="w-3 h-3 animate-spin" /> : <CloudIcon className="w-3 h-3" />}
@@ -137,9 +137,9 @@ export default function CloudWarmupCard({ mailboxId, email, provider }: { mailbo
                         const apply = () => void run(() => participation.mutateAsync({ ...p, mode: "diagnostic", send }), "Diagnostic sending updated");
                         if (send) confirm.show("Authorize automated diagnostic sends and replies? Provider policies and safety holds still apply.", apply); else apply();
                     }} /></label>
-                    <label className="flex justify-between">Allow receiving diagnostic tests<Toggle disabled={busy} value={p.receive} onChange={(receive) => void run(() => participation.mutateAsync({ ...p, mode: "diagnostic", receive }), "Diagnostic receiving updated")} /></label>
+                    <label className="flex justify-between">Allow receiving tests and automated mailbox actions<Toggle disabled={busy} value={p.receive} onChange={(receive) => void run(() => participation.mutateAsync({ ...p, mode: "diagnostic", receive }), "Diagnostic receiving updated")} /></label>
                     <button disabled={busy} onClick={() => void run(() => participation.mutateAsync({ ...p, mode: "off", send: false, receive: false }), "Cloud diagnostics stopped")}>Stop all diagnostic participation</button>
-                    <p className="text-slate-500">Receive-only does not authorize replies. Shared limits are managed on the cloud-owned mailbox. Accepted provider sends cannot be recalled.</p>
+                    <p className="text-slate-500">Receiving allows probabilistic spam rescue, reads, importance and stars or flags where supported. Receive-only does not authorize replies. These are automated actions, not a guaranteed reputation improvement. Shared limits are managed on the cloud-owned mailbox. Accepted provider sends cannot be recalled.</p>
                 </div>}
                 {!p && <p className="mt-2 text-xs text-slate-500">Cloud participation controls require an updated Cloud. Legacy state is not proof of diagnostic consent.</p>}
                 {cloud?.warmup?.partner_limit && !sendFailure && (

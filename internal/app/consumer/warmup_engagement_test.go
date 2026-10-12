@@ -1,12 +1,79 @@
 package jobs
 
 import (
+	"context"
+	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/repository"
 )
+
+type pendingEngagementStub struct {
+	repository.WarmupEngagementRepository
+	due []repository.PendingEngagement
+}
+
+func (r *pendingEngagementStub) ClaimDuePendingEngagements(context.Context, int) ([]repository.PendingEngagement, error) {
+	due := r.due
+	r.due = nil
+	return due, nil
+}
+
+func TestDelayedWarmupEngagementRechecksReceivingAndAssignment(t *testing.T) {
+	mode := models.TestParticipationDiagnostic
+	actions := []string{models.WarmupActionMarkRead, models.WarmupActionMarkImportant, models.WarmupActionStar}
+	for _, tc := range []struct {
+		name    string
+		mode    models.TestParticipationMode
+		receive bool
+		status  string
+		want    bool
+	}{
+		{"receiving enabled", mode, true, "active", true},
+		{"worker reassigned during dwell", mode, true, "active", true},
+		{"unassigned during dwell", mode, true, "active", false},
+		{"receiving revoked during dwell", mode, false, "active", false},
+		{"stopped during dwell", models.TestParticipationOff, true, "active", false},
+		{"inactive during dwell", mode, true, "inactive", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			worker := uuid.New()
+			account := &models.Email{ID: uuid.New(), WorkerID: &worker, TestMode: &tc.mode, TestReceiveEnabled: tc.receive, Status: tc.status}
+			payload, err := json.Marshal(models.WarmupEmailAction{EmailID: account.ID, Actions: actions, DelaySeconds: 120})
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending := &pendingEngagementStub{due: []repository.PendingEngagement{{ID: uuid.New(), EmailAccountID: account.ID, Payload: payload}}}
+			if tc.name == "worker reassigned during dwell" {
+				worker = uuid.New()
+				account.WorkerID = &worker
+			} else if tc.name == "unassigned during dwell" {
+				account.WorkerID = nil
+			}
+			pub := &backfillPublisher{}
+			s := JobsService{WarmupEngagementRepo: pending, Publisher: pub, EmailRepository: backfillEmailRepo{account: account}}
+			if err := s.drainDueEngagements(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if !tc.want {
+				if len(pub.actions) != 0 {
+					t.Fatal("revoked engagement was published", pub.actions)
+				}
+				return
+			}
+			if len(pub.actions) != 1 || !slices.Equal(pub.actions[0].Actions, actions) || pub.actions[0].DelaySeconds != 0 || pub.workers[0] != worker {
+				t.Fatal("engagement lost actions, elapsed dwell or current worker", pub.actions, pub.workers)
+			}
+			if err := s.drainDueEngagements(t.Context()); err != nil || len(pub.actions) != 1 {
+				t.Fatal("engagement replayed after being claimed", err)
+			}
+		})
+	}
+}
 
 func TestHumanizeFireAt_DefersNightToMorning(t *testing.T) {
 	// 3am local — a read at this hour is a bot signature.
