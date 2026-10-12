@@ -139,7 +139,7 @@ export default function CloudWarmupCard({ mailboxId, email, provider }: { mailbo
                     }} /></label>
                     <label className="flex justify-between">Allow receiving tests and automated mailbox actions<Toggle disabled={busy} value={p.receive} onChange={(receive) => void run(() => participation.mutateAsync({ ...p, mode: "diagnostic", receive }), "Diagnostic receiving updated")} /></label>
                     <button disabled={busy} onClick={() => void run(() => participation.mutateAsync({ ...p, mode: "off", send: false, receive: false }), "Cloud diagnostics stopped")}>Stop all diagnostic participation</button>
-                    <p className="text-slate-500">Receiving allows probabilistic spam rescue, reads, importance and stars or flags where supported, not replies. These are automated actions, not a guaranteed reputation improvement. Shared limits are managed on the cloud-owned mailbox. Accepted provider sends cannot be recalled.</p>
+                    <p className="text-slate-500">Receiving allows probabilistic spam rescue, reads, importance and stars or flags where supported. Receive-only does not authorize replies. These are automated actions, not a guaranteed reputation improvement. Shared limits are managed on the cloud-owned mailbox. Accepted provider sends cannot be recalled.</p>
                 </div>}
                 {!p && <p className="mt-2 text-xs text-slate-500">Cloud participation controls require an updated Cloud. Legacy state is not proof of diagnostic consent.</p>}
                 {cloud?.warmup?.partner_limit && !sendFailure && (
