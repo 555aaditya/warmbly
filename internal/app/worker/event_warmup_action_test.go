@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -14,7 +15,9 @@ import (
 
 type warmupActionAuthorityStub struct {
 	repository.SyncContextRepository
-	err error
+	err       error
+	allowOnce bool
+	calls     int
 }
 
 type warmupFilingAuthorityStub struct {
@@ -72,8 +75,30 @@ func TestDurableWarmupFilingDefersOnlyWithPositiveAuthority(t *testing.T) {
 	}
 }
 
-func (s *warmupActionAuthorityStub) PermittedWarmupActions(context.Context, uuid.UUID, uuid.UUID, []string) ([]string, error) {
+func (s *warmupActionAuthorityStub) PermittedWarmupActions(_ context.Context, _, _ uuid.UUID, actions []string) ([]string, error) {
+	s.calls++
+	if s.allowOnce && s.calls == 1 {
+		return actions, nil
+	}
 	return nil, s.err
+}
+
+func TestWarmupEngagementRechecksAuthorityBeforeProviderDispatch(t *testing.T) {
+	for _, failure := range []error{nil, errors.New("authority unavailable")} {
+		for _, action := range []string{models.WarmupActionMarkRead, models.WarmupActionRescueFromSpam, models.WarmupActionMarkImportant, models.WarmupActionStar} {
+			t.Run(fmt.Sprintf("%s/%v", action, failure), func(t *testing.T) {
+				account := uuid.New()
+				w, bus := filingWorker(account, &filingIMAP{})
+				w.ID = uuid.NewString()
+				authority := &warmupActionAuthorityStub{allowOnce: true, err: failure}
+				w.SyncContextRepository = authority
+				err := w.HandleWarmupAction(t.Context(), models.WarmupEmailAction{EmailID: account, Actions: []string{action}})
+				if !errors.Is(err, failure) || authority.calls != 2 || len(bus.events) != 0 {
+					t.Fatalf("dispatch bypassed revoked/unavailable authority: err=%v calls=%d events=%v", err, authority.calls, bus.events)
+				}
+			})
+		}
+	}
 }
 
 func TestWarmupActionAuthorityDenialDoesNotTouchMailbox(t *testing.T) {
