@@ -25,16 +25,16 @@ func TestLiveParticipationPreservesNullUntilExplicitActionAndStopsBothDirections
 		t.Fatal("legacy NULL changed", row, xerr)
 	}
 	row, xerr = r.SetWarmupLifecycle(ctx, f.org.String(), f.sender.String(), "start")
-	if xerr != nil || row.TestMode == nil || *row.TestMode != models.TestParticipationDiagnostic || !row.TestSendingAllowed() || !row.TestReceivingAllowed() || row.SyntheticActionsAllowed() {
+	if xerr != nil || row.TestMode == nil || *row.TestMode != models.TestParticipationDiagnostic || !row.TestSendingAllowed() || !row.TestReceivingAllowed() || !row.SyntheticActionsAllowed() {
 		t.Fatal("explicit start lacked diagnostic consent", row, xerr)
 	}
 	started := *row.Warmup
 	row, xerr = r.SetWarmupLifecycle(ctx, f.org.String(), f.sender.String(), "pause")
-	if xerr != nil || row.TestSendingAllowed() || !row.TestReceivingAllowed() || !row.Warmup.Equal(started) {
+	if xerr != nil || row.TestSendingAllowed() || !row.TestReceivingAllowed() || !row.SyntheticActionsAllowed() || !row.Warmup.Equal(started) {
 		t.Fatal("pause lost receiving/history", row, xerr)
 	}
 	row, xerr = r.SetWarmupLifecycle(ctx, f.org.String(), f.sender.String(), "stop")
-	if xerr != nil || row.TestSendingAllowed() || row.TestReceivingAllowed() || !row.Warmup.Equal(started) {
+	if xerr != nil || row.TestSendingAllowed() || row.TestReceivingAllowed() || row.SyntheticActionsAllowed() || !row.Warmup.Equal(started) {
 		t.Fatal("stop did not fence both directions", row, xerr)
 	}
 	enable := true

@@ -21,7 +21,7 @@ func (e *Email) TestReceivingAllowed() bool {
 }
 
 func (e *Email) SyntheticActionsAllowed() bool {
-	return e.LegacyTestParticipation()
+	return e.TestReceivingAllowed()
 }
 
 func (e *Email) PermittedWarmupActions(actions []string) []string {

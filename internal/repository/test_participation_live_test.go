@@ -2,12 +2,42 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/models"
 )
+
+func TestLiveWarmupEngagementSurvivesRepositoryRestart(t *testing.T) {
+	f, _ := lineageFixture(t)
+	action := models.WarmupEmailAction{EmailID: f.recipient, RFCMessageID: "warmup@example.test", Actions: []string{models.WarmupActionMarkRead, models.WarmupActionMarkImportant, models.WarmupActionStar}}
+	payload, err := json.Marshal(action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := NewWarmupEngagementRepository(f.pool)
+	for _, due := range []time.Time{time.Now().Add(-time.Minute), time.Now().Add(time.Hour)} {
+		if err := original.EnqueuePendingEngagement(t.Context(), f.recipient, payload, due); err != nil {
+			t.Fatal(err)
+		}
+	}
+	restarted := NewWarmupEngagementRepository(f.pool)
+	pending, err := restarted.ClaimDuePendingEngagements(t.Context(), 100)
+	if err != nil || len(pending) != 1 || pending[0].EmailAccountID != f.recipient {
+		t.Fatal("restart lost due engagement or claimed a future row", pending, err)
+	}
+	var got models.WarmupEmailAction
+	if err := json.Unmarshal(pending[0].Payload, &got); err != nil || got.EmailID != action.EmailID || got.RFCMessageID != action.RFCMessageID || !slices.Equal(got.Actions, action.Actions) {
+		t.Fatal("restart changed queued actions or message identity", got, err)
+	}
+	if again, err := restarted.ClaimDuePendingEngagements(t.Context(), 100); err != nil || len(again) != 0 {
+		t.Fatal("claimed engagement replayed or future dwell was bypassed", again, err)
+	}
+}
 
 func TestLiveWarmupActionsDenyUnavailableMailbox(t *testing.T) {
 	for _, state := range []string{"missing", "deleted", "unassigned"} {
@@ -173,10 +203,15 @@ func TestLiveDiagnosticOffStopsQueuedSendAndActions(t *testing.T) {
 	if state, err := r.BeginOutbound(ctx, id, f.sender, worker, nonce); err != nil || state.State != "execute" {
 		t.Fatal("valid sender/recipient consent unavailable", err)
 	}
-	actions := []string{models.WarmupActionMarkRead, models.WarmupActionRescueFromSpam, models.WarmupActionStar, models.WarmupActionFile, models.WarmupActionDelete}
+	actions := []string{models.WarmupActionMarkRead, models.WarmupActionRescueFromSpam, models.WarmupActionMarkImportant, models.WarmupActionStar, models.WarmupActionFile, models.WarmupActionDelete}
 	got, err := r.PermittedWarmupActions(ctx, f.recipient, worker, actions)
-	if err != nil || len(got) != 2 || got[0] != models.WarmupActionFile || got[1] != models.WarmupActionDelete {
-		t.Fatal("diagnostic mode permitted synthetic engagement", got, err)
+	if err != nil || len(got) != len(actions) {
+		t.Fatal("receiving-authorized warmup lost engagement", got, err)
+	}
+	exec(`UPDATE email_accounts SET test_receive_enabled=false WHERE id=$1`, f.recipient)
+	got, err = r.PermittedWarmupActions(ctx, f.recipient, worker, actions)
+	if err != nil || len(got) != 1 || got[0] != models.WarmupActionDelete {
+		t.Fatal("queued engagement ignored receiving revocation", got, err)
 	}
 	exec(`UPDATE email_accounts SET test_mode='legacy' WHERE id=$1`, f.recipient)
 	got, err = r.PermittedWarmupActions(ctx, f.recipient, worker, actions)
