@@ -104,7 +104,7 @@ struct AuthFlowView: View {
                 onBack: step == .email ? nil : { goBackOneStep() },
                 progress: stepProgress.map { ($0.index, 3) }
             ) {
-                FlowSkyButton(symbol: "gearshape", label: "Server settings") { showServerConfig = true }
+                FlowSkyButton(symbol: "gearshape", label: "Settings") { showServerConfig = true }
             }
 
             heroArea

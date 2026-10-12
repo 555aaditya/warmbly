@@ -595,3 +595,45 @@ struct SettingsVersionFooter: View {
         .frame(maxWidth: .infinity)
     }
 }
+
+/// Light, dark and automatic as one compact switch, for places too small for the thumbnails.
+struct AppearanceSegments: View {
+    @Binding var selection: AppearancePreference
+    @Namespace private var pill
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach([AppearancePreference.light, .dark, .system]) { option in
+                let on = selection == option
+                Button {
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) { selection = option }
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: option.symbol)
+                            .font(.system(size: 14, weight: .medium))
+                        Text(option == .system ? "Automatic" : option.title)
+                            .font(.system(size: 14.5, weight: on ? .semibold : .regular))
+                    }
+                    .foregroundStyle(on ? WTheme.ink : WTheme.inkSecondary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 42)
+                    .background {
+                        if on {
+                            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                .fill(Color.dynamic(light: 0xFFFFFF, dark: 0x3A3A3F))
+                                .shadow(color: .black.opacity(0.08), radius: 4, y: 1)
+                                .matchedGeometryEffect(id: "pill", in: pill)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(option.title)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        .padding(4)
+        .background(Color.dynamic(light: 0xE4E4E9, dark: 0x202024), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+        .sensoryFeedback(.selection, trigger: selection)
+    }
+}

@@ -5,6 +5,8 @@ enum AppearancePreference: String, CaseIterable, Identifiable {
     case system, light, dark
 
     static let storageKey = "appearance"
+    /// What a fresh install shows until someone picks.
+    static let standard = AppearancePreference.light
 
     var id: String { rawValue }
 
