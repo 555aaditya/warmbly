@@ -56,6 +56,50 @@ func TestMonitoringCoalescesCacheAndPreservesObservationTimes(t *testing.T) {
 	}
 }
 
+func TestMonitoringPreservesSourceObservationAfterRefreshStart(t *testing.T) {
+	start := time.Date(2026, 10, 10, 16, 0, 59, 0, time.UTC)
+	observed, checked := start.Add(650*time.Millisecond), start.Add(700*time.Millisecond)
+	s := New([]Source{{ID: "workers", Permission: models.AdminPermViewWorkers, Collect: func(_ context.Context, _ time.Time) (models.MonitoringSource, error) {
+		return models.MonitoringSource{ObservedAt: &observed, CheckedAt: checked, Metrics: []models.MonitoringMetric{{ID: "workers_missing_heartbeat", ObservedAt: &observed, Availability: models.MonitoringFresh}}}, nil
+	}}})
+	s.now = func() time.Time { return start }
+	out := s.Snapshot(t.Context(), models.AdminPermViewWorkers)
+	if !out.CheckedAt.Equal(start) || !out.Sources[0].CheckedAt.Equal(start) || !out.Sources[0].ObservedAt.Equal(observed) || !out.Sources[0].Metrics[0].ObservedAt.Equal(observed) {
+		t.Fatalf("source observation overwritten by snapshot start: %+v", out)
+	}
+}
+
+func TestMonitoringDatabaseObservationKeepsCacheAndAttemptClocks(t *testing.T) {
+	start := time.Date(2026, 10, 10, 16, 0, 59, 0, time.UTC)
+	now := start
+	observed := start.Add(650 * time.Millisecond)
+	windowStart := observed.Add(-time.Hour)
+	count := int64(3)
+	calls := 0
+	fail := false
+	s := New([]Source{{ID: "worker_samples", Permission: models.AdminPermViewWorkers, Collect: func(_ context.Context, _ time.Time) (models.MonitoringSource, error) {
+		calls++
+		if fail {
+			return models.MonitoringSource{}, errors.New("collection unavailable")
+		}
+		return models.MonitoringSource{ObservedAt: &observed, Metrics: []models.MonitoringMetric{{ID: "worker_sample_auth_errors_1h", Count: &count, ObservedAt: &observed, WindowStart: &windowStart, WindowEnd: &observed, Availability: models.MonitoringFresh, Condition: models.MonitoringRecentFailure}}}, nil
+	}}})
+	s.now = func() time.Time { return now }
+	first := s.Snapshot(t.Context(), models.AdminPermViewWorkers)
+	now = start.Add(30 * time.Second)
+	cached := s.Snapshot(t.Context(), models.AdminPermViewWorkers)
+	if calls != 1 || !cached.CheckedAt.Equal(start) || !cached.RefreshAfter.Equal(first.RefreshAfter) || !cached.Sources[0].CheckedAt.Equal(start) || !cached.Sources[0].ObservedAt.Equal(observed) || !cached.Sources[0].Metrics[0].WindowEnd.Equal(observed) {
+		t.Fatal("cache changed the source observation or checked-at clocks", cached)
+	}
+	fail = true
+	now = start.Add(CacheTTL + time.Second)
+	retained := s.Snapshot(t.Context(), models.AdminPermViewWorkers)
+	source := retained.Sources[0]
+	if calls != 2 || !retained.CheckedAt.Equal(now) || !source.CheckedAt.Equal(now) || source.Availability != models.MonitoringStale || !source.ObservedAt.Equal(observed) || !source.Metrics[0].ObservedAt.Equal(observed) || !source.Metrics[0].WindowStart.Equal(windowStart) || !source.Metrics[0].WindowEnd.Equal(observed) || *source.Metrics[0].Count != count {
+		t.Fatal("failed refresh replaced retained source evidence with a collection clock", retained)
+	}
+}
+
 func TestMonitoringFailedRefreshRetainsOriginalEvidenceThenExpires(t *testing.T) {
 	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	fail := false

@@ -51,6 +51,11 @@ func (s *JobsService) applyEmailSent(ctx context.Context, result models.SendEmai
 		log.Warn().Str("task_id", result.TaskID.String()).Msg("email sent result for unknown task")
 		return nil
 	}
+	if s.EmailAccountErrorRepository != nil && models.ValidMailTransportTime(result.SentAt, time.Now()) {
+		if err := s.EmailAccountErrorRepository.RecordTransportSuccess(ctx, task.EmailAccountID, models.MailTransportSend, result.SentAt, &result.TaskID, result.TransportGeneration); err != nil {
+			return err
+		}
+	}
 	// The worker reports the Message-ID the provider put on the wire, which is
 	// not always the one the control plane minted: Graph and Gmail re-stamp it. Take the
 	// worker's answer whenever it differs, because everything that matches a
@@ -186,12 +191,12 @@ func (s *JobsService) applyEmailFailed(ctx context.Context, result models.SendEm
 		}
 	}
 	switch task.Status {
-	case "completed":
+	case "completed", "dead_lettered":
 		// The normal case: stamped by the control plane, refused by the worker.
 	case "active":
 		return errSendResultEarly
 	default:
-		// Already walked back (duplicate delivery), cancelled, or dead-lettered.
+		// Already walked back (duplicate delivery) or cancelled.
 		return nil
 	}
 

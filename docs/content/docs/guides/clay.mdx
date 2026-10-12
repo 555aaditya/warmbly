@@ -1,0 +1,143 @@
+---
+title: Clay
+description: "Send enriched rows from a Clay table into Warmbly as contacts, and send replies, bounces, meetings and other Warmbly events back into a Clay table."
+---
+
+The Clay integration works in both directions. A Clay table sends rows to Warmbly, which become contacts and can go straight into a campaign. Warmbly sends events back to a Clay table, so a Clay workflow can act on a reply, a bounce or a booked meeting.
+
+Clay has no app to install and needs no Clay API key. Both directions use URLs.
+
+## Connect Clay
+
+Open **Integrations > Clay > Connect**. Warmbly makes a URL for this connection and opens the Clay page with it.
+
+<Callout type="warn" title="Copy the URL when it is shown">
+The URL works like a password, so it is shown once. If you lose it, choose **Make a new URL** on the Clay page. The old one stops working at once.
+</Callout>
+
+## Send rows from Clay
+
+<Steps>
+
+<Step>
+
+In your Clay table, add a column and choose **HTTP API**.
+
+</Step>
+
+<Step>
+
+Set the method to `POST` and paste your Clay URL as the endpoint.
+
+</Step>
+
+<Step>
+
+Write a JSON body. Type `/` to insert a column. Only `email` is required:
+
+```json
+{
+  "email": "/Work Email",
+  "first_name": "/First Name",
+  "last_name": "/Last Name",
+  "company": "/Company Name",
+  "title": "/Job Title",
+  "linkedin_url": "/LinkedIn Profile",
+  "tags": "clay, q4-list"
+}
+```
+
+</Step>
+
+<Step>
+
+Run the column on a few rows and check the result, then turn on auto-run.
+
+</Step>
+
+</Steps>
+
+### What a row can carry
+
+| Key | Becomes |
+| --- | --- |
+| `email` | The contact's address. Required |
+| `first_name`, `last_name` | The contact's name. `name` (or `full_name`) is split when the two are absent |
+| `company`, `phone` | Those contact fields |
+| `tags` | Labels, as a list or a comma-separated string. Added to the connection's default labels |
+| `subscribed` | `false` adds the contact unsubscribed |
+| `campaign_id` | A Warmbly campaign id. The contact goes to that campaign instead of the default |
+| `custom_fields` | An object of custom fields |
+| anything else | A custom field with that key, usable as a variable in your emails |
+
+Common Clay column names are understood too: `work_email`, `job_title`, `company_name`, `linkedin`, `domain` and similar.
+
+A body can be one row, an array of rows, or an object with a `rows` array. One request takes up to 100 rows and 1 MB.
+
+### The response
+
+Clay can map the response into columns. A single-row request answers with that row's result at the top level:
+
+```json
+{
+  "status": "created",
+  "contact_id": "3f7c…",
+  "email": "ada@example.com",
+  "received": 1,
+  "created": 1,
+  "updated": 0,
+  "skipped": 0,
+  "failed": 0,
+  "results": [ … ]
+}
+```
+
+`status` is `created`, `updated`, `skipped` (for example, already a contact with **Leave it alone** chosen, or suppressed) or `failed`. A skipped or failed row carries a `reason`. A request for many rows has the same counts and one entry per row in `results`.
+
+A URL Warmbly does not know answers `404` and a disconnected connection `403`. Neither goes away on a retry: fix the URL in the column or reconnect Clay, then rerun the rows. More than 600 requests a minute on one connection answer `429` with `Retry-After`, and a Warmbly error answers `500`. Those are worth retrying, so turn on retries in the HTTP API column's settings and include `429` and `500` in the statuses it retries.
+
+### What rows become
+
+Under **What rows become** on the Clay page, choose what applies to every row:
+
+- a campaign to add each contact to, or only add them to contacts;
+- labels;
+- segments to pin each contact into;
+- what happens when the contact already exists: **Update it** (fills in what Clay sends and never blanks a field) or **Leave it alone**;
+- whether new contacts start subscribed.
+
+Contacts get the source **Clay**, so a [segment](/guides/segments/) can select them. A suppressed address is never added. Adding a contact to a campaign follows the campaign's mailboxes, caps and spacing like any other lead.
+
+## Send events to Clay
+
+<Steps>
+
+<Step>
+
+In Clay, add a source to the table and choose **Webhook**. Copy its URL, and its auth token if you turned one on.
+
+</Step>
+
+<Step>
+
+On the Clay page under **Send events to Clay**, paste the webhook URL and the token.
+
+</Step>
+
+<Step>
+
+Choose the events to send, save, and use **Send a test row** to check that Clay receives it.
+
+</Step>
+
+</Steps>
+
+The events are: prospect replies, email sent, email opened, link clicked, email bounces, contact unsubscribes, meeting booked and meeting canceled. Each one adds a row with the event, the contact's email and name, the campaign, and the event's details as flat columns.
+
+To send to more than one Clay table, use an [automation](/guides/automations/) with the **Send a row to Clay** action. It sends to the connection's table unless the step names another table webhook. The connection's auth token is only sent to its own table, so a table named on a step needs a webhook source without a token.
+
+**Stop sending** removes the webhook URL, the token and the chosen events.
+
+## What moves with a workspace export
+
+The Clay connection moves with a [workspace export](/guides/workspace-export-import/) like other integrations, with its defaults and its chosen events. The table webhook and token travel only in an archive that includes credentials; otherwise paste them again. The inbound URL keeps its path on the new instance, so change the address in your Clay columns to the new instance's, or make a new URL there.

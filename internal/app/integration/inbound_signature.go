@@ -41,6 +41,11 @@ func IsInboundProvider(p models.IntegrationProvider) bool {
 	return p == models.IntegrationCalendly || p == models.IntegrationCalCom
 }
 
+// mintsInboundURL reports whether a provider is reached through a minted inbound URL.
+func mintsInboundURL(p models.IntegrationProvider) bool {
+	return IsInboundProvider(p) || p == models.IntegrationClay
+}
+
 // SetInboundSigningKey stores (or, with an empty key, removes) the key that
 // inbound deliveries for this connection must be signed with.
 func (s *service) SetInboundSigningKey(ctx context.Context, orgID, connID uuid.UUID, key string) (*models.IntegrationConnection, error) {

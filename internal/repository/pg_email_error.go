@@ -9,47 +9,50 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
+	"github.com/warmbly/warmbly/internal/models"
 )
 
 // EmailAccountError represents an error associated with an email account
 type EmailAccountError struct {
-	ID             uuid.UUID  `json:"id"`
-	EmailAccountID uuid.UUID  `json:"email_account_id"`
-	UserID         uuid.UUID  `json:"user_id"`
-	ErrorCode      string     `json:"error_code"`
-	Severity       string     `json:"severity"`
-	ResolveMethod  string     `json:"resolve_method"`
-	Title          string     `json:"title"`
-	Message        string     `json:"message"`
-	UserMessage    *string    `json:"user_message,omitempty"`
-	ActionRequired *string    `json:"action_required,omitempty"`
-	TaskID         *uuid.UUID `json:"task_id,omitempty"`
-	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
-	ResolvedBy     *string    `json:"resolved_by,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
+	ID                uuid.UUID                             `json:"id"`
+	EmailAccountID    uuid.UUID                             `json:"email_account_id"`
+	UserID            uuid.UUID                             `json:"user_id"`
+	ErrorCode         string                                `json:"error_code"`
+	Severity          string                                `json:"severity"`
+	ResolveMethod     string                                `json:"resolve_method"`
+	Title             string                                `json:"title"`
+	Message           string                                `json:"message"`
+	UserMessage       *string                               `json:"user_message,omitempty"`
+	ActionRequired    *string                               `json:"action_required,omitempty"`
+	TaskID            *uuid.UUID                            `json:"task_id,omitempty"`
+	ResolvedAt        *time.Time                            `json:"resolved_at,omitempty"`
+	ResolvedBy        *string                               `json:"resolved_by,omitempty"`
+	CreatedAt         time.Time                             `json:"created_at"`
+	Operation         models.MailTransportOperation         `json:"operation"`
+	ObservationSource models.MailTransportObservationSource `json:"observation_source"`
+	ReceivedAt        *time.Time                            `json:"received_at,omitempty"`
 }
 
 // CreateEmailAccountError contains data for creating a new error record
 type CreateEmailAccountError struct {
-	EmailAccountID uuid.UUID
-	UserID         uuid.UUID
-	ErrorCode      string
-	Severity       string
-	ResolveMethod  string
-	Title          string
-	Message        string
-	UserMessage    *string
-	ActionRequired *string
-	TaskID         *uuid.UUID
+	TransportGeneration uuid.UUID
+	EmailAccountID      uuid.UUID
+	UserID              uuid.UUID
+	ErrorCode           string
+	Severity            string
+	ResolveMethod       string
+	Title               string
+	Message             string
+	UserMessage         *string
+	ActionRequired      *string
+	TaskID              *uuid.UUID
+	ObservedAt          *time.Time
+	Operation           models.MailTransportOperation
 }
 
 // EmailAccountErrorRepository defines operations for email account errors
 type EmailAccountErrorRepository interface {
-	// CreateOnce records an error unless the account already has an unresolved
-	// one with the same code, in which case it writes nothing and returns a
-	// nil record. It is the only write path: migration 000145 makes a second
-	// unresolved row for one code impossible, so an unconditional insert would
-	// only turn a repeat into a constraint violation.
+	// CreateOnce deduplicates unresolved reports by mailbox, code and operation.
 	CreateOnce(ctx context.Context, err *CreateEmailAccountError) (*EmailAccountError, *errx.Error)
 	GetByAccountID(ctx context.Context, accountID uuid.UUID, unresolvedOnly bool) ([]EmailAccountError, *errx.Error)
 	// GetByAccountIDs is the batched form, keyed by account id, so a status list
@@ -62,10 +65,7 @@ type EmailAccountErrorRepository interface {
 	// ResolveByCodes resolves the account's unresolved errors carrying any of
 	// the given codes, for a flow that just fixed that class of error.
 	ResolveByCodes(ctx context.Context, accountID uuid.UUID, codes []string, resolvedBy string) *errx.Error
-	// ResolveByCodesBefore is ResolveByCodes bounded to errors raised before
-	// a given moment, so evidence of recovery cannot resolve a failure that
-	// happened after it.
-	ResolveByCodesBefore(ctx context.Context, accountID uuid.UUID, codes []string, before time.Time, resolvedBy string) *errx.Error
+	RecordTransportSuccess(ctx context.Context, accountID uuid.UUID, operation models.MailTransportOperation, at time.Time, taskID *uuid.UUID, generation uuid.UUID) *errx.Error
 	ResolveAllForAccount(ctx context.Context, accountID uuid.UUID, resolvedBy string) *errx.Error
 }
 
@@ -80,46 +80,109 @@ func NewEmailAccountErrorRepository(database *db.DB) EmailAccountErrorRepository
 	}
 }
 
-// Create stores a new email account error
-// CreateOnce refreshes unresolved transport observations without creating or notifying twice.
-//
-// A mail server that refuses the same command every pass is not a new problem
-// every pass. The sync loop retries about once a minute and reports what it
-// got, so one IMAP_UNKNOWN that nobody can fix wrote 1440 identical rows a day
-// into the mailbox's error list (issue #405).
-//
-// Both guards are load-bearing. WHERE NOT EXISTS answers the ordinary repeat
-// without touching the index, and ON CONFLICT answers the race it cannot see:
-// two workers relaying the same failure in the same instant both find no row.
-// The unique index behind it is partial on the unresolved rows (migration
-// 000145), so resolved history is untouched and a problem that returns after
-// it was fixed is recorded again.
+// CreateOnce serializes observations with operation recovery and deduplicates warnings.
 func (r *emailAccountErrorRepository) CreateOnce(ctx context.Context, data *CreateEmailAccountError) (*EmailAccountError, *errx.Error) {
-	// Unresolved transport timestamps represent the latest failure observation.
+	tx, err := beginResultTx(ctx, r.DB)
+	if err != nil {
+		return nil, errx.InternalError()
+	}
+	defer tx.Rollback(ctx)
+	if err := lockTransportMailbox(ctx, tx, data.EmailAccountID); err != nil {
+		return nil, errx.InternalError()
+	}
+	operation := data.Operation.Conservative()
+	currentGeneration := false
+	if data.TransportGeneration != uuid.Nil {
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM email_accounts WHERE id=$1 AND transport_generation=$2)`, data.EmailAccountID, data.TransportGeneration).Scan(&currentGeneration); err != nil {
+			return nil, errx.InternalError()
+		}
+	}
+	if operation.Known() && !currentGeneration {
+		operation = models.MailTransportUnknown
+	}
+	if operation == models.MailTransportSync && data.TaskID != nil || operation == models.MailTransportSend && (data.TaskID == nil || *data.TaskID == uuid.Nil) {
+		operation = models.MailTransportUnknown
+	}
+	recordID := uuid.New()
 	query := `
-		WITH observed AS (
-			UPDATE email_account_errors SET created_at=NOW()
-			WHERE email_account_id=$1 AND user_id=$2 AND error_code=$3 AND resolved_at IS NULL
-			  AND error_code IN ('SERVER_UNREACHABLE','CONNECTION_LOST','RESOURCE_NOT_FOUND','IMAP_UNKNOWN')
-			RETURNING id
+		WITH observation AS (
+		    SELECT CASE WHEN $11::timestamptz > to_timestamp(0) AND $11 <= NOW()
+		        THEN $11 ELSE NOW() END AS at,
+		        CASE WHEN $11::timestamptz > to_timestamp(0) AND $11 <= NOW()
+		        THEN 'worker' ELSE 'receipt' END AS source
+		), candidate AS (
+		    SELECT observation.*, recovery.recovered_at
+		    FROM observation LEFT JOIN email_account_transport_recovery recovery
+		        ON recovery.email_account_id=$1 AND recovery.operation=$13
+		        AND $3 IN ('SERVER_UNREACHABLE','CONNECTION_LOST','RESOURCE_NOT_FOUND','IMAP_UNKNOWN')
+		        AND observation.at < recovery.recovered_at - INTERVAL '1 second'
 		)
-		INSERT INTO email_account_errors (
-			email_account_id, user_id, error_code, severity, resolve_method,
-			title, message, user_message, action_required, task_id
+		INSERT INTO email_account_errors AS existing (
+			id, email_account_id, user_id, error_code, severity, resolve_method,
+			title, message, user_message, action_required, task_id, created_at,
+			operation,observation_source,received_at,resolved_at,resolved_by
 		)
-		-- The casts are load-bearing: a SELECT source, unlike VALUES, gives
-		-- the planner no target columns to infer the parameter types from.
-		SELECT $1::uuid, $2::uuid, $3::varchar, $4::email_error_severity,
-		       $5::email_error_resolve_method, $6::varchar, $7::text, $8::text,
-		       $9::text, $10::uuid
-		WHERE NOT EXISTS (
-			SELECT 1 FROM email_account_errors
-			WHERE email_account_id = $1 AND error_code = $3 AND resolved_at IS NULL
-		)
-		ON CONFLICT DO NOTHING
+		SELECT $12,$1,$2,$3,$4,$5,$6,
+		    CASE WHEN $3='SERVER_UNREACHABLE' AND $17::boolean
+		        AND (NOT $14::boolean OR source<>'worker') THEN $15 ELSE $7 END,
+		    CASE WHEN $3='SERVER_UNREACHABLE' AND $17::boolean AND $8=$7
+		        AND (NOT $14::boolean OR source<>'worker') THEN $15 ELSE $8 END,
+		    $9,$10,at,$13,source,NOW(),recovered_at,
+		    CASE WHEN recovered_at IS NOT NULL THEN $13 || ' recovered' END
+		FROM candidate
+		WHERE EXISTS(SELECT 1 FROM email_accounts WHERE id=$1 AND user_id=$2)
+		    AND NOT (recovered_at IS NOT NULL AND EXISTS(
+		        SELECT 1 FROM email_account_errors historical
+		        WHERE historical.email_account_id=$1 AND historical.user_id=$2
+		            AND historical.error_code=$3 AND historical.operation=$13
+		            AND historical.created_at=candidate.at
+		            AND historical.task_id IS NOT DISTINCT FROM $10::uuid
+		            AND historical.resolved_by=$13 || ' recovered'))
+		ON CONFLICT (email_account_id,error_code,operation)
+		WHERE resolved_at IS NULL AND observation_source IN ('worker','receipt') DO UPDATE
+		SET created_at=CASE WHEN existing.user_id=EXCLUDED.user_id
+		    AND existing.error_code IN ('SERVER_UNREACHABLE','CONNECTION_LOST','RESOURCE_NOT_FOUND','IMAP_UNKNOWN')
+		    THEN GREATEST(existing.created_at,EXCLUDED.created_at) ELSE existing.created_at END,
+		    task_id=CASE WHEN existing.user_id=EXCLUDED.user_id
+		    AND existing.error_code IN ('SERVER_UNREACHABLE','CONNECTION_LOST','RESOURCE_NOT_FOUND','IMAP_UNKNOWN')
+		    THEN COALESCE(existing.task_id,EXCLUDED.task_id) ELSE existing.task_id END,
+		    observation_source=CASE WHEN existing.user_id=EXCLUDED.user_id
+		    AND EXCLUDED.created_at >= existing.created_at
+		    AND existing.error_code IN ('SERVER_UNREACHABLE','CONNECTION_LOST','RESOURCE_NOT_FOUND','IMAP_UNKNOWN')
+		    THEN EXCLUDED.observation_source ELSE existing.observation_source END,
+		    received_at=CASE WHEN existing.user_id=EXCLUDED.user_id
+		    THEN GREATEST(existing.received_at,EXCLUDED.received_at) ELSE existing.received_at END,
+		    message=CASE WHEN existing.user_id=EXCLUDED.user_id
+		        AND $14::boolean AND EXCLUDED.observation_source='worker'
+		        AND EXCLUDED.created_at>existing.created_at
+		        AND existing.error_code='SERVER_UNREACHABLE'
+		        AND (existing.message LIKE $16 OR $17::boolean)
+		    THEN CASE WHEN $17::boolean THEN EXCLUDED.message ELSE $15 END
+		    WHEN existing.user_id=EXCLUDED.user_id
+		        AND EXCLUDED.created_at>existing.created_at
+		        AND existing.error_code='SERVER_UNREACHABLE'
+		        AND existing.message LIKE $16
+		        AND (NOT $14::boolean OR EXCLUDED.observation_source<>'worker')
+		    THEN $15
+		    ELSE existing.message END,
+		    user_message=CASE WHEN existing.user_message=existing.message THEN
+		        CASE WHEN existing.user_id=EXCLUDED.user_id
+		            AND $14::boolean AND EXCLUDED.observation_source='worker'
+		            AND EXCLUDED.created_at>existing.created_at
+		            AND existing.error_code='SERVER_UNREACHABLE'
+		            AND (existing.message LIKE $16 OR $17::boolean)
+		        THEN CASE WHEN $17::boolean THEN EXCLUDED.message ELSE $15 END
+		        WHEN existing.user_id=EXCLUDED.user_id
+		            AND EXCLUDED.created_at>existing.created_at
+		            AND existing.error_code='SERVER_UNREACHABLE'
+		            AND existing.message LIKE $16
+		            AND (NOT $14::boolean OR EXCLUDED.observation_source<>'worker')
+		        THEN $15
+		        ELSE existing.user_message END
+		    ELSE existing.user_message END
 		RETURNING id, email_account_id, user_id, error_code, severity, resolve_method,
 		          title, message, user_message, action_required, task_id,
-		          resolved_at, resolved_by, created_at
+		          resolved_at, resolved_by, created_at,operation,observation_source,received_at
 	`
 
 	params := []any{
@@ -133,13 +196,20 @@ func (r *emailAccountErrorRepository) CreateOnce(ctx context.Context, data *Crea
 		data.UserMessage,
 		data.ActionRequired,
 		data.TaskID,
+		data.ObservedAt,
+		recordID,
+		operation,
+		currentGeneration,
+		errx.ErrMailServerUnreachable.Message,
+		"The connection to the mail server could not be established (IMAP %",
+		errx.IsKnownIMAPConnectionMessage(data.Message),
 	}
 
 	var e EmailAccountError
-	err := r.DB.QueryRow(ctx, query, params...).Scan(
+	err = tx.QueryRow(ctx, query, params...).Scan(
 		&e.ID, &e.EmailAccountID, &e.UserID, &e.ErrorCode, &e.Severity, &e.ResolveMethod,
 		&e.Title, &e.Message, &e.UserMessage, &e.ActionRequired, &e.TaskID,
-		&e.ResolvedAt, &e.ResolvedBy, &e.CreatedAt,
+		&e.ResolvedAt, &e.ResolvedBy, &e.CreatedAt, &e.Operation, &e.ObservationSource, &e.ReceivedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// The row the caller wanted is already on screen, unresolved.
@@ -158,6 +228,12 @@ func (r *emailAccountErrorRepository) CreateOnce(ctx context.Context, data *Crea
 		db.CaptureError(err, query, params, "queryrow")
 		return nil, errx.InternalError()
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, errx.InternalError()
+	}
+	if e.ID != recordID || e.ResolvedAt != nil {
+		return nil, nil
+	}
 
 	return &e, nil
 }
@@ -167,7 +243,7 @@ func (r *emailAccountErrorRepository) GetByAccountID(ctx context.Context, accoun
 	query := `
 		SELECT id, email_account_id, user_id, error_code, severity, resolve_method,
 		       title, message, user_message, action_required, task_id,
-		       resolved_at, resolved_by, created_at
+		       resolved_at, resolved_by, created_at, operation, observation_source, received_at
 		FROM email_account_errors
 		WHERE email_account_id = $1
 	`
@@ -191,7 +267,7 @@ func (r *emailAccountErrorRepository) GetByAccountID(ctx context.Context, accoun
 		err := rows.Scan(
 			&e.ID, &e.EmailAccountID, &e.UserID, &e.ErrorCode, &e.Severity, &e.ResolveMethod,
 			&e.Title, &e.Message, &e.UserMessage, &e.ActionRequired, &e.TaskID,
-			&e.ResolvedAt, &e.ResolvedBy, &e.CreatedAt,
+			&e.ResolvedAt, &e.ResolvedBy, &e.CreatedAt, &e.Operation, &e.ObservationSource, &e.ReceivedAt,
 		)
 		if err != nil {
 			db.CaptureError(err, "", nil, "scan")
@@ -213,7 +289,7 @@ func (r *emailAccountErrorRepository) GetByAccountIDs(ctx context.Context, accou
 	query := `
 		SELECT id, email_account_id, user_id, error_code, severity, resolve_method,
 		       title, message, user_message, action_required, task_id,
-		       resolved_at, resolved_by, created_at
+		       resolved_at, resolved_by, created_at, operation, observation_source, received_at
 		FROM email_account_errors
 		WHERE email_account_id = ANY($1::uuid[])
 	`
@@ -236,7 +312,7 @@ func (r *emailAccountErrorRepository) GetByAccountIDs(ctx context.Context, accou
 		err := rows.Scan(
 			&e.ID, &e.EmailAccountID, &e.UserID, &e.ErrorCode, &e.Severity, &e.ResolveMethod,
 			&e.Title, &e.Message, &e.UserMessage, &e.ActionRequired, &e.TaskID,
-			&e.ResolvedAt, &e.ResolvedBy, &e.CreatedAt,
+			&e.ResolvedAt, &e.ResolvedBy, &e.CreatedAt, &e.Operation, &e.ObservationSource, &e.ReceivedAt,
 		)
 		if err != nil {
 			db.CaptureError(err, "", nil, "scan")
@@ -257,7 +333,7 @@ func (r *emailAccountErrorRepository) GetByUserID(ctx context.Context, userID uu
 	query := `
 		SELECT id, email_account_id, user_id, error_code, severity, resolve_method,
 		       title, message, user_message, action_required, task_id,
-		       resolved_at, resolved_by, created_at
+		       resolved_at, resolved_by, created_at, operation, observation_source, received_at
 		FROM email_account_errors
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -277,7 +353,7 @@ func (r *emailAccountErrorRepository) GetByUserID(ctx context.Context, userID uu
 		err := rows.Scan(
 			&e.ID, &e.EmailAccountID, &e.UserID, &e.ErrorCode, &e.Severity, &e.ResolveMethod,
 			&e.Title, &e.Message, &e.UserMessage, &e.ActionRequired, &e.TaskID,
-			&e.ResolvedAt, &e.ResolvedBy, &e.CreatedAt,
+			&e.ResolvedAt, &e.ResolvedBy, &e.CreatedAt, &e.Operation, &e.ObservationSource, &e.ReceivedAt,
 		)
 		if err != nil {
 			db.CaptureError(err, "", nil, "scan")
@@ -346,37 +422,6 @@ func (r *emailAccountErrorRepository) ResolveByCodes(ctx context.Context, accoun
 	_, err := r.DB.Exec(ctx, query, resolvedBy, accountID, codes)
 	if err != nil {
 		db.CaptureError(err, query, []any{resolvedBy, accountID, codes}, "exec")
-		return errx.InternalError()
-	}
-
-	return nil
-}
-
-// ResolveByCodesBefore resolves the account's unresolved errors carrying any
-// of the codes that were raised before the given moment.
-//
-// The bound matters because the bus can redeliver: JetStream is configured
-// with MaxDeliver and no MaxAckPending, so an older event can arrive after a
-// newer one. Without it, a stale "the sync succeeded" could clear a failure
-// that happened afterwards, and the mailbox would look healthy while it was
-// not, until the next distinct outage raised a fresh row.
-func (r *emailAccountErrorRepository) ResolveByCodesBefore(ctx context.Context, accountID uuid.UUID, codes []string, before time.Time, resolvedBy string) *errx.Error {
-	if len(codes) == 0 {
-		return nil
-	}
-
-	query := `
-		UPDATE email_account_errors
-		SET resolved_at = NOW(), resolved_by = $1
-		WHERE email_account_id = $2
-		  AND error_code = ANY($3::text[])
-		  AND created_at < $4
-		  AND resolved_at IS NULL
-	`
-
-	_, err := r.DB.Exec(ctx, query, resolvedBy, accountID, codes, before)
-	if err != nil {
-		db.CaptureError(err, query, []any{resolvedBy, accountID, codes, before}, "exec")
 		return errx.InternalError()
 	}
 

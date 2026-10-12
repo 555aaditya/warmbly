@@ -170,6 +170,14 @@ Whichever mode you pick, it decides which mailbox **starts** a lead. Every mailb
 
 The Leads tab shows each lead's mailbox in its **Sender** column, and a contact's Activity tab shows it beside their progress. A lead has none until its first email goes out.
 
+### Campaigns sharing mailboxes
+
+Several campaigns can send from the same mailboxes, for example by sharing a tag. What they share is each mailbox's minimum gap and daily cap. A campaign that is outside its sending window, or has nothing due, waits without holding any mailbox, so a campaign that is sending gets the pool's full pace in the meantime.
+
+Two campaigns never send from one mailbox inside its minimum gap. When both reach for the same mailbox at the same moment, one sends and the other looks again a few seconds later, taking another mailbox whose gap has passed or waiting for this one. Rotation also breaks ties differently for each campaign, so campaigns sharing a pool tend to start on different mailboxes rather than queueing for the same one.
+
+Because the daily cap belongs to the mailbox, the campaign whose window opens first can use most of a shared pool's day, which matters when the campaigns send in different timezones. To keep part of the pool for a later campaign, lower the earlier campaign's [daily limit per mailbox](#sending-limits), which caps what it takes from each mailbox. To split the pool outright, give each campaign its own tag.
+
 **ESP matching** optionally aligns sender and recipient providers (Google to Google, Microsoft to Microsoft). The recipient's provider is read from their domain's mail records, so a lead on a company domain hosted by Google Workspace or Microsoft 365 is matched too, not only `gmail.com` and `outlook.com` addresses; the contacts list shows it as a badge on each contact's avatar. A mailbox connected with an app password to Google Workspace or Microsoft 365 counts as that provider. Under **Settings** > **ESP matching**, the coverage panel shows how many of the campaign's leads are on Google, Microsoft and other providers, and which of your mailboxes serve each. **Prefer same** falls back to any mailbox when no same-provider one is free; **Strict same** makes the contact wait instead. A contact left waiting this way waits alone: the campaign moves on to the next lead in the queue rather than stopping, and comes back to them when a matching mailbox is free. An unknown recipient provider never blocks a send. Like rotation, it applies to a lead's first email: a follow-up goes out from the mailbox the contact already knows.
 
 ### When a lead's mailbox is busy, or gone

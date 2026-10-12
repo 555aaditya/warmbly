@@ -270,6 +270,8 @@ const ENUM_LABELS: Record<string, string> = {
     ai_assistant: "Remie",
     form: "Form submission",
     automation: "Automation",
+    apollo: "Apollo",
+    clay: "Clay",
     valid: "Valid",
     risky: "Risky",
     invalid: "Invalid",

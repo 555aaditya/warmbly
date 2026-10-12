@@ -214,6 +214,20 @@ type Service interface {
 	// ProviderAccess returns a usable OAuth access token for an org-owned
 	// connection, refreshing first when force is set or the token is expiring.
 	ProviderAccess(ctx context.Context, orgID, connID uuid.UUID, force bool) (*ProviderAccess, error)
+
+	// SetCredentialCheck registers the check Connect runs on a pasted credential.
+	SetCredentialCheck(provider models.IntegrationProvider, check CredentialCheck)
+	// ConnectionConfig opens an org-owned connection's sealed config.
+	ConnectionConfig(ctx context.Context, orgID, connID uuid.UUID) (map[string]any, *models.IntegrationConnection, error)
+	// MergeConnectionConfig overlays keys onto a connection's sealed config; an
+	// empty string removes a key.
+	MergeConnectionConfig(ctx context.Context, orgID, connID uuid.UUID, patch map[string]any) error
+	// ClaySubscriptions and SetClaySubscriptions read and replace the events a
+	// Clay connection sends to its default table.
+	ClaySubscriptions(ctx context.Context, orgID, connID uuid.UUID) ([]string, error)
+	SetClaySubscriptions(ctx context.Context, orgID, connID uuid.UUID, events []string) error
+	// ClayConnectionByInboundSecret resolves a Clay inbound URL to its connection.
+	ClayConnectionByInboundSecret(ctx context.Context, secret string) (*models.IntegrationConnection, error)
 	// SetSalesforce routes Salesforce pushes, upsert actions and new
 	// connections through the native sync.
 	SetSalesforce(b SalesforceBridge)
@@ -257,6 +271,9 @@ type service struct {
 	aiSearch   generation.SearchClient
 	salesforce SalesforceBridge
 	slackHook  SlackInstallHook
+
+	checkMu sync.RWMutex
+	checks  map[models.IntegrationProvider]CredentialCheck
 
 	popMu         sync.Mutex
 	pop           map[models.IntegrationProvider]int
@@ -374,9 +391,19 @@ func (s *service) Connect(ctx context.Context, orgID, userID uuid.UUID, provider
 		}
 	}
 
+	if check := s.credentialCheck(provider); check != nil {
+		facts, err := check(ctx, config)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range facts {
+			displayFields[k] = v
+		}
+	}
+
 	var inboundSecret string
 	var err error
-	if provider == models.IntegrationCalendly || provider == models.IntegrationCalCom {
+	if mintsInboundURL(provider) {
 		inboundSecret, err = generateInboundSecret(provider)
 		if err != nil {
 			return nil, err
@@ -400,7 +427,7 @@ func (s *service) Connect(ctx context.Context, orgID, userID uuid.UUID, provider
 
 	status := models.IntegrationStatusPending
 	switch {
-	case provider == models.IntegrationCalendly || provider == models.IntegrationCalCom:
+	case mintsInboundURL(provider):
 		// Inbound providers are "connected" once the URL exists.
 		status = models.IntegrationStatusConnected
 	case isAutomationProvider(provider):
@@ -730,7 +757,7 @@ func (s *service) RotateInboundSecret(ctx context.Context, orgID, id uuid.UUID) 
 	if conn == nil {
 		return "", repository.ErrInboundConnectionNotFound
 	}
-	if !IsInboundProvider(conn.Provider) {
+	if !mintsInboundURL(conn.Provider) {
 		return "", ErrNotInboundProvider
 	}
 	secret, err := generateInboundSecret(conn.Provider)
@@ -1615,7 +1642,8 @@ func (s *service) SendTestEvent(ctx context.Context, orgID, connID uuid.UUID) (i
 		switch sub.Action {
 		case models.IntegrationActionSlackNotify,
 			models.IntegrationActionDiscordNotify,
-			models.IntegrationActionGenericWebhookPing:
+			models.IntegrationActionGenericWebhookPing,
+			models.IntegrationActionClaySendRow:
 			target := repository.DispatchTarget{Subscription: sub, Secrets: *sec}
 			if err := s.execAction(ctx, target, sample); err != nil {
 				return count, err
@@ -1643,7 +1671,8 @@ func (s *service) SendTestEvent(ctx context.Context, orgID, connID uuid.UUID) (i
 			switch n.Action {
 			case models.IntegrationActionSlackNotify,
 				models.IntegrationActionDiscordNotify,
-				models.IntegrationActionGenericWebhookPing:
+				models.IntegrationActionGenericWebhookPing,
+				models.IntegrationActionClaySendRow:
 				sub := models.IntegrationEventSubscription{
 					ID:             uuid.New(),
 					ConnectionID:   connID,
@@ -1663,6 +1692,9 @@ func (s *service) SendTestEvent(ctx context.Context, orgID, connID uuid.UUID) (i
 		}
 	}
 
+	if count == 0 && conn.Provider == models.IntegrationClay {
+		return 0, fmt.Errorf("choose at least one event to send to Clay, then send a test")
+	}
 	if count == 0 {
 		return 0, fmt.Errorf("add a notification or webhook automation first, then send a test")
 	}
@@ -1681,6 +1713,8 @@ func generateInboundSecret(provider models.IntegrationProvider) (string, error) 
 		prefix = "calendly"
 	case models.IntegrationCalCom:
 		prefix = "calcom"
+	case models.IntegrationClay:
+		prefix = "clay"
 	}
 	return prefix + "_" + hex.EncodeToString(buf), nil
 }
@@ -1693,6 +1727,8 @@ func BuildInboundURL(provider models.IntegrationProvider, secret string) string 
 		return "/api/v1/integrations/inbound/calendly/" + secret
 	case models.IntegrationCalCom:
 		return "/api/v1/integrations/inbound/cal-com/" + secret
+	case models.IntegrationClay:
+		return "/api/v1/integrations/inbound/clay/" + secret
 	}
 	return ""
 }
@@ -1797,6 +1833,12 @@ func buildDisplayFields(provider models.IntegrationProvider, config map[string]a
 		// Outbound-via-Warmbly-API providers: minimal display fields.
 	case models.IntegrationMillionVerifier, models.IntegrationCleanMyList:
 		// Credits are filled in at connect time from the provider.
+	case models.IntegrationApollo:
+		// The account the key acts as is filled in by the credential check.
+	case models.IntegrationClay:
+		if raw, ok := config["webhook_url"].(string); ok && raw != "" {
+			df["webhook_host"] = urlHost(raw)
+		}
 	}
 	return df
 }

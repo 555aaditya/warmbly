@@ -14,6 +14,14 @@ import (
 )
 
 type sendResultKey struct{}
+
+const refundedWarmupChargePredicate = `t.task_type='warmup' AND EXISTS(SELECT 1 FROM warmup_tasks charge
+	WHERE charge.task_id=t.id AND charge.warmup_charged_date IS NOT NULL
+	AND charge.warmup_reply_charged IS NOT NULL AND charge.warmup_refunded_at IS NOT NULL)`
+
+const repairableSendDeadLetterPredicate = `t.status='dead_lettered' AND (t.send_result_state='sent'
+	OR (t.send_result_state='failed' AND ` + refundedWarmupChargePredicate + `))`
+
 type sendResultContext struct {
 	tx          pgx.Tx
 	taskID      uuid.UUID
@@ -146,6 +154,8 @@ func resultState(result models.SendEmailResult) string {
 	return "unknown"
 }
 
+const SendResultMailboxLockNamespace int64 = 269
+
 // ApplySendResult commits reconciliation and its terminal marker together.
 func (r *taskRepository) ApplySendResult(ctx context.Context, result models.SendEmailResult, apply func(context.Context) error) error {
 	if result.TaskID == uuid.Nil {
@@ -163,34 +173,59 @@ func (r *taskRepository) ApplySendResult(ctx context.Context, result models.Send
 	var applied *time.Time
 	var mailboxID uuid.UUID
 	var status string
-	var reserved, warmupAuthorized bool
-	err = tx.QueryRow(ctx, `SELECT send_result_state, send_result_applied_at, email_account_id, status::text,
-	 send_reserved_at IS NOT NULL OR send_executor_nonce IS NOT NULL OR send_executor_started_at IS NOT NULL OR send_executor_result IS NOT NULL,
-	 EXISTS(SELECT 1 FROM warmup_tasks WHERE task_id=tasks.id AND dispatch_nonce IS NOT NULL)
-	 FROM tasks WHERE id = $1`, result.TaskID).Scan(&previous, &applied, &mailboxID, &status, &reserved, &warmupAuthorized)
+	err = tx.QueryRow(ctx, `SELECT send_result_state, send_result_applied_at, email_account_id, status::text
+	 FROM tasks WHERE id = $1`, result.TaskID).Scan(&previous, &applied, &mailboxID, &status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 269))`, mailboxID.String()); err != nil {
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, $2))`, mailboxID.String(), SendResultMailboxLockNamespace); err != nil {
 		return err
 	}
-	// A pre-dispatch failure cannot leave ambiguous provider execution behind.
-	if resultState(result) == "unknown" && status == "failed" && !reserved && !warmupAuthorized {
-		result.Error = &models.EmailSendError{Failure: &errx.SendFailure{Protocol: "internal", Stage: "prepare", Scope: "mailbox", Disposition: errx.SendRetry}}
-	}
-	if applied != nil || (previous != nil && *previous != "unknown") {
-		state := resultState(result)
-		if previous != nil && state != "unknown" && state != *previous {
-			if _, err = tx.Exec(ctx, `UPDATE send_recovery_resolutions SET conflict_detected_at=NOW()
-				WHERE recovery_task_id=$1 AND previous_reason='unknown' AND confirmed_result IS NOT NULL`, result.TaskID); err != nil {
+	state := resultState(result)
+	// Receipt stamping is idempotent; an already-applied failure cannot be refunded again.
+	repairDeadLetter := status == "dead_lettered" && previous != nil && *previous == state && state == "sent"
+	if !repairDeadLetter && (applied != nil || (previous != nil && *previous != "unknown")) {
+		if previous != nil && *previous != "unknown" && state != "unknown" && state != *previous {
+			tag, err := tx.Exec(ctx, `UPDATE send_recovery_resolutions
+				SET conflict_detected_at=COALESCE(conflict_detected_at,clock_timestamp()),conflicting_result_state=COALESCE(conflicting_result_state,$2)
+				WHERE recovery_task_id=$1 AND recorded_locally_at IS NOT NULL
+				AND (previous_reason='unknown' OR evidence_type='authoritative_result_conflict')`, result.TaskID, state)
+			if err != nil {
 				return err
 			}
-			_, err = tx.Exec(ctx, `UPDATE email_accounts SET send_recovery_hold = true, send_recovery_reason = 'conflict', send_recovery_task_id = $2
-				WHERE id = $1 AND (NOT send_recovery_hold OR (send_recovery_reason = 'unknown' AND send_recovery_task_id = $2))`, mailboxID, result.TaskID)
-			if err != nil {
+			if tag.RowsAffected() == 0 {
+				_, err = tx.Exec(ctx, `INSERT INTO send_recovery_resolutions
+					(organization_id,email_account_id,recovery_task_id,previous_reason,evidence_type,conflict_detected_at,conflicting_result_state,recorded_locally_at)
+					SELECT ea.organization_id,ea.id,t.id,'conflict','authoritative_result_conflict',clock_timestamp(),$2,clock_timestamp()
+					FROM tasks t JOIN email_accounts ea ON ea.id=t.email_account_id WHERE t.id=$1`, result.TaskID, state)
+				if err != nil {
+					return err
+				}
+			}
+			if err = refreshUnknownSendHold(ctx, tx, mailboxID, result.TaskID); err != nil {
+				return err
+			}
+			if err = refreshSendHold(ctx, tx, mailboxID, nil, nil); err != nil {
+				return err
+			}
+			return tx.Commit(ctx)
+		}
+		if applied != nil && previous != nil && state == *previous && state != "unknown" {
+			if status == "dead_lettered" {
+				// Repair metadata only; the positive refund proof forbids repeating accounting.
+				tag, err := tx.Exec(ctx, `UPDATE tasks t SET status='failed',updated_at=NOW() WHERE t.id=$1 AND t.status='dead_lettered'
+					AND t.send_result_state='failed' AND t.send_result_applied_at IS NOT NULL AND `+refundedWarmupChargePredicate, result.TaskID)
+				if err != nil {
+					return err
+				}
+				if tag.RowsAffected() == 0 {
+					return nil
+				}
+			}
+			if err = resolveSendDeadLetter(ctx, tx, result.TaskID); err != nil {
 				return err
 			}
 			return tx.Commit(ctx)
@@ -200,7 +235,6 @@ func (r *taskRepository) ApplySendResult(ctx context.Context, result models.Send
 	if status == "cancelled" {
 		return nil
 	}
-	state := resultState(result)
 	if state == "failed" && status == "active" {
 		return errors.New("send result arrived before task stamping")
 	}
@@ -217,6 +251,15 @@ func (r *taskRepository) ApplySendResult(ctx context.Context, result models.Send
 	var effects []func(context.Context)
 	var effectError error
 	if state != "unknown" {
+		if status == "dead_lettered" && state == "sent" {
+			sentAt := result.SentAt
+			if sentAt.IsZero() {
+				sentAt = time.Now().UTC()
+			}
+			if _, err = tx.Exec(ctx, `UPDATE tasks SET status='completed',completed_at=COALESCE(completed_at,$2),updated_at=NOW() WHERE id=$1`, result.TaskID, sentAt); err != nil {
+				return err
+			}
+		}
 		inner := context.WithValue(ctx, sendResultKey{}, sendResultContext{tx: tx, taskID: result.TaskID, effects: &effects, effectError: &effectError})
 		if err = apply(inner); err != nil {
 			return err
@@ -225,6 +268,9 @@ func (r *taskRepository) ApplySendResult(ctx context.Context, result models.Send
 			return effectError
 		}
 		if _, err = tx.Exec(ctx, `UPDATE tasks SET send_result_applied_at = NOW(), send_released_at=CASE WHEN send_result_state='failed' THEN NOW() ELSE send_released_at END WHERE id = $1`, result.TaskID); err != nil {
+			return err
+		}
+		if err = resolveSendDeadLetter(ctx, tx, result.TaskID); err != nil {
 			return err
 		}
 	}
@@ -240,21 +286,40 @@ func (r *taskRepository) ApplySendResult(ctx context.Context, result models.Send
 	return nil
 }
 
-func persistSendHold(ctx context.Context, tx pgx.Tx, mailboxID uuid.UUID, result models.SendEmailResult, state string) error {
-	if state != "unknown" {
-		_, err := tx.Exec(ctx, `WITH next_hold AS (
+func resolveSendDeadLetter(ctx context.Context, tx pgx.Tx, taskID uuid.UUID) error {
+	_, err := tx.Exec(ctx, `UPDATE task_dead_letters SET status='resolved',next_retry_at=NULL,updated_at=NOW()
+		WHERE task_id=$1 AND status IN ('pending','failed','replayed')
+		AND EXISTS(SELECT 1 FROM tasks t WHERE t.id=$1 AND t.task_type IN ('warmup','campaign','email','placement'))`, taskID)
+	return err
+}
+
+func refreshUnknownSendHold(ctx context.Context, tx pgx.Tx, mailboxID, taskID uuid.UUID) error {
+	reason := "unknown"
+	return refreshSendHold(ctx, tx, mailboxID, &taskID, &reason)
+}
+
+func refreshSendHold(ctx context.Context, tx pgx.Tx, mailboxID uuid.UUID, taskID *uuid.UUID, reason *string) error {
+	_, err := tx.Exec(ctx, `WITH next_hold AS (
 			SELECT id,reason FROM (
 			 SELECT t.id,'unknown' AS reason,1 AS priority,t.created_at FROM tasks t
 			 WHERE t.email_account_id=$1 AND t.send_result_state='unknown'
 			 UNION ALL
 			 SELECT t.id,'conflict',2,t.created_at FROM send_recovery_resolutions r JOIN tasks t ON t.id=r.recovery_task_id
-			 WHERE t.email_account_id=$1 AND r.previous_reason='unknown' AND r.conflict_detected_at IS NOT NULL
-			 AND NOT EXISTS(SELECT 1 FROM send_recovery_resolutions resolved WHERE resolved.recovery_task_id=t.id AND resolved.previous_reason='conflict')
+			 WHERE t.email_account_id=$1 AND (r.previous_reason='unknown' OR r.evidence_type='authoritative_result_conflict')
+			 AND r.conflict_detected_at IS NOT NULL AND r.conflict_resolved_at IS NULL
 			) candidates ORDER BY priority,created_at,id LIMIT 1)
 			UPDATE email_accounts ea SET send_recovery_task_id=n.id,send_recovery_hold=n.id IS NOT NULL,send_recovery_reason=n.reason
 			FROM (SELECT 1) singleton LEFT JOIN next_hold n ON true
-			WHERE ea.id=$1 AND ea.send_recovery_task_id=$2 AND ea.send_recovery_reason='unknown'`, mailboxID, result.TaskID)
-		if err != nil {
+			WHERE ea.id=$1 AND (
+			 ($3::text IS NOT NULL AND ea.send_recovery_task_id IS NOT DISTINCT FROM $2::uuid
+			  AND ea.send_recovery_reason IS NOT DISTINCT FROM $3::text)
+			 OR ($2::uuid IS NULL AND $3::text IS NULL AND NOT ea.send_recovery_hold))`, mailboxID, taskID, reason)
+	return err
+}
+
+func persistSendHold(ctx context.Context, tx pgx.Tx, mailboxID uuid.UUID, result models.SendEmailResult, state string) error {
+	if state != "unknown" {
+		if err := refreshUnknownSendHold(ctx, tx, mailboxID, result.TaskID); err != nil {
 			return err
 		}
 	}

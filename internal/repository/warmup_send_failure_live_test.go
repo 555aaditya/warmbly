@@ -266,6 +266,101 @@ func TestLiveLoadingIncidentNonLoadingBoundary(t *testing.T) {
 	}
 }
 
+func TestLiveDispatchRetrySuccessfulPendingNoopDoesNotStarveNewerTask(t *testing.T) {
+	_, pool := liveContactDB(t)
+	ctx, now := t.Context(), time.Now().UTC().Truncate(time.Microsecond)
+	f := newWarmupUsageFixture(t, pool)
+	f.exec(`UPDATE email_accounts SET status='active',warmup=NOW()-INTERVAL '7 days',test_mode='legacy' WHERE id=$1`, f.account)
+	old, newer := uuid.New(), uuid.New()
+	f.exec(`INSERT INTO tasks(id,task_type,email_account_id,status,message_id,scheduled_at) VALUES($1,'warmup',$3,'pending','',$4),($2,'warmup',$3,'pending','',$5)`, old, newer, f.account, now.Add(-24*time.Hour), now.Add(-2*time.Hour))
+	repo := &taskRepository{db: pool}
+	if err := repo.RecordDispatchAttempt(ctx, old, false, now.Add(5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := repo.ListDuePendingTaskIDs(ctx, 10000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, id := range ids {
+		if id == old {
+			t.Fatal("successful no-op oldest task still consumes due batch")
+		}
+		found = found || id == newer
+	}
+	if !found {
+		t.Fatal("newer task not reachable")
+	}
+	var scheduled, retry time.Time
+	var status string
+	var failureSince, failureAt *time.Time
+	if err := pool.QueryRow(ctx, `SELECT scheduled_at,dispatch_retry_at,status::text,dispatch_failure_since,dispatch_failure_at FROM tasks WHERE id=$1`, old).Scan(&scheduled, &retry, &status, &failureSince, &failureAt); err != nil || status != "pending" || failureSince != nil || failureAt != nil || !scheduled.Equal(now.Add(-24*time.Hour)) || !retry.Equal(now.Add(5*time.Minute)) {
+		t.Fatalf("no-op changed schedule/state or manufactured failure: %v %v %s %v %v %v", scheduled, retry, status, failureSince, failureAt, err)
+	}
+	f.exec(`UPDATE tasks SET dispatch_retry_at=NOW()-INTERVAL '1 second' WHERE id=$1`, old)
+	ids, err = repo.ListDuePendingTaskIDs(ctx, 10000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found = false
+	for _, id := range ids {
+		found = found || id == old
+	}
+	if !found {
+		t.Fatal("deferred no-op never becomes eligible again")
+	}
+}
+
+func TestLiveDispatchRetrySuccessfulAttemptPreservesSchedulingAndSafety(t *testing.T) {
+	_, pool := liveContactDB(t)
+	ctx, now := t.Context(), time.Now().UTC().Truncate(time.Microsecond)
+	for _, tc := range []struct {
+		name      string
+		status    string
+		schedule  time.Time
+		floor     *time.Time
+		wantRetry *time.Time
+		unknown   bool
+	}{
+		{name: "rescheduled", status: "pending", schedule: now.Add(time.Hour)},
+		{name: "active", status: "active", schedule: now.Add(-time.Hour)},
+		{name: "unknown", status: "completed", schedule: now.Add(-time.Hour), unknown: true},
+		{name: "later retry floor", status: "pending", schedule: now.Add(-time.Hour), floor: timePtr(now.Add(time.Hour)), wantRetry: timePtr(now.Add(time.Hour))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newWarmupUsageFixture(t, pool)
+			id := uuid.New()
+			f.exec(`INSERT INTO tasks(id,task_type,email_account_id,status,message_id,scheduled_at,dispatch_retry_at) VALUES($1,'warmup',$2,$3,'',$4,$5)`, id, f.account, tc.status, tc.schedule, tc.floor)
+			if tc.unknown {
+				f.exec(`UPDATE tasks SET send_result_state='unknown',send_executor_started_at=$2 WHERE id=$1`, id, now)
+				f.exec(`UPDATE email_accounts SET send_recovery_hold=true,send_recovery_reason='unknown',send_recovery_task_id=$2 WHERE id=$1`, f.account, id)
+			}
+			repo := &taskRepository{db: pool}
+			if err := repo.RecordDispatchAttempt(ctx, id, false, now.Add(5*time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+			var scheduled time.Time
+			var retry *time.Time
+			var status string
+			if err := pool.QueryRow(ctx, `SELECT scheduled_at,dispatch_retry_at,status::text FROM tasks WHERE id=$1`, id).Scan(&scheduled, &retry, &status); err != nil || status != tc.status || !scheduled.Equal(tc.schedule) {
+				t.Fatalf("schedule/state changed: %v %s %v", scheduled, status, err)
+			}
+			if (retry == nil) != (tc.wantRetry == nil) || retry != nil && !retry.Equal(*tc.wantRetry) {
+				t.Fatalf("retry=%v want=%v", retry, tc.wantRetry)
+			}
+			if tc.unknown {
+				var held bool
+				var reason, outcome string
+				var heldTask uuid.UUID
+				var started time.Time
+				if err := pool.QueryRow(ctx, `SELECT e.send_recovery_hold,e.send_recovery_reason,e.send_recovery_task_id,t.send_result_state::text,t.send_executor_started_at FROM email_accounts e JOIN tasks t ON t.id=$2 WHERE e.id=$1`, f.account, id).Scan(&held, &reason, &heldTask, &outcome, &started); err != nil || !held || reason != "unknown" || heldTask != id || outcome != "unknown" || !started.Equal(now) {
+					t.Fatalf("uncertain send protection changed: %v %s %v %s %v %v", held, reason, heldTask, outcome, started, err)
+				}
+			}
+		})
+	}
+}
+
 func TestLiveDispatchRetryDoesNotStarveNewerTask(t *testing.T) {
 	_, pool := liveContactDB(t)
 	ctx, now := context.Background(), time.Now().UTC().Truncate(time.Microsecond)

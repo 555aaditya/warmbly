@@ -46,13 +46,12 @@ func (w *WMail) nextSyncDelay(base time.Duration, last *errx.MailError) time.Dur
 	d := base
 	minimum := base / 2
 	switch {
+	case last != nil && last.RetryAfter > 0 && (isTransportError(last) || last.Code == errx.MailErrorCodeSendingTooFast):
+		// Service-unavailable responses can supply the same retry window as 429.
+		d = max(last.RetryAfter, base)
+		minimum = d
 	case last != nil && last.Code == errx.MailErrorCodeSendingTooFast:
-		// The provider returned 429. Respect its window when supplied.
 		d = syncBackoffMax
-		if last.RetryAfter > 0 {
-			d = max(last.RetryAfter, base)
-			minimum = d
-		}
 	case last != nil && isTransportError(last):
 		// The server is unreachable. Retry soon after the first failure (a
 		// dropped session reconnects on the next pass and costs one dial),
@@ -88,12 +87,18 @@ func (w *WMail) syncOnce(ctx context.Context) (result *errx.MailError) {
 				w.tracker.tickComplete = false
 			}
 			err := fmt.Errorf("mail sync panic: %v", r)
-			w.CaptureError(err)
+			w.captureSyncError(err)
 			log.Error().Err(err).Str("email_id", w.ID.String()).Msg("mail sync panicked")
 			result = &errx.MailError{Code: errx.MailErrorCodeImapUnknown, Type: errx.MailErrorWarning, Message: "mail sync pass interrupted"}
 		}
 	}()
 	if err := w.SyncMail(ctx); err != nil {
+		w.lifecycleMu.Lock()
+		stopped := w.stopped
+		w.lifecycleMu.Unlock()
+		if stopped || ctx.Err() != nil {
+			return err
+		}
 		switch err.Code {
 		case errx.MailErrorCodeServerUnreachable, errx.MailErrorCodeConnectionLost:
 			nodeevidence.Emit(nodeevidence.ProviderUnreachable, w.ID, 0, 1)
@@ -106,12 +111,12 @@ func (w *WMail) syncOnce(ctx context.Context) (result *errx.MailError) {
 		if isTransportError(err) {
 			w.transportFailures++
 			if w.transportFailures > 1 {
-				w.CaptureError(err)
+				w.captureSyncError(err)
 				log.Debug().Err(err).Str("email_id", w.ID.String()).Int("consecutive", w.transportFailures).Msg("mail server still unreachable")
 				return err
 			}
 		}
-		w.CaptureError(err)
+		w.captureSyncError(err)
 		log.Warn().Err(err).Str("email_id", w.ID.String()).Msg("mail sync error")
 		return err
 	}

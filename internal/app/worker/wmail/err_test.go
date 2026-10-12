@@ -2,10 +2,32 @@ package wmail
 
 import (
 	"testing"
+	"time"
 
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 )
+
+func TestMailTransportErrorScopesAndWorkerObservation(t *testing.T) {
+	observed := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	err := errx.WithSendFailure(errx.ErrMailServerUnreachable, errx.SendFailure{ObservedAt: observed})
+	w := &WMail{}
+	var events []models.EmailErrorEvent
+	w.onEvent = func(_ models.JobEventType, body any) error {
+		events = append(events, body.(models.EmailErrorEvent))
+		return nil
+	}
+	w.CaptureError(err)
+	w.captureSyncError(err)
+	if len(events) != 2 || events[0].Operation != models.MailTransportUnknown || events[1].Operation != models.MailTransportSync {
+		t.Fatalf("general error was inferred sync-only: %+v", events)
+	}
+	for _, event := range events {
+		if event.Timestamp != observed.Unix() || event.TaskID != "" {
+			t.Fatalf("worker clock or context changed: %+v", event)
+		}
+	}
+}
 
 func TestTransientProviderFailuresAreNotReportedAsApplicationErrors(t *testing.T) {
 	for _, mailErr := range []*errx.MailError{

@@ -46,23 +46,25 @@ func TestSyncTruthProgressRelaysDoNotResolveTransportWarnings(t *testing.T) {
 	previous := time.Now().Add(-time.Hour)
 	fresh := previous.Add(time.Minute)
 	for _, tc := range []struct {
-		name     string
-		stamp    *time.Time
-		deferred int
-		recovery *models.GoogleHistoryRecovery
-		resolved int
+		name       string
+		stamp      *time.Time
+		generation uuid.UUID
+		deferred   int
+		recovery   *models.GoogleHistoryRecovery
+		resolved   int
 	}{
-		{"heartbeat", &previous, 0, nil, 0},
-		{"older redelivery", nil, 0, nil, 0},
-		{"deferred", &fresh, 5, nil, 0},
-		{"recovering", &fresh, 0, &models.GoogleHistoryRecovery{HistoryID: 100}, 0},
-		{"successful catch-up", &fresh, 0, nil, 1},
+		{"heartbeat", &previous, syncTestGeneration, 0, nil, 0},
+		{"older redelivery", nil, syncTestGeneration, 0, nil, 0},
+		{"deferred", &fresh, syncTestGeneration, 5, nil, 0},
+		{"recovering", &fresh, syncTestGeneration, 0, &models.GoogleHistoryRecovery{HistoryID: 100}, 0},
+		{"unproven catch-up", &fresh, uuid.Nil, 0, nil, 0},
+		{"successful catch-up", &fresh, syncTestGeneration, 0, nil, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			errRepo := &stubErrorRepo{}
 			repo := &stubSyncStateRepo{saved: &models.SyncState{LastSyncedAt: &previous}}
 			s := &JobsService{EmailSyncStateRepository: repo, EmailAccountErrorRepository: errRepo}
-			if err := s.HandleSyncState(t.Context(), &models.JobEventSyncState{UserID: uuid.New(), EmailID: uuid.New(), State: models.SyncState{BackfillStatus: models.SyncBackfillComplete, LastSyncedAt: tc.stamp, Deferred: tc.deferred, BackfillCursor: models.SyncCursor{GoogleRecovery: tc.recovery}}}); err != nil {
+			if err := s.HandleSyncState(t.Context(), &models.JobEventSyncState{UserID: uuid.New(), EmailID: uuid.New(), State: models.SyncState{TransportGeneration: tc.generation, BackfillStatus: models.SyncBackfillComplete, LastSyncedAt: tc.stamp, Deferred: tc.deferred, BackfillCursor: models.SyncCursor{GoogleRecovery: tc.recovery}}}); err != nil {
 				t.Fatal(err)
 			}
 			if repo.put == nil || errRepo.calls != tc.resolved {

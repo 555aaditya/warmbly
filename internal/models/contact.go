@@ -847,6 +847,12 @@ const (
 	// ContactSourceCRMSync is a contact imported from a CRM list view or
 	// campaign; the detail names the CRM and the list.
 	ContactSourceCRMSync ContactSource = "crm_sync"
+	// ContactSourceApollo is a contact imported from an Apollo list; the detail
+	// names the list.
+	ContactSourceApollo ContactSource = "apollo"
+	// ContactSourceClay is a contact a Clay table sent in; the detail names the
+	// connection.
+	ContactSourceClay ContactSource = "clay"
 )
 
 // Valid reports whether the value is one the database accepts.
@@ -854,7 +860,7 @@ func (s ContactSource) Valid() bool {
 	switch s {
 	case ContactSourceUnknown, ContactSourceManual, ContactSourceCampaign, ContactSourceImport,
 		ContactSourceSheetSync, ContactSourceAPI, ContactSourceAIAssistant, ContactSourceForm,
-		ContactSourceAutomation, ContactSourceCRMSync:
+		ContactSourceAutomation, ContactSourceCRMSync, ContactSourceApollo, ContactSourceClay:
 		return true
 	}
 	return false

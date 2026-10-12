@@ -939,7 +939,7 @@ func (r *integrationRepository) SetInboundSigningConfig(ctx context.Context, org
 func (r *integrationRepository) SetInboundSecret(ctx context.Context, orgID, connID uuid.UUID, secret string) error {
 	tag, err := r.db.Exec(ctx, `
 		UPDATE integration_connections SET inbound_secret = $3, updated_at = now()
-		WHERE organization_id = $1 AND id = $2 AND provider IN ('calendly', 'cal_com')`,
+		WHERE organization_id = $1 AND id = $2 AND provider IN ('calendly', 'cal_com', 'clay')`,
 		orgID, connID, secret)
 	if err != nil {
 		return err
@@ -950,8 +950,8 @@ func (r *integrationRepository) SetInboundSecret(ctx context.Context, orgID, con
 	return nil
 }
 
-// ErrInboundConnectionNotFound means no Calendly or Cal.com connection with
-// that id exists in the organization.
+// ErrInboundConnectionNotFound means no Calendly, Cal.com or Clay connection
+// with that id exists in the organization.
 var ErrInboundConnectionNotFound = errors.New("inbound connection not found")
 
 // MatchingDispatchTargets returns enabled subscriptions for an org+event whose

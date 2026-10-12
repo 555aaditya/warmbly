@@ -461,10 +461,20 @@ The `listing` routes publish an app to the [community directory](/api/oauth/#pub
 | GET | `/contacts/:id/salesforce` | `READ_CRM` |
 | POST | `/contacts/:id/salesforce/sync` | `INTEGRATIONS` |
 | DELETE | `/contacts/:id/salesforce/links/:linkId` | `INTEGRATIONS` |
+| GET | `/integrations/apollo/:id`, `/lists` | `INTEGRATIONS` |
+| PUT | `/integrations/apollo/:id/key` | `INTEGRATIONS` |
+| POST | `/integrations/apollo/:id/import/preview` | `INTEGRATIONS` |
+| GET/POST/PATCH/DELETE | `/integrations/apollo/:id/import-sources[/:sourceId]` | `INTEGRATIONS` |
+| POST | `/integrations/apollo/:id/import-sources/:sourceId/run` | `INTEGRATIONS` |
+| GET | `/integrations/apollo/:id/enrichments[/:runId]` | `INTEGRATIONS` |
+| POST | `/integrations/apollo/:id/enrichments` | `INTEGRATIONS` and `BULK_CONTACTS` |
+| GET/PATCH | `/integrations/clay/:id` | `INTEGRATIONS` |
 | GET/POST/PATCH/DELETE | `/automations[/:id]` | `INTEGRATIONS` |
 | PATCH | `/automations/:id/layout` | `INTEGRATIONS` |
 
 A signed-in member needs `manage_settings` to create, edit, enable or delete an automation, because a flow runs as the workspace; `use_integrations` is enough to list, open, test and read the run history.
+
+Starting an [Apollo](/guides/apollo/) enrichment writes contacts and spends the workspace's Apollo credits, so it needs `BULK_CONTACTS` as well as `INTEGRATIONS` (for a member, `use_integrations` and `manage_contacts`). Saving the key, imports and Clay settings need `manage_settings`; previewing and running an import need `use_integrations`. `POST /integrations/inbound/clay/:secret` is the URL a [Clay](/guides/clay/) table posts rows to. It takes no API key, because the secret in its path is the credential.
 | GET/POST/PATCH/DELETE | `/warmup/routing[/:id]` | `WARMUP_ROUTING` |
 
 ### Retry safety
@@ -568,6 +578,7 @@ Alongside them, `api_url` is this API's own public base (for a copyable example 
 - `POST /auth/sso/exchange` (swaps the single-use handoff code from any of those callbacks for the session; `POST /auth/oidc/exchange` is the older name for the same endpoint)
 - `POST /auth/sso/link` (completes a provider sign-in that resolved to an existing password account: takes that account's password, attaches the identity and returns the session)
 - `POST /auth/logout`, `POST /auth/logout-all`, `GET /auth/me`, `PATCH /auth/me/onboarding`
+- `PUT /auth/me/product-tour` (records that the signed-in user finished or skipped the dashboard's product tour, answering `product_tour_completed_at`, which `GET /auth/me` also carries. Naturally retry-safe: a repeat keeps the first time, so it takes no `Idempotency-Key`)
 - `POST /auth/me/avatar`, `DELETE /auth/me/avatar`
 - `POST /emails/onboarding/oauth/start`, `POST /emails/onboarding/oauth/finish`, `POST /emails/onboarding/smtp-imap`. `oauth/start` accepts an optional `login_hint` (an email address) that preselects that mailbox in the provider's sign-in, which is how an import's **Sign in** rows open. For Google and Microsoft dashboard flows (`return: "web"`), the browser's `Origin` is validated against exact configured dashboard origins and bound to the OAuth state; an untrusted origin answers `400` `mailbox_oauth_return_origin`. Requests without an `Origin` retain primary-dashboard routing while their state is live
 - `POST /emails/onboarding/smtp-imap/bulk` (up to `50` SMTP/IMAP rows in `accounts`, answered `200` with a per-row `status` of `connected`, `skipped` or `failed` and a `code`; rows past the workspace's [mailbox allowance](/guides/mailboxes/#mailbox-allowance) fail with `mailbox_allowance_reached` before any credential is dialled. Naturally retry-safe: an already connected mailbox is `skipped`, so it takes no `Idempotency-Key`)
@@ -637,6 +648,7 @@ Alongside them, `api_url` is this API's own public base (for a copyable example 
 - All of `/pool-link/*` and `/cloud-link/*` (the self-hosted warmup pool link: approving an instance's code, listing and unlinking instances, reading the pool plan's price and opening its checkout, and on a self-hosted instance the connect flow and mailbox enrollment). `/cloud-link/*` exists only on a self-hosted instance. Connections belong to the selected local workspace, but linking and unlinking them (`/connect`, `/connect/poll`, `DELETE /cloud-link`) and the linked cloud workspace's mailboxes (`/workspace-mailboxes`, `.../adopt`) take a platform admin holding `manage_settings` whose session presented a second factor (`admin_mfa_required` otherwise). Reading the link and putting a workspace's own mailboxes on it (`GET /cloud-link`, `/mailboxes`, enroll, pause, resume and the Google and Microsoft sign-in under `/oauth/*`) take the workspace's `MANAGE_EMAILS`. `GET /cloud-link` includes `legacy_connected`; mailbox rows include `legacy` when they still use the old connection. A normal `DELETE /cloud-link` only disconnects the selected workspace's scoped link. `DELETE /cloud-link?legacy=true` explicitly disconnects the legacy link across all workspaces and uses the same platform-admin permission. New connections and enrollments require workspace scope, and a Cloud workspace accepts only one active link (legacy links count). `POST /pool-link/codes` requires `remote_organization_id` and returns `workspace_scoped: true` for supported clients. `POST /pool-link/codes` and `POST /pool-link/poll` are public and per-IP rate limited: they are the device-code handshake an instance uses before it has a token, and `/pool-link/instance/*` accepts only an instance token. `/pool-link/instance/oauth/*`, `/pool-link/instance/mailboxes/:id/token`, `/pool-link/instance/workspace-mailboxes` and `/pool-link/instance/mailboxes/adopt` are the cloud-managed mailbox surface (Google and Microsoft sign-in on Warmbly's OAuth apps, brokered access tokens); their instance-side counterparts are `/cloud-link/oauth/*` and `/cloud-link/workspace-mailboxes/*`. `/pool-link/instance/redirects` (list), and `GET`, `PUT`, `DELETE` and `POST .../verify` on `/pool-link/instance/redirects/:domain`, are the root redirects Warmbly Cloud serves for the calling instance; the instance drives them through `PUT /emails/domains/:domain/redirect` with `served_by: "cloud"`, and `GET /pool-link/instance` carries `redirects` (`available`, `host`, `limit`, `used`)
 - All of `/admin/*`. `DELETE /admin/instance/invitations/expired` requires platform admin `manage_organizations` and an MFA-verified session. It removes only expired invitation records across all workspaces, leaves active invitations and membership unchanged, records an admin audit entry, and returns `{ "cleaned": true }`. The admin panel confirms before calling it.
   - `GET /admin/instance/health` requires `view_analytics` and an MFA-verified admin session. Returns configuration `checks`, `summary`, additive `execution_coverage` (currently `unreported`) and `operational_monitoring_path`. Empty findings do not establish execution coverage or operational health.
+  - Aggregate PostgreSQL monitoring sources, including sync and worker health samples, use one database reference for SQL thresholds, windows and source/metric observation clocks. That observation can be later than the snapshot's collection-start `checked_at`; cached snapshots keep their original clocks. Database observation is not provider recovery evidence.
   - `GET /admin/instance/monitoring` requires `view_analytics` and an MFA-verified admin session, not an organization API-key scope. Returns the read-only version `"1"` snapshot with `checked_at`, `refresh_after`, `coverage` and permission-shaped `sources`; HTTP responses use `Cache-Control: no-store`, while the backend shares a bounded one-minute collection cache. Each source has availability, coverage, nullable observation/scope measurements and metrics with nullable counts, affected mailboxes/organizations, evidence clocks, conditions and optional investigation paths. Missing permissions return unavailable source placeholders with `permission_denied`, not private metrics. Source bits and interpretation are listed under [operational monitoring](/development/instance-health/#operational-monitoring). Unavailable is not zero or an outage; a positive broker lag/pending observation remains `unknown`/`info`, not proof of failed throughput. This route never subscribes, replays, reconnects, clears holds or changes broker offsets/assignments.
   - `GET /admin/analytics/overview` requires `view_analytics`. `total_emails_sent` and `emails_sent_today` count confirmed warmup and other outbound sends, not dispatches. Today uses the UTC calendar day. A send-count database error fails the request instead of returning zero counters. See [platform admin send counters](/guides/analytics/#platform-admin-send-counters).
   - `GET /admin/organizations` and `GET /admin/organizations/:id` require `view_organizations`. Their acquisition fields include the nullable `referrer_host` saved at signup, alongside UTM source, medium, campaign and landing path. The list accepts an exact `referrer_host` filter as well as its existing acquisition filters. An absent source is unknown, not proof of a direct visit. See [signup source attribution](/guides/analytics/#signup-source-attribution-platform-admins).
@@ -788,6 +800,28 @@ On the tracking service (the `TRACKING_DOMAIN` host, not the API), also public a
 - `GET /t/o/:task_id.png` (open pixel), `GET /c/:link_id` (click redirect)
 - `GET /tracking.js` (the website tracking snippet), `POST /p` (page-view ingest; JSON body up to 8 KB, `429` over budget, `204` otherwise. Nothing in the request can name a contact)
 - A visit to a [sending domain's root](/guides/sending-domains/#root-redirects) (or its `www`) that a workspace pointed here. On a verified domain every path except `/health` answers `302` to its website with `Cache-Control: public, max-age=300`, before any route above; an unknown host is a `404`. The forms service answers a verified redirect domain the same way
+
+## Scheduled jobs
+
+`GET /admin/jobs` requires admin `view_analytics` and returns registered loops
+and retained retired records in `data`. Each row includes its service, interval,
+last recorded status and error, execution counters and recorded schedule.
+`retired_at`, when present, is the timestamp of explicit retirement
+classification, not proof of when the last process stopped. Retired records
+remain visible in Jobs with their historical values; they are not current
+running, overdue, failed or successful jobs in operational monitoring.
+
+`POST /admin/jobs/:name/run` requires admin `manage_settings`. It requests a
+registered loop to run at its next poll; it does not execute the job itself.
+Missing and explicitly retired records return `404 not_found`. Retired loops
+cannot claim new scheduled slots or take manual requests. Retirement does not
+interrupt an already admitted run or erase its completion evidence.
+
+Migration 286 classifies only the backend `fleet_quarantine` loop, which was
+removed from the application, as retired. Other old or stalled jobs remain
+active and retain their monitoring warnings. There is no age-based automatic
+retirement. Registering a loop again reactivates its record and clears any
+old pending run request, without resetting its execution counters or errors.
 
 ## Platform node diagnostics
 
@@ -966,6 +1000,21 @@ Errors: `400 bad_request` (UUID/non-worker/invalid log filters),
 `503 service_unavailable` (node registry). Log Redis read failure instead
 returns `200` with explicit unavailable coverage. Successful diagnostics use
 `Cache-Control: no-store`.
+
+## Internal warmup recovery
+
+These control-plane endpoints use the existing node-internal credential, not an API key, dashboard JWT or node logging credential. Their base is `/api/v1/internal`, not the public API base above. They introduce no new node identity or credential exchange.
+
+| Method | Internal path | Scope |
+| --- | --- | --- |
+| POST | `/worker/warmup-actions` | Check current mailbox assignment and permitted actions; exact pending single-file work can return versioned filing recovery proof |
+| POST | `/worker/warmup-actions/defer` | Commit a monotonic provider retry time for that exact pending filing under current mailbox assignment |
+
+Deferral accepts `mailbox_id`, `worker_id`, `filing_id` and an absolute `provider_retry_at` timestamp. Successful `persisted: true` is returned only after commit, with `filing_recovery` proof containing protocol `1`, the same three IDs and the retained timestamp. Requesting a shorter time never shortens an existing provider hold or ordinary retry lease. There is no GET mutation or new filing-success event on deferral.
+
+For exact filing commands, an upgraded backend returns no permitted actions when the pending filing is completed, missing, foreign or has a different action payload. Workers skip provider filing and do not emit a filing-success event for that denial. Untracked actions retain the existing admission behavior.
+
+Invalid identifiers or time return `400`; stale, deleted, foreign or disallowed work returns `403`; unsupported authority or database failure returns `503`. Responses use `Cache-Control: no-store`. Clients reject unmarked, malformed, unsupported-version or incorrectly scoped replies as durable deferral proof. Existing older-backend retry behavior is unchanged; an older worker does not implement the provider floor. See [warmup reconnect recovery](/development/data-control/#warmup-reconnect-recovery) for backend-first upgrade and source-instance data handling.
 
 ## Notes
 

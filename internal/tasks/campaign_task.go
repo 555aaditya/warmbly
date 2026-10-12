@@ -495,6 +495,34 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) (result *errx
 		return nil
 	}
 
+	// STEP 7.4: Load the sending mailbox and take it for this send. Campaigns
+	// sharing a pool read it independently, so two passes can pick the same
+	// mailbox in the same moment; only one claim wins its gap (issue #942).
+	account, xerr := s.emailRepo.GetByID(ctx, accountID)
+	if xerr != nil {
+		return xerr
+	}
+	if claimer, ok := s.scheduler.(scheduler.SendClaimer); ok {
+		claimed, cerr := claimer.ClaimSend(ctx, account)
+		if cerr != nil {
+			errs.CaptureException(cerr)
+			s.taskRepo.RecordTaskFailure(ctx, taskID, "Could not take the mailbox for the send", cerr.Error())
+			s.retryCampaignTickLater(ctx, taskRecord)
+			executionStatus = "failed"
+			return errx.InternalError()
+		}
+		if !claimed {
+			// Nothing is reserved yet. The next pass sees the claim, so it
+			// picks a clear mailbox or waits out this one's gap.
+			if terr := s.createCampaignTask(ctx, campaign.ID, account.ID, scheduler.ClaimRetrySlot()); terr != nil {
+				log.Warn().Err(terr).Str("campaign_id", campaign.ID.String()).Str("task_id", taskID.String()).Msg("Failed to schedule the campaign's next pass after losing its mailbox to another campaign")
+			}
+			s.taskRepo.UpdateTaskStatus(ctx, taskID, "completed")
+			executionStatus = "completed"
+			return nil
+		}
+	}
+
 	// Load this step's attachments (campaign-wide files plus the step's own;
 	// metadata only — the worker fetches the bytes from object storage by S3
 	// key at send time).
@@ -504,8 +532,10 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) (result *errx
 	// This allows the tracking consumer to find the correct contact/sequence when
 	// processing open/click events from the tracking pixel service
 	if err := s.taskRepo.UpdateCampaignTaskTracking(ctx, taskID, contact.ID, sequence.ID); err != nil {
-		// Log but don't fail - tracking can still work via fallback methods
-		log.Warn().Err(err).Str("campaign_id", campaign.ID.String()).Str("task_id", taskID.String()).Msg("Failed to update campaign task tracking")
+		errs.CaptureException(err)
+		s.retryCampaignTickLater(ctx, taskRecord)
+		executionStatus = "failed"
+		return errx.InternalError()
 	}
 
 	// stop_on_reply is enforced inside FindRoutedPairs (STEP 6), and it is now
@@ -513,12 +543,6 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) (result *errx
 	// is part of the reply flow (the reply branch's own path). The normal cold
 	// sequence stops there, so there is no longer a blanket "contact has replied,
 	// skip" check here — that would also kill the reply branch's follow-up emails.
-
-	// STEP 9: Load email account
-	account, xerr := s.emailRepo.GetByID(ctx, accountID)
-	if xerr != nil {
-		return xerr
-	}
 
 	// STEP 9.25: Stamp the mailbox this send actually goes out from. The chain
 	// seeds a task with the previous tick's pick, and rotation chooses again

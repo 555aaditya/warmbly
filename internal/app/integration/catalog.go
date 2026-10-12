@@ -1,6 +1,6 @@
 // Package integration owns the third-party integrations surface: catalog
 // metadata, OAuth connect flows, per-provider connect/disconnect, event-driven
-// actions, and inbound webhook handling for Calendly + Cal.com.
+// actions, and inbound webhook handling for Calendly, Cal.com and Clay.
 //
 // Per-provider files (oauth.go, slack.go, hubspot.go, discord.go,
 // google_sheets.go, calendly.go) each handle the provider-specific request /
@@ -198,6 +198,38 @@ func Catalog() []models.IntegrationCatalogEntry {
 				"Trigger automations when a call is booked (Slack ping, CRM upsert)",
 				"Add a 'Book a call' button anywhere a contact is in view",
 			},
+		},
+
+		// Data ----------------------------------------------------------------
+		{
+			Provider:   models.IntegrationApollo,
+			Name:       "Apollo",
+			Tagline:    "Import Apollo lists and enrich your contacts from Apollo's database.",
+			Category:   models.IntegrationCategoryData,
+			AuthMethod: string(models.IntegrationAuthAPIKey),
+			DocsURL:    "https://docs.warmbly.com/guides/apollo/",
+			Highlights: []string{
+				"Connect with your own Apollo API key",
+				"Import any saved Apollo list, once or kept in sync every hour",
+				"Only verified addresses by default; suppressed and unsubscribed people stay out",
+				"Enrich selected contacts with title, company, LinkedIn and location",
+			},
+		},
+		{
+			Provider:   models.IntegrationClay,
+			Name:       "Clay",
+			Tagline:    "Send enriched rows from a Clay table into Warmbly, and replies back to Clay.",
+			Category:   models.IntegrationCategoryData,
+			AuthMethod: string(models.IntegrationAuthWebhook),
+			DocsURL:    "https://docs.warmbly.com/guides/clay/",
+			Highlights: []string{
+				"We mint an inbound URL for Clay's HTTP API column",
+				"Rows become contacts, added to a campaign, category or segment",
+				"Every column you send is kept as a custom field",
+				"Replies, opens, bounces and meetings sent back to a Clay table",
+			},
+			Events:      ClayEvents,
+			ActionTypes: []string{string(models.IntegrationActionClaySendRow)},
 		},
 
 		// NOTE: Google Sheets is intentionally NOT a catalog integration. The

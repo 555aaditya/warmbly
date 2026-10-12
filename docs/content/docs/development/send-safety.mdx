@@ -39,6 +39,10 @@ The executor rechecks organization, mailbox, worker, provider, durable task/nonc
 
 Result reconciliation commits task, campaign progress, variant, suppression and warmup-health changes together. Bounce webhooks and notifications enter an idempotent durable outbox in that transaction, and result consumers drain it after commit. Failed delivery retains a leased retry row; a consumer restart does not lose the effect. Stable downstream webhook delivery and notification-feed IDs prevent duplicate stored rows. External integration, Slack/push and realtime delivery remain at least once/best effort, not exactly-once delivery. Core accounting and unknown holds remain durable.
 
+Warmup authorization records the UTC charge day and whether a reply was counted in the same transaction as the statistics increment. Outbound reservation preserves the initial completion timestamp. A definitive failure or safe unstarted cancellation refunds only that recorded charge, at most once, in the same transaction as the task change. Completion timestamps and dispatch/executor nonces alone never authorize a refund. Pre-upgrade and imported tasks have no positive charge record: known outcomes can still settle, but historical statistics are not decremented by inference. Unknown outcomes remain held and unresolved.
+
+If a modern warmup task becomes dead-lettered after its definitive failure and refund were committed, the matching authoritative result repairs only task and dead-letter metadata. It does not repeat accounting, callbacks or mailbox hold changes. Already-applied failures without positive refunded-charge proof remain protected.
+
 ## Evidence-based repair holds
 
 Authentication, permanent and conflicting-result holds do not clear merely because time passed, a reconnect occurred or an unrelated send succeeded. An organization-authorized operator can use `send_recovery_resolution` in the existing mailbox PATCH after investigating the current held task and reason:
@@ -115,11 +119,31 @@ Hard bounce/complaint/suppression and authentication failures remain negative ev
 
 Organization export retains participation, ceilings, restrictive task/account evidence and repair history. Executor worker/nonce/start/result handles reset on import. Exact diagnostic authorization and nonces, including raw warmup receipt provenance, are instance-local and excluded; registered placement aggregates travel as history, never as execution grants. See [workspace moves](/guides/workspace-export-import/).
 
+Per-task warmup charge and refund markers reset on organization import; imported statistics remain history, not destination-instance refund authority. Whole-instance database backups retain those markers. The additive charge-provenance migration leaves all historical markers NULL without backfill; apply it before starting the updated backend and result consumers. Rollback refuses to remove recorded charge or refund evidence; retain the additive schema and roll forward.
+
 Immutable attempt timestamps and recipient counts travel with the sending group and retain restrictive rate evidence; their historical nonces do not authorize execution. Raw warmup receipt provenance remains source-instance-local and excluded, while registered placement aggregates travel.
 
 The source-instance reconciliation outbox is excluded from organization archives so an import cannot replay customer notifications. Drain pending effects before moving; whole-instance backups retain the queue. Delivered outbox rows expire after seven days; pending rows remain until delivery or organization/task deletion. They contain event/notification metadata, not raw MIME, provider responses or credentials. Repair history lasts with the organization and must not contain sensitive message content.
 
 Rollback refuses unresolved reservations, explicit participation state, diagnostic authorization/proof, pending outbox effects and repair history instead of discarding them. Earlier component migrations also refuse restrictive dispatch or managed consent history. Restore or complete a reviewed reconciliation; do not delete negative evidence simply to make downgrade succeed. Legacy deployments remain readable, but do not resume a mixed-old executor fleet assuming new guarantees.
+
+### Conflict-audit upgrade ordering
+
+The conflict-audit extension adds typed automatic contradiction evidence, local-record provenance and an explicit conflict-resolution projection. All historical rows remain intact, with no inferred provenance backfill. A historical confirmation without trustworthy local origin is history, not permission to apply an outcome or clear an unknown/conflict hold. Independent authoritative worker/provider results continue to reconcile unknown sends automatically. A genuine contradiction between definitive results preserves the original accounting and hold until a validated provider confirmation resolves the known conflict; arrival order and duplicate delivery do not decide the outcome.
+
+Normal customer sending, connection and authentication steps do not change. Exceptional uncertain history is an administrator recovery workflow using the existing `PATCH /emails/:id` recovery payload, workspace boundary and `manage_emails`/`WRITE_EMAILS` permissions. It does not add a customer log-reading or confirmation form. These are existing workspace/API permissions, not a new platform-admin-only authorization gate. Confirming an unknown outcome keeps admission held until the normal result reconciler commits accounting and hold transfer together. Authentication repair cannot resolve an unrelated outcome conflict.
+
+An additive schema alone is **not** a safe active mixed-version rollout. Old readers can still execute historical confirmations without checking provenance; old hold-clearing code cannot recognize automatic conflict rows. New binaries also require the added columns before using these paths. Use this ordering for a separately approved rollout:
+
+1. Preserve the database and audit evidence. Finish all predecessor migrations and review the allocated extension's up/down tests. Do not allocate a colliding migration or delete history to force rollback.
+2. Quiesce old dispatch/scheduling and all old processes that can apply send outcomes, mutate recovery holds, accept recovery confirmations or import workspace data. Preserve queued results and durable evidence. Merely disabling the admin confirmation screen or stopping one result consumer is insufficient.
+3. Apply the reviewed additive extension, then start only compatible backend, result-consumer, scheduler and import/repair binaries. Verify every control-plane replica, including Cloud and independently running consumers, before resuming these operations. Worker message/result formats are unchanged by this extension; it needs no new worker capability, credentials or customer configuration.
+4. Resume automatic stored-result reconciliation first, without resending tasks. Check task-scoped outcome, accounting, dead-letter and hold evidence. Remaining historical confirmations without local provenance require fresh administrator/provider confirmation only when independent authoritative evidence cannot resolve the unknown. Unknown outcomes and genuine conflicts remain restrictive.
+5. Keep the new schema and roll forward if a binary rollout fails. Recovery-audit down refuses whenever audit rows remain, including historical rows; older binaries must not resume recovery mutation against retained new evidence. A validated empty-audit downgrade still requires its matching compatible binaries.
+
+A refused downgrade preserves recovery rows, columns, constraints and indexes, but `golang-migrate` records the attempted down target as dirty before executing SQL. This is not a successful downgrade. Keep mutators quiesced and have an operator verify the retained schema and migration state before a reviewed roll-forward; do not blindly force a version, restart older binaries or delete evidence to bypass the refusal.
+
+This ordering is an operator deployment requirement, not permission to merge, deploy, replay, retire uncertain tasks or manually clear holds. A later applied send or failed/cancelled task is not recovery proof for a different held-task cohort. Local tests cannot establish that a provider executed a send.
 
 ## Verification and limits
 

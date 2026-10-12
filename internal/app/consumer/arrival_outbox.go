@@ -8,6 +8,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/arrivaldiag"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -18,22 +19,40 @@ func (s *JobsService) runArrivalOutbox(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	var failedSince, lastAlert time.Time
-	for {
-		pass, cancel := context.WithTimeout(ctx, 30*time.Second)
-		err := s.ArrivalOutbox.DeliverArrivals(pass, func(ctx context.Context, kind models.JobEventType, body any) error {
-			return s.deliverArrivalEvent(ctx, kind, body)
-		})
-		if err != nil {
-			log.Warn().Msg("sync arrival delivery deferred")
+	var diagnostics arrivaldiag.Window
+	defer func() {
+		if summary := diagnostics.Flush(); summary != nil {
+			summary.Log()
 		}
-		s.observeArrivalBacklog(pass, err, time.Now(), &failedSince, &lastAlert)
-		cancel()
+	}()
+	for {
+		s.runArrivalOutboxPass(ctx, &diagnostics, &failedSince, &lastAlert)
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
 	}
+}
+
+func (s *JobsService) runArrivalOutboxPass(ctx context.Context, diagnostics *arrivaldiag.Window, failedSince, lastAlert *time.Time) {
+	pass, cancel := context.WithTimeout(ctx, 30*time.Second)
+	pass, measurements := arrivaldiag.WithPass(pass)
+	started := time.Now()
+	err := s.ArrivalOutbox.DeliverArrivals(pass, func(ctx context.Context, kind models.JobEventType, body any) error {
+		return s.deliverArrivalEvent(ctx, kind, body)
+	})
+	if err != nil {
+		log.Warn().Msg("sync arrival delivery deferred")
+	}
+	finish := arrivaldiag.Begin(pass, arrivaldiag.Backlog)
+	s.observeArrivalBacklog(pass, err, time.Now(), failedSince, lastAlert)
+	finish()
+	contextErr := pass.Err()
+	if summary := diagnostics.Record(measurements.Snapshot(), time.Since(started), err != nil, contextErr != nil, contextErr == context.DeadlineExceeded, ctx.Err() != nil, time.Now()); summary != nil {
+		summary.Log()
+	}
+	cancel()
 }
 
 func (s *JobsService) observeArrivalBacklog(ctx context.Context, deliveryErr error, now time.Time, failedSince, lastAlert *time.Time) {

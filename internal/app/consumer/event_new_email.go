@@ -16,6 +16,7 @@ import (
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/infrastructure/pubsub"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/arrivaldiag"
 	"github.com/warmbly/warmbly/internal/pkg/mailhdr"
 	"github.com/warmbly/warmbly/internal/pkg/mailhost"
 	"github.com/warmbly/warmbly/internal/repository"
@@ -24,7 +25,10 @@ import (
 func (s *JobsService) HandleNewEmail(ctx context.Context, e *models.JobEventNewEmail) error {
 	err := s.ingestNewEmail(ctx, e)
 	if errors.Is(err, errWarmupVerification) && s.UniboxRepository != nil {
-		if storeErr := s.UniboxRepository.DeferWarmupVerification(ctx, e); storeErr != nil {
+		finish := arrivaldiag.Begin(ctx, arrivaldiag.WarmupDefer)
+		storeErr := s.UniboxRepository.DeferWarmupVerification(ctx, e)
+		finish()
+		if storeErr != nil {
 			if s.dropForDeletedMailbox(ctx, e.UserID, e.Message.EmailID, storeErr) {
 				return nil
 			}
@@ -50,7 +54,10 @@ func (s *JobsService) ingestNewEmail(ctx context.Context, e *models.JobEventNewE
 	if recorder, ok := s.PlacementRepo.(interface {
 		RecordProbeObservation(context.Context, uuid.UUID, string, string, []string, time.Time) error
 	}); ok && !strings.EqualFold(e.Message.Folder, models.FolderSent) && e.Message.MessageID != "" {
-		if err := recorder.RecordProbeObservation(ctx, e.Message.EmailID, e.Message.MessageID, e.Message.Folder, e.Message.Flags, time.Now().UTC()); err != nil {
+		finish := arrivaldiag.Begin(ctx, arrivaldiag.ProbeObservation)
+		err := recorder.RecordProbeObservation(ctx, e.Message.EmailID, e.Message.MessageID, e.Message.Folder, e.Message.Flags, time.Now().UTC())
+		finish()
+		if err != nil {
 			return fmt.Errorf("record seed observation: %w", err)
 		}
 	}
@@ -102,7 +109,10 @@ func (s *JobsService) ingestNewEmail(ctx context.Context, e *models.JobEventNewE
 	}
 
 	// Normal email processing
-	if err := s.UniboxRepository.CreateEntry(ctx, e.UserID, e.Message); err != nil {
+	finish := arrivaldiag.Begin(ctx, arrivaldiag.UniboxCreate)
+	err := s.UniboxRepository.CreateEntry(ctx, e.UserID, e.Message)
+	finish()
+	if err != nil {
 		if s.dropForDeletedMailbox(ctx, e.UserID, e.Message.EmailID, err) {
 			return nil
 		}
@@ -110,13 +120,16 @@ func (s *JobsService) ingestNewEmail(ctx context.Context, e *models.JobEventNewE
 		return err
 	}
 	if e.Message != nil {
+		finish = arrivaldiag.Begin(ctx, arrivaldiag.Realtime)
 		inbox := s.emailInboxEvent(ctx, e.UserID, e.Message)
 		if s.StreamingPublisher != nil {
 			s.StreamingPublisher.PublishEmailReceived(ctx, inbox)
 		}
+		finish()
 		// Fan an opt-in firehose webhook for the arrival (inbox.email_received).
 		if s.AdvancedService != nil && inbox.OrgID != "" {
 			if orgID, perr := uuid.Parse(inbox.OrgID); perr == nil {
+				finish = arrivaldiag.Begin(ctx, arrivaldiag.Webhook)
 				s.AdvancedService.EmitCampaignEvent(ctx, orgID, models.WebhookEventInboxEmailReceived, map[string]any{
 					"email_account_id": inbox.EmailAccountID,
 					"message_id":       inbox.MessageID,
@@ -124,6 +137,7 @@ func (s *JobsService) ingestNewEmail(ctx context.Context, e *models.JobEventNewE
 					"subject":          inbox.Subject,
 					"from":             inbox.From,
 				})
+				finish()
 			}
 		}
 	}
@@ -137,7 +151,9 @@ func (s *JobsService) ingestNewEmail(ctx context.Context, e *models.JobEventNewE
 	// outbound a human reply at 0.94 confidence, so direction is decided here
 	// and the model is never asked.
 	if s.InboxTagger.Enabled() && e.Message.MayBeInbound() {
+		finish = arrivaldiag.Begin(ctx, arrivaldiag.Tagging)
 		s.tagInboundMessage(ctx, e)
+		finish()
 	}
 
 	// Advanced reply-intent automation is best-effort and should not block inbox
@@ -146,6 +162,7 @@ func (s *JobsService) ingestNewEmail(ctx context.Context, e *models.JobEventNewE
 	// campaign progress, gating replied_at so automated replies (auto_reply /
 	// out_of_office) never count as a human reply for stop_on_reply / branching.
 	if s.AdvancedService != nil && e.Message.MayBeInbound() {
+		finish = arrivaldiag.Begin(ctx, arrivaldiag.ReplyAutomation)
 		// Logged, not propagated: the ingest must survive it, but a silent
 		// failure here is indistinguishable from a reply that linked fine.
 		if xerr := s.AdvancedService.ProcessIncomingReply(ctx, e.Message.EmailID, e.Message); xerr != nil {
@@ -154,12 +171,15 @@ func (s *JobsService) ingestNewEmail(ctx context.Context, e *models.JobEventNewE
 				Str("message_id", e.Message.MessageID).
 				Msg("Reply-intent automation failed; inbox ingest kept")
 		}
+		finish()
 	}
 
 	if s.SlackInbox != nil && e.Message.MayBeInbound() {
+		finish = arrivaldiag.Begin(ctx, arrivaldiag.Slack)
 		if account, aerr := s.EmailRepository.GetByID(ctx, e.Message.EmailID); aerr == nil && account != nil && account.OrganizationID != nil {
 			s.SlackInbox.InboundMessage(ctx, *account.OrganizationID, account, e.Message)
 		}
+		finish()
 	}
 
 	return nil
@@ -217,6 +237,7 @@ func extractHeaderValue(msg *models.EmailMessageStoreData, headerName string) st
 
 // handleWarmupEmail hides either verified copy; only a live recipient token triggers engagement.
 func (s *JobsService) handleWarmupEmail(ctx context.Context, e *models.JobEventNewEmail, tokenStr string) (bool, error) {
+	defer arrivaldiag.Begin(ctx, arrivaldiag.WarmupMarked)()
 	if s.WarmupRepo == nil {
 		return false, nil
 	}
@@ -254,6 +275,7 @@ func (s *JobsService) handleWarmupEmail(ctx context.Context, e *models.JobEventN
 // mailbox reaches every recipient carrying no marker at all; matched only on
 // the header it would count for nobody and be filed as ordinary inbox mail.
 func (s *JobsService) handleUnmarkedWarmupEmail(ctx context.Context, e *models.JobEventNewEmail) (bool, error) {
+	defer arrivaldiag.Begin(ctx, arrivaldiag.WarmupUnmarked)()
 	if s.WarmupRepo == nil || e.Message == nil {
 		return false, nil
 	}
@@ -318,6 +340,7 @@ func warmupTokenFromMessage(message *models.EmailMessageStoreData) string {
 // is left alone, because a bounce on real outreach is exactly what the unibox
 // should show.
 func (s *JobsService) isWarmupReport(ctx context.Context, e *models.JobEventNewEmail) (bool, error) {
+	defer arrivaldiag.Begin(ctx, arrivaldiag.WarmupReport)()
 	if s.WarmupRepo == nil || e.ReportOriginalMessageID == "" {
 		return false, nil
 	}
@@ -342,6 +365,7 @@ func (s *JobsService) isWarmupReport(ctx context.Context, e *models.JobEventNewE
 
 // isKnownWarmupEmail separates inbox visibility from single-use recipient engagement.
 func (s *JobsService) isKnownWarmupEmail(ctx context.Context, e *models.JobEventNewEmail) (bool, error) {
+	defer arrivaldiag.Begin(ctx, arrivaldiag.WarmupKnown)()
 	if s.WarmupRecoveryRepo != nil {
 		known, err := s.WarmupRecoveryRepo.IsKnown(ctx, e.Message.EmailID, warmupTokenFromMessage(e.Message), []string{e.Message.MessageID})
 		if err != nil || known {
@@ -407,6 +431,7 @@ func (s *JobsService) isKnownWarmupEmail(ctx context.Context, e *models.JobEvent
 // way. Nothing is consumed and nothing is engaged with: engagement is earned
 // by verified deliveries only.
 func (s *JobsService) isWarmupThreadReply(ctx context.Context, e *models.JobEventNewEmail) (bool, error) {
+	defer arrivaldiag.Begin(ctx, arrivaldiag.WarmupThread)()
 	parents := parentMessageIDs(e.Message.InReplyTo)
 	if len(parents) == 0 {
 		return false, nil

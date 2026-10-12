@@ -89,6 +89,7 @@ func (w *WorkerService) HandleSendEmail(ctx context.Context, sendEmail models.Se
 	if sendEmail.OrgID != uuid.Nil && (mail.OrgID == nil || *mail.OrgID != sendEmail.OrgID) {
 		return errors.New("send organization does not own loaded mailbox")
 	}
+	transportGeneration := mail.TransportGeneration
 
 	// Decrypt subject
 	subject := sendEmail.Subject
@@ -164,7 +165,7 @@ func (w *WorkerService) HandleSendEmail(ctx context.Context, sendEmail models.Se
 	})
 	w.recordSendLatency(time.Since(sendStart))
 	w.recordSendOutcome(result)
-	stored := models.SendEmailResult{TaskID: sendEmail.TaskID, Success: result.Success, MessageID: result.MessageID, ProviderMsgID: result.ProviderMsgID, ThreadID: result.ThreadID, SentAt: time.Now().UTC()}
+	stored := models.SendEmailResult{TransportGeneration: transportGeneration, TaskID: sendEmail.TaskID, Success: result.Success, MessageID: result.MessageID, ProviderMsgID: result.ProviderMsgID, ThreadID: result.ThreadID, SentAt: time.Now().UTC()}
 	if result.Error != nil {
 		stored.Error = wmail.MailErrorToSendError(result.Error)
 		stored.LegacyErrorMsg = result.Error.Message
@@ -376,18 +377,20 @@ func (w *WorkerService) sendMailboxError(taskID uuid.UUID, emailID uuid.UUID, ma
 
 		userInfo := mailErr.GetUserErrorInfo()
 		errorEvent := models.EmailErrorEvent{
-			TaskID:         taskID.String(),
-			EmailAccountID: emailID.String(),
-			UserID:         mail.UserID.String(),
-			ErrorCode:      string(mailErr.Code),
-			ErrorType:      string(mailErr.Type),
-			ResolveMethod:  string(mailErr.ResolveMethod),
-			Message:        mailErr.Message,
-			UserVisible:    mailErr.IsUserVisible(),
-			UserTitle:      userInfo.Title,
-			UserMessage:    userInfo.Message,
-			ActionRequired: userInfo.ActionRequired,
-			Timestamp:      time.Now().Unix(),
+			TransportGeneration: mail.TransportGeneration,
+			Operation:           models.MailTransportSend,
+			TaskID:              taskID.String(),
+			EmailAccountID:      emailID.String(),
+			UserID:              mail.UserID.String(),
+			ErrorCode:           string(mailErr.Code),
+			ErrorType:           string(mailErr.Type),
+			ResolveMethod:       string(mailErr.ResolveMethod),
+			Message:             mailErr.Message,
+			UserVisible:         mailErr.IsUserVisible(),
+			UserTitle:           userInfo.Title,
+			UserMessage:         userInfo.Message,
+			ActionRequired:      userInfo.ActionRequired,
+			Timestamp:           wmail.ErrorObservedTimestamp(mailErr),
 		}
 
 		if err := w.Produce(eventType, emailID.String(), errorEvent); err != nil {

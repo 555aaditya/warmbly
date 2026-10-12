@@ -24,6 +24,7 @@ import {
     actionLabel,
     actionNeedsChannel,
     actionNeedsURL,
+    actionTakesClayURL,
     actionSupportsTemplate,
     triggerConditionFields,
     triggerFieldDef,
@@ -371,6 +372,13 @@ export function ActionEditor({
                             <Label>Webhook URL</Label>
                             <TextInput value={String(config.url ?? "")} onChange={(v) => setConfig("url", v)} placeholder="https://hooks.zapier.com/…" className="w-full" />
                             <VarChips vars={vars} onPick={(t) => insertInto("url", t)} />
+                        </div>
+                    )}
+                    {actionTakesClayURL(data.action ?? "") && (
+                        <div>
+                            <Label>Clay table webhook (optional)</Label>
+                            <TextInput value={String(config.url ?? "")} onChange={(v) => setConfig("url", v)} placeholder="Uses the webhook saved on the Clay connection" className="w-full" />
+                            <p className="text-[11px] text-slate-400 mt-1">Sends to a different Clay table than the connection default. The connection's auth token is not sent to it.</p>
                         </div>
                     )}
                     {actionSupportsTemplate(data.action ?? "") && (

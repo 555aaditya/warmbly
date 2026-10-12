@@ -41,7 +41,7 @@ func (w *WMail) SyncGraph(ctx context.Context) *errx.MailError {
 		done, err := w.graphUpgradeIDs(ctx)
 		if errors.Is(err, repository.ErrSyncContextUnsupported) {
 			w.GraphData.Client.SetImmutableIDMode(false)
-			w.CaptureError(err)
+			w.captureSyncError(err)
 			done, err = true, nil
 		}
 		if err != nil {
@@ -61,7 +61,7 @@ func (w *WMail) SyncGraph(ctx context.Context) *errx.MailError {
 		if errors.As(err, &mailErr) {
 			return mailErr
 		}
-		w.CaptureError(err)
+		w.captureSyncError(err)
 		return nil
 	}
 	if !stats.aborted {
@@ -260,7 +260,7 @@ func (w *WMail) graphBackfill(ctx context.Context, stats *tickStats) *errx.MailE
 					}
 					return mailErr
 				}
-				w.CaptureError(err)
+				w.captureSyncError(err)
 				stats.aborted = true
 				return nil
 			}

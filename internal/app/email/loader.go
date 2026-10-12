@@ -323,11 +323,71 @@ func (s *emailService) releaseDeadWorker(ctx context.Context, accountID uuid.UUI
 	return nil, nil
 }
 
-// buildAddWorkerEmail reconstructs the worker payload for an account, decrypting
-// its credentials and attaching the provider-specific data. Cfg is intentionally
-// left zero: it is avro-excluded and the worker rebuilds it locally from its own
-// oauth config.
+type addWorkerEmailPreload struct {
+	syncData  *models.AddWorkerEmailSyncData
+	historyID uint64
+	delta     map[string]string
+	mailboxes []models.Mailbox
+	managed   bool
+}
+
+func (s *emailService) preloadAddWorkerEmail(ctx context.Context, acc *models.Email) (*addWorkerEmailPreload, error) {
+	userID, err := uuid.Parse(acc.UserID)
+	if err != nil {
+		return nil, err
+	}
+	syncData, err := s.syncDataFor(ctx, acc.ID, false)
+	if err != nil {
+		return nil, err
+	}
+	p := &addWorkerEmailPreload{syncData: syncData}
+	switch models.InboxProvider(acc.Provider) {
+	case models.InboxProviderGoogle:
+		p.historyID = s.lastHistoryFor(ctx, userID, acc.ID, nil)
+	case models.InboxProviderOutlook:
+		p.delta, err = s.deltaLinksFor(ctx, userID, acc.ID)
+		if err != nil {
+			return nil, err
+		}
+	case models.InboxProviderSMTPIMAP:
+		p.mailboxes = s.mailboxesFor(ctx, userID, acc.ID)
+	}
+	if acc.AuthMethod != models.MailAuthDelegated && s.cloudLink != nil {
+		if link, err := s.cloudLink.GetByAccount(ctx, acc.ID); err == nil && link != nil {
+			p.managed = link.Managed
+		}
+	}
+	return p, nil
+}
+
 func (s *emailService) buildAddWorkerEmail(ctx context.Context, acc *models.Email) (*models.AddWorkerEmail, error) {
+	if snapshots, ok := s.emailRepository.(repository.EmailTransportSnapshot); ok {
+		preload, err := s.preloadAddWorkerEmail(ctx, acc)
+		if err != nil {
+			return nil, err
+		}
+		var payload *models.AddWorkerEmail
+		err = snapshots.WithTransportSnapshot(ctx, func(repo repository.EmailRepository) error {
+			current, xerr := repo.GetByID(ctx, acc.ID)
+			if xerr != nil {
+				return xerr
+			}
+			if current == nil || current.Status != "active" {
+				return nil
+			}
+			if current.TransportGeneration != acc.TransportGeneration || current.Provider != acc.Provider || current.UserID != acc.UserID || current.AuthMethod != acc.AuthMethod {
+				return fmt.Errorf("mailbox changed while preparing worker load")
+			}
+			var err error
+			payload, err = s.buildAddWorkerEmailSnapshot(ctx, current, repo, preload)
+			return err
+		})
+		return payload, err
+	}
+	return s.buildAddWorkerEmailSnapshot(ctx, acc, s.emailRepository, nil)
+}
+
+func (s *emailService) buildAddWorkerEmailSnapshot(ctx context.Context, acc *models.Email, repo repository.EmailRepository, preload *addWorkerEmailPreload) (*models.AddWorkerEmail, error) {
 	userID, err := uuid.Parse(acc.UserID)
 	if err != nil {
 		return nil, err
@@ -336,26 +396,45 @@ func (s *emailService) buildAddWorkerEmail(ctx context.Context, acc *models.Emai
 	provider := models.InboxProvider(acc.Provider)
 
 	saveToSent := acc.SaveToSent
-	sync, err := s.syncDataFor(ctx, acc.ID)
-	if err != nil {
-		return nil, err
+	var sync *models.AddWorkerEmailSyncData
+	if preload != nil {
+		folders, xerr := repo.GetSyncSkipFolders(ctx, acc.ID)
+		if xerr != nil {
+			return nil, fmt.Errorf("sync skip folders lookup: %w", xerr)
+		}
+		copy := *preload.syncData
+		copy.Policy.SkipFolders = folders
+		sync = &copy
+	} else {
+		var err error
+		sync, err = s.syncDataFor(ctx, acc.ID, true)
+		if err != nil {
+			return nil, err
+		}
 	}
 	out := &models.AddWorkerEmail{
-		ID:             acc.ID,
-		UserID:         userID,
-		OrganizationID: acc.OrganizationID,
-		Email:          acc.Email,
-		FirstName:      first,
-		LastName:       last,
-		Type:           provider,
-		Sync:           sync,
+		TransportGeneration: acc.TransportGeneration,
+		ID:                  acc.ID,
+		UserID:              userID,
+		OrganizationID:      acc.OrganizationID,
+		Email:               acc.Email,
+		FirstName:           first,
+		LastName:            last,
+		Type:                provider,
+		Sync:                sync,
 		// Only SMTP/IMAP acts on this; Gmail and Graph file their own copy.
 		SaveToSent: &saveToSent,
 	}
 	if provider == models.InboxProviderOutlook {
-		links, err := s.deltaLinksFor(ctx, userID, acc.ID)
-		if err != nil {
-			return nil, err
+		var links map[string]string
+		if preload != nil {
+			links = preload.delta
+		} else {
+			var err error
+			links, err = s.deltaLinksFor(ctx, userID, acc.ID)
+			if err != nil {
+				return nil, err
+			}
 		}
 		out.Graph = &models.AddWorkerEmailGraphData{DeltaLinks: links}
 	}
@@ -363,7 +442,7 @@ func (s *emailService) buildAddWorkerEmail(ctx context.Context, acc *models.Emai
 	// A mailbox under an administrator's grant has no stored credential
 	// either; the worker draws tokens the control plane mints per use.
 	if acc.AuthMethod == models.MailAuthDelegated {
-		d, xerr := s.emailRepository.GetDelegation(ctx, acc.ID)
+		d, xerr := repo.GetDelegation(ctx, acc.ID)
 		if xerr != nil {
 			return nil, xerr
 		}
@@ -373,7 +452,7 @@ func (s *emailService) buildAddWorkerEmail(ctx context.Context, acc *models.Emai
 		out.Brokered = true
 		switch provider {
 		case models.InboxProviderGoogle:
-			out.Google = &models.AddWorkerEmailGoogleData{LastHistoryID: s.lastHistoryFor(ctx, userID, acc.ID, acc.LastID)}
+			out.Google = &models.AddWorkerEmailGoogleData{LastHistoryID: s.workerHistoryID(ctx, userID, acc, preload)}
 		case models.InboxProviderOutlook:
 			out.Graph.User = d.Subject
 		default:
@@ -384,11 +463,16 @@ func (s *emailService) buildAddWorkerEmail(ctx context.Context, acc *models.Emai
 
 	// A managed mailbox has no local credential; the worker draws brokered tokens.
 	if s.cloudLink != nil {
-		if m, err := s.cloudLink.GetByAccount(ctx, acc.ID); err == nil && m != nil && m.Managed {
+		managed := preload != nil && preload.managed
+		if preload == nil {
+			m, err := s.cloudLink.GetByAccount(ctx, acc.ID)
+			managed = err == nil && m != nil && m.Managed
+		}
+		if managed {
 			out.Brokered = true
 			switch provider {
 			case models.InboxProviderGoogle:
-				out.Google = &models.AddWorkerEmailGoogleData{LastHistoryID: s.lastHistoryFor(ctx, userID, acc.ID, acc.LastID)}
+				out.Google = &models.AddWorkerEmailGoogleData{LastHistoryID: s.workerHistoryID(ctx, userID, acc, preload)}
 			case models.InboxProviderOutlook:
 				// The checkpoint was loaded before selecting the token owner.
 			default:
@@ -400,22 +484,22 @@ func (s *emailService) buildAddWorkerEmail(ctx context.Context, acc *models.Emai
 
 	switch provider {
 	case models.InboxProviderGoogle:
-		creds, cerr := s.emailRepository.GetOAuthCredentials(ctx, acc.ID)
+		creds, cerr := repo.GetOAuthCredentials(ctx, acc.ID)
 		if cerr != nil {
 			return nil, cerr
 		}
 		out.Google = &models.AddWorkerEmailGoogleData{
 			Token:         oauthToken(creds),
-			LastHistoryID: s.lastHistoryFor(ctx, userID, acc.ID, acc.LastID),
+			LastHistoryID: s.workerHistoryID(ctx, userID, acc, preload),
 		}
 	case models.InboxProviderOutlook:
-		creds, cerr := s.emailRepository.GetOAuthCredentials(ctx, acc.ID)
+		creds, cerr := repo.GetOAuthCredentials(ctx, acc.ID)
 		if cerr != nil {
 			return nil, cerr
 		}
 		out.Graph.Token = oauthToken(creds)
 	case models.InboxProviderSMTPIMAP:
-		creds, cerr := s.emailRepository.GetSMTPCredentials(ctx, acc.ID)
+		creds, cerr := repo.GetSMTPCredentials(ctx, acc.ID)
 		if cerr != nil {
 			return nil, cerr
 		}
@@ -425,13 +509,33 @@ func (s *emailService) buildAddWorkerEmail(ctx context.Context, acc *models.Emai
 				SMTP: &models.Service{Host: creds.SMTPHost, Port: creds.SMTPPort, Username: creds.SMTPUser, Password: creds.SMTPPassword, Security: creds.SMTPSecurity},
 				IMAP: &models.Service{Host: creds.IMAPHost, Port: creds.IMAPPort, Username: creds.IMAPUser, Password: creds.IMAPPassword, Security: creds.IMAPSecurity},
 			},
-			Mailboxes: s.mailboxesFor(ctx, userID, acc.ID),
+			Mailboxes: s.workerMailboxes(ctx, userID, acc, preload),
 		}
 	default:
 		return nil, nil
 	}
 
 	return out, nil
+}
+
+func (s *emailService) workerHistoryID(ctx context.Context, userID uuid.UUID, acc *models.Email, preload *addWorkerEmailPreload) uint64 {
+	if preload == nil {
+		return s.lastHistoryFor(ctx, userID, acc.ID, acc.LastID)
+	}
+	if preload.historyID > 0 {
+		return preload.historyID
+	}
+	if acc.LastID != nil && *acc.LastID > 0 {
+		return uint64(*acc.LastID)
+	}
+	return 0
+}
+
+func (s *emailService) workerMailboxes(ctx context.Context, userID uuid.UUID, acc *models.Email, preload *addWorkerEmailPreload) []models.Mailbox {
+	if preload != nil {
+		return preload.mailboxes
+	}
+	return s.mailboxesFor(ctx, userID, acc.ID)
 }
 
 // lastHistoryFor is the Gmail checkpoint a (re)loaded mailbox resumes from.
@@ -461,7 +565,7 @@ func (s *emailService) lastHistoryFor(ctx context.Context, userID, emailID uuid.
 // state a previous worker left behind. Policy comes from instance settings
 // (compiled defaults when none are wired), so an operator's change applies at
 // the next load: onboarding, reassignment, or the reconciler's republish.
-func (s *emailService) syncDataFor(ctx context.Context, emailID uuid.UUID) (*models.AddWorkerEmailSyncData, error) {
+func (s *emailService) syncDataFor(ctx context.Context, emailID uuid.UUID, readFolders bool) (*models.AddWorkerEmailSyncData, error) {
 	budget := instancesettings.DefaultSync()
 	if s.syncBudget != nil {
 		budget = s.syncBudget.SyncBudget(ctx)
@@ -478,11 +582,13 @@ func (s *emailService) syncDataFor(ctx context.Context, emailID uuid.UUID) (*mod
 	// mailbox, so a failed read cannot fall back to "skip nothing": that
 	// would have the worker baseline and import the excluded folders until
 	// the next republish. The load fails instead and the reconciler retries.
-	skip, xerr := s.emailRepository.GetSyncSkipFolders(ctx, emailID)
-	if xerr != nil {
-		return nil, fmt.Errorf("sync skip folders lookup: %w", xerr)
+	if readFolders {
+		skip, xerr := s.emailRepository.GetSyncSkipFolders(ctx, emailID)
+		if xerr != nil {
+			return nil, fmt.Errorf("sync skip folders lookup: %w", xerr)
+		}
+		data.Policy.SkipFolders = skip
 	}
-	data.Policy.SkipFolders = skip
 	// A pool-linked mailbox is a warmup-only mirror: no history import.
 	if s.poolLink != nil {
 		if linked, err := s.poolLink.GetMailboxByAccount(ctx, emailID); err == nil && linked != nil {

@@ -227,13 +227,36 @@ export default function ConnectionDetail({
                     {/* Salesforce has its own page: sync rules, field map, imports, activity log. */}
                     {conn.provider === "salesforce" && (
                         <div className="px-5 py-4">
-                            <HomeLink
-                                to={`/app/integrations/salesforce/${conn.id}`}
-                                onNavigate={onClose}
-                                icon={<Settings2Icon className="w-4 h-4 text-sky-600" />}
-                                title="Salesforce settings"
-                                body="Sync rules, field mapping, imports from list views and campaigns, and the activity log."
-                            />
+                            <Link to="/app/integrations/salesforce/$id" params={{ id: conn.id }} onClick={onClose} className={homeLinkClass}>
+                                <HomeLinkBody
+                                    icon={<Settings2Icon className="w-4 h-4 text-sky-600" />}
+                                    title="Salesforce settings"
+                                    body="Sync rules, field mapping, imports from list views and campaigns, and the activity log."
+                                />
+                            </Link>
+                        </div>
+                    )}
+
+                    {conn.provider === "apollo" && (
+                        <div className="px-5 py-4">
+                            <Link to="/app/integrations/apollo/$id" params={{ id: conn.id }} onClick={onClose} className={homeLinkClass}>
+                                <HomeLinkBody
+                                    icon={<Settings2Icon className="w-4 h-4 text-sky-600" />}
+                                    title="Apollo settings"
+                                    body="Imports from your Apollo lists, enrichment runs and the API key."
+                                />
+                            </Link>
+                        </div>
+                    )}
+                    {conn.provider === "clay" && (
+                        <div className="px-5 py-4">
+                            <Link to="/app/integrations/clay/$id" params={{ id: conn.id }} onClick={onClose} className={homeLinkClass}>
+                                <HomeLinkBody
+                                    icon={<Settings2Icon className="w-4 h-4 text-sky-600" />}
+                                    title="Clay settings"
+                                    body="The inbound URL and column setup, where rows land, and which events go back to Clay."
+                                />
+                            </Link>
                         </div>
                     )}
 
@@ -345,32 +368,28 @@ export default function ConnectionDetail({
 }
 
 // A link to a provider's own home page, for settings too rich for this popup.
-function HomeLink({
-    to,
-    onNavigate,
-    icon,
-    title,
-    body,
-}: {
-    to: string;
-    onNavigate: () => void;
-    icon: React.ReactNode;
-    title: string;
-    body: string;
-}) {
+const homeLinkClass =
+    "flex items-center gap-3 rounded-md border border-slate-200 hover:border-slate-300 hover:bg-slate-50/60 px-3 py-2.5 transition-colors group";
+
+// A link to a provider's own page; typed routes wrap this in their own <Link>.
+function HomeLink({ to, onNavigate, ...body }: { to: string; onNavigate: () => void } & React.ComponentProps<typeof HomeLinkBody>) {
     return (
-        <Link
-            to={to}
-            onClick={onNavigate}
-            className="flex items-center gap-3 rounded-md border border-slate-200 hover:border-slate-300 hover:bg-slate-50/60 px-3 py-2.5 transition-colors group"
-        >
+        <Link to={to} onClick={onNavigate} className={homeLinkClass}>
+            <HomeLinkBody {...body} />
+        </Link>
+    );
+}
+
+function HomeLinkBody({ icon, title, body }: { icon: React.ReactNode; title: string; body: string }) {
+    return (
+        <>
             <span className="shrink-0">{icon}</span>
             <span className="min-w-0 flex-1">
                 <span className="block text-[12.5px] font-medium text-slate-900">{title}</span>
                 <span className="block text-[11.5px] text-slate-500 leading-relaxed">{body}</span>
             </span>
             <ArrowRightIcon className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-700 shrink-0" />
-        </Link>
+        </>
     );
 }
 

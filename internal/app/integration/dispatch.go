@@ -167,6 +167,9 @@ func (s *service) execAction(ctx context.Context, target repository.DispatchTarg
 		secret := s.signingSecretFor(ctx, &target.Secrets, secretCfg)
 		return automationDeliver(ctx, url, secret, sub.EventType, buildAutomationPayload(sub, data, msg))
 
+	case models.IntegrationActionClaySendRow:
+		return s.clayDeliver(ctx, sub, secretCfg, data, msg)
+
 	case models.IntegrationActionHubSpotUpsert:
 		// While HubSpot is the workspace CRM, every send, reply and contact
 		// syncs on its own; this action would only add duplicate notes.

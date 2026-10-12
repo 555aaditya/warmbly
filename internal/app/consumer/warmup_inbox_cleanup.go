@@ -10,6 +10,7 @@ import (
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/jobrun"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/arrivaldiag"
 )
 
 // StartWarmupInboxCleanup repairs old leaks in bounded batches, retrying verification failures.
@@ -37,6 +38,7 @@ func (s *JobsService) StartWarmupInboxCleanup(ctx context.Context) {
 
 // fileWarmupOutOfMailbox persists filing separately from best-effort engagement.
 func (s *JobsService) fileWarmupOutOfMailbox(ctx context.Context, e *models.JobEventNewEmail) error {
+	defer arrivaldiag.Begin(ctx, arrivaldiag.WarmupFile)()
 	if s.Publisher == nil || s.EmailRepository == nil || e.Message == nil {
 		return nil
 	}

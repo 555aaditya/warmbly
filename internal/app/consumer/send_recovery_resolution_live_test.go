@@ -36,6 +36,11 @@ func TestLiveUnknownSendOperatorResolutionReconcilesAndAudits(t *testing.T) {
 			if _, xerr := repo.Update(ctx, f.org.String(), f.mailbox.String(), &models.UpdateEmail{SendRecoveryResolution: resolution}); xerr != nil {
 				t.Fatal(xerr)
 			}
+			if sent {
+				if _, err := h.Pool.Exec(ctx, `UPDATE send_recovery_resolutions r SET confirmed_result=jsonb_set(confirmed_result,'{transport_generation}',to_jsonb(e.transport_generation::text)) FROM email_accounts e WHERE r.recovery_task_id=$1 AND e.id=$2`, id, f.mailbox); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if _, xerr := repo.Update(ctx, f.org.String(), f.mailbox.String(), &models.UpdateEmail{SendRecoveryResolution: resolution}); xerr == nil {
 				t.Fatal("duplicate confirmation overwrote audit")
 			}
@@ -45,8 +50,13 @@ func TestLiveUnknownSendOperatorResolutionReconcilesAndAudits(t *testing.T) {
 			}
 			// A replacement consumer replays the durable confirmation without a broker event.
 			replacement := liveJobsService(h)
+			replacement.EmailAccountErrorRepository = repository.NewEmailAccountErrorRepository(h)
 			replacement.reconcileRecordedSendResults(ctx)
 			replacement.reconcileRecordedSendResults(ctx)
+			var clocks int
+			if err := h.QueryRow(ctx, `SELECT COUNT(*) FROM email_account_transport_recovery WHERE email_account_id=$1`, f.mailbox).Scan(&clocks); err != nil || clocks != 0 {
+				t.Fatal("operator confirmation manufactured transport recovery", clocks, err)
+			}
 			var state string
 			var applied bool
 			var audits, attempts, counted int
@@ -83,6 +93,10 @@ func TestLiveUnknownSendOperatorResolutionReconcilesAndAudits(t *testing.T) {
 	}
 }
 
+func TestLiveMailTransportOperatorConfirmationDoesNotRecover(t *testing.T) {
+	TestLiveUnknownSendOperatorResolutionReconcilesAndAudits(t)
+}
+
 func TestLiveRecordedWorkerOutcomeSurvivesLostEvent(t *testing.T) {
 	h := liveDB(t)
 	f := newSendResultFixture(t, h)
@@ -113,9 +127,9 @@ func TestLiveRecordedWorkerOutcomeSurvivesLostEvent(t *testing.T) {
 	}
 }
 
-func TestLiveUnreservedFailedTaskCannotHoldMailbox(t *testing.T) {
+func TestLiveUnreservedLegacyFailedTaskRetainsUnknownHold(t *testing.T) {
 	for _, existing := range []bool{false, true} {
-		t.Run(map[bool]string{false: "new failure", true: "existing invalid hold"}[existing], func(t *testing.T) {
+		t.Run(map[bool]string{false: "new ambiguous result", true: "existing unknown hold"}[existing], func(t *testing.T) {
 			h := liveDB(t)
 			f := newSendResultFixture(t, h)
 			s := liveJobsService(h)
@@ -140,8 +154,8 @@ func TestLiveUnreservedFailedTaskCannotHoldMailbox(t *testing.T) {
 			if err := h.Pool.QueryRow(ctx, `SELECT ea.send_recovery_hold,t.send_result_applied_at IS NOT NULL,t.send_result_state FROM tasks t JOIN email_accounts ea ON ea.id=t.email_account_id WHERE t.id=$1`, id).Scan(&hold, &applied, &state); err != nil {
 				t.Fatal(err)
 			}
-			if hold || !applied || state != "failed" {
-				t.Fatal("unreserved failure held mailbox", hold, applied, state)
+			if !hold || applied || state != "unknown" {
+				t.Fatal("missing authority markers resolved a legacy unknown", hold, applied, state)
 			}
 		})
 	}

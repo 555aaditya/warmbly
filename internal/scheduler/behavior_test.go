@@ -360,7 +360,7 @@ func TestRoundRobinFallsBackToTodaysSendCount(t *testing.T) {
 	middle := candidateWithoutSenderRow("22222222-2222-2222-2222-222222222222", 4, nil)
 	idle := candidateWithoutSenderRow("33333333-3333-3333-3333-333333333333", 0, nil)
 
-	got := selectAccountByRotationMode("round_robin", []AccountCandidate{busiest, middle, idle})
+	got := selectAccountByRotationMode("round_robin", []AccountCandidate{busiest, middle, idle}, uuid.Nil)
 	if got == nil {
 		t.Fatal("expected a selection")
 	}
@@ -377,7 +377,7 @@ func TestLeastRecentlyUsedFallsBackToRealSendHistory(t *testing.T) {
 	a := candidateWithoutSenderRow("11111111-1111-1111-1111-111111111111", 0, &recent)
 	b := candidateWithoutSenderRow("22222222-2222-2222-2222-222222222222", 0, &older)
 
-	got := selectAccountByRotationMode("least_recently_used", []AccountCandidate{a, b})
+	got := selectAccountByRotationMode("least_recently_used", []AccountCandidate{a, b}, uuid.Nil)
 	if got == nil {
 		t.Fatal("expected a selection")
 	}
@@ -391,7 +391,7 @@ func TestLeastRecentlyUsedPrefersAMailboxThatNeverSent(t *testing.T) {
 	used := candidateWithoutSenderRow("11111111-1111-1111-1111-111111111111", 0, &sent)
 	fresh := candidateWithoutSenderRow("22222222-2222-2222-2222-222222222222", 0, nil)
 
-	got := selectAccountByRotationMode("least_recently_used", []AccountCandidate{used, fresh})
+	got := selectAccountByRotationMode("least_recently_used", []AccountCandidate{used, fresh}, uuid.Nil)
 	if got == nil || got.Account.ID != fresh.Account.ID {
 		t.Fatalf("a mailbox with no send history should sort first, got %+v", got)
 	}
@@ -413,7 +413,7 @@ func TestRotationRotatesAcrossRepeatedPicks(t *testing.T) {
 		for _, id := range ids {
 			pool = append(pool, candidateWithoutSenderRow(id, sentToday[id], nil))
 		}
-		got := selectAccountByRotationMode("round_robin", pool)
+		got := selectAccountByRotationMode("round_robin", pool, uuid.Nil)
 		if got == nil {
 			t.Fatal("expected a selection")
 		}

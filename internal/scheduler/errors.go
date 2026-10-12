@@ -3,6 +3,7 @@ package scheduler
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"time"
 
 	"github.com/warmbly/warmbly/internal/config"
@@ -109,6 +110,13 @@ func DeferSlot(at time.Time) time.Time {
 		return horizon
 	}
 	return at
+}
+
+// ClaimRetrySlot is where a pass that lost its mailbox to another campaign
+// looks again: soon, and spread so the losers do not collide a second time.
+func ClaimRetrySlot() time.Time {
+	secs := config.CampaignSendClaimRetrySeconds + rand.Intn(config.CampaignSendClaimRetrySeconds+1)
+	return time.Now().Add(time.Duration(secs) * time.Second)
 }
 
 // WakeSlot is where a chain seeded outside a tick first wakes: now for a

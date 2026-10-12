@@ -228,7 +228,7 @@ func (r *taskRepository) ReserveOutbound(ctx context.Context, in OutboundReserva
 	}
 	_, err = tx.Exec(ctx, `UPDATE tasks SET send_reserved_at=NOW(),send_business_day=(NOW() AT TIME ZONE $2)::date,send_recipients=$3,
 	 send_released_at=NULL,send_executor_nonce=$4,send_executor_worker=$5,send_executor_started_at=NULL,send_executor_result=NULL,
-	 send_result_state='unknown',status='completed',completed_at=NOW() WHERE id=$1`, in.TaskID, timezone, recipients, nonce, in.WorkerID)
+	 send_result_state='unknown',status='completed',completed_at=CASE WHEN $6 THEN COALESCE(completed_at,NOW()) ELSE NOW() END WHERE id=$1`, in.TaskID, timezone, recipients, nonce, in.WorkerID, lane == "warmup")
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -356,7 +356,7 @@ func (r *taskRepository) BeginOutbound(ctx context.Context, task, mailbox, worke
 	var current *uuid.UUID
 	var started *time.Time
 	err = tx.QueryRow(ctx, `SELECT ea.organization_id,ea.provider::text,t.send_recipients,t.send_executor_nonce,t.send_executor_started_at FROM tasks t JOIN email_accounts ea ON ea.id=t.email_account_id
-	 WHERE t.id=$1 AND ea.id=$2 AND t.send_executor_worker=$3 AND t.send_released_at IS NULL`, task, mailbox, worker).Scan(&org, &provider, &recipients, &current, &started)
+	 WHERE t.id=$1 AND ea.id=$2 AND t.send_executor_worker=$3 AND t.send_released_at IS NULL FOR UPDATE OF t`, task, mailbox, worker).Scan(&org, &provider, &recipients, &current, &started)
 	if err != nil {
 		return nil, err
 	}
@@ -408,8 +408,13 @@ func (r *taskRepository) BeginOutbound(ctx context.Context, task, mailbox, worke
 			}
 			return &WarmupDispatchState{State: "denied"}, nil
 		}
-		if _, err = tx.Exec(ctx, `UPDATE warmup_tasks SET dispatch_started_at=NOW() WHERE task_id=$1 AND dispatch_nonce=$2`, task, nonce); err != nil {
+		tag, err := tx.Exec(ctx, `UPDATE warmup_tasks SET dispatch_started_at=NOW() WHERE task_id=$1 AND dispatch_nonce=$2
+		 AND dispatch_worker_id=$3 AND dispatch_started_at IS NULL AND dispatch_result IS NULL`, task, nonce, worker)
+		if err != nil {
 			return nil, err
+		}
+		if tag.RowsAffected() != 1 {
+			return &WarmupDispatchState{State: "denied"}, nil
 		}
 	}
 	_, err = tx.Exec(ctx, `UPDATE tasks SET send_executor_started_at=NOW() WHERE id=$1`, task)
@@ -466,7 +471,9 @@ func (r *taskRepository) cancelOutbound(ctx context.Context, task, mailbox, work
 	}
 	var lane string
 	err = tx.QueryRow(ctx, `UPDATE tasks SET send_released_at=NOW(),send_result_state='failed',send_result_applied_at=NOW(),status='cancelled'
-	 WHERE id=$1 AND email_account_id=$2 AND send_executor_worker=$3 AND send_executor_nonce=$4 AND send_executor_started_at IS NULL AND send_released_at IS NULL RETURNING task_type`, task, mailbox, worker, nonce).Scan(&lane)
+	 WHERE id=$1 AND email_account_id=$2 AND send_executor_worker=$3 AND send_executor_nonce=$4 AND send_executor_started_at IS NULL AND send_released_at IS NULL
+	 AND (task_type<>'warmup' OR EXISTS(SELECT 1 FROM warmup_tasks w WHERE w.task_id=tasks.id AND w.dispatch_nonce=$4
+	 AND w.dispatch_worker_id=$3 AND w.dispatch_started_at IS NULL AND w.dispatch_result IS NULL)) RETURNING task_type`, task, mailbox, worker, nonce).Scan(&lane)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
@@ -496,14 +503,14 @@ func (r *taskRepository) cancelOutbound(ctx context.Context, task, mailbox, work
 		}
 	}
 	if lane == "warmup" {
-		if _, err = tx.Exec(ctx, `UPDATE warmup_statistics SET emails_sent=GREATEST(emails_sent-1,0),emails_replied=GREATEST(emails_replied-CASE WHEN w.parent_task_id IS NULL THEN 0 ELSE 1 END,0) FROM warmup_tasks w JOIN tasks t ON t.id=w.task_id WHERE w.task_id=$2 AND warmup_statistics.email_account_id=$1 AND date=DATE(t.completed_at)`, mailbox, task); err != nil {
+		if err = refundWarmupCharge(ctx, tx, task, mailbox); err != nil {
 			return err
 		}
 		if _, err = tx.Exec(ctx, `DELETE FROM warmup_tokens WHERE task_id=$1`, task); err != nil {
 			return err
 		}
 	}
-	if _, err = tx.Exec(ctx, `UPDATE email_accounts SET send_recovery_hold=false,send_recovery_task_id=NULL,send_recovery_reason=NULL WHERE id=$1 AND send_recovery_reason='unknown' AND send_recovery_task_id=$2 AND NOT EXISTS(SELECT 1 FROM tasks WHERE email_account_id=$1 AND send_result_state='unknown')`, mailbox, task); err != nil {
+	if err = refreshUnknownSendHold(ctx, tx, mailbox, task); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

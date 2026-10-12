@@ -60,7 +60,7 @@ func (w *WMail) SyncGoogle(ctx context.Context) *errx.MailError {
 	if newHistoryID != 0 && newHistoryID != w.GoogleData.LastHistoryID {
 		// Keep the old cursor until publication succeeds, so a failed relay is retried.
 		if perr := w.NewHistoryID(newHistoryID); perr != nil {
-			w.CaptureError(perr)
+			w.captureSyncError(perr)
 			return nil
 		}
 		w.GoogleData.LastHistoryID = newHistoryID
@@ -70,7 +70,7 @@ func (w *WMail) SyncGoogle(ctx context.Context) *errx.MailError {
 		if errors.As(err, &errMail) {
 			return errMail
 		}
-		w.CaptureError(err)
+		w.captureSyncError(err)
 		return nil
 	}
 
@@ -350,7 +350,7 @@ func (w *WMail) googleBackfill(ctx context.Context, stats *tickStats) *errx.Mail
 			if errors.As(err, &errMail) {
 				return errMail
 			}
-			w.CaptureError(err)
+			w.captureSyncError(err)
 			return nil
 		}
 		for _, id := range ids {
@@ -377,7 +377,7 @@ func (w *WMail) googleBackfill(ctx context.Context, stats *tickStats) *errx.Mail
 				if errors.As(err, &errMail) {
 					return errMail
 				}
-				w.CaptureError(err)
+				w.captureSyncError(err)
 				return nil
 			}
 			if msg == nil {
@@ -536,11 +536,11 @@ func (w *WMail) emitFolder(id uuid.UUID, folder string) error {
 func (w *WMail) googleReconcileError(err error) *errx.MailError {
 	var errMail *errx.MailError
 	if !errors.As(err, &errMail) {
-		w.CaptureError(err)
+		w.captureSyncError(err)
 		return nil
 	}
 	if errMail.Type != errx.MailErrorCritical && !gmailRetryable(err) {
-		w.CaptureError(err)
+		w.captureSyncError(err)
 	}
 	return errMail
 }

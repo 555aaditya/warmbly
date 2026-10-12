@@ -67,11 +67,13 @@ Relative ages use your browser's current clock when a snapshot arrives, with per
 | **Warmup** | The pools, the blocked list, and the block and unblock history |
 | **Warmup appeals** | Appeals from blocked mailboxes, to approve or reject |
 | **Warmup content** | The generated and reviewed [diagnostic conversation bank](/development/warmup-generation/), effective generation controls, library and generation jobs. Changing effective controls requires `manage_settings`; existing library reads still require `view_warmup_pool` |
-
-Mailbox diagnostic participation, sender/recipient flags and shared/rolling limits are organization-scoped mailbox fields, not new admin-panel switches. Use the existing authorized mailbox PATCH; no new UI is implied. An operator-reviewed `send_recovery_resolution` binds the current held task/reason and definite repair/provider evidence, never an unknown send. See [send safety](/development/send-safety/).
 | **Seed panel** | The instance's placement seed inboxes by provider, adding and removing them, every workspace's recent [placement tests](/guides/placement-tests/) with their results, and an operator test that counts against no allowance |
 | **Campaigns** | Every campaign on the instance with its state and owner |
-| **Sends** | In-flight reservations no worker has answered, and the reclaimer that resolves them after 30 minutes; dead letters with replay; task failures; customer webhook delivery health, with reclaim |
+| **Sends** | In-flight reservations no worker has answered, and the reclaimer that resolves them after 30 minutes; dead letters with replay limited to non-sending campaign wakeups; task failures; customer webhook delivery health, with reclaim |
+
+The Sync page's **Stalled** filter, row indicator and summary count only active mailboxes with a running backfill unchanged for over an hour and no active fair-use hold. Inactive and revoked backfill states remain in the **Backfilling** history count, without a current stalled warning. Reactivating a mailbox does not reset its backfill state.
+
+Mailbox diagnostic participation, sender/recipient flags and shared/rolling limits are organization-scoped mailbox fields, not new admin-panel switches. Use the existing authorized mailbox PATCH; no new UI is implied. An operator-reviewed `send_recovery_resolution` binds the current held task/reason and definite repair/provider evidence, never an unknown send. See [send safety](/development/send-safety/).
 
 ## Accounts
 

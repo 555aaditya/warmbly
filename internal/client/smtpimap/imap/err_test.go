@@ -1,15 +1,58 @@
 package imap
 
 import (
+	"context"
+	"crypto/x509"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
+	"syscall"
 	"testing"
 
 	goimap "github.com/emersion/go-imap/v2"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 )
+
+func TestConnectionFailureReasonDoesNotExposeTransportDetails(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"dns", &net.DNSError{Err: "secret.invalid", Name: "secret.invalid"}, "DNS lookup failed"},
+		{"dns_timeout", &net.DNSError{Err: "secret.invalid", Name: "secret.invalid", IsTimeout: true}, "DNS lookup timed out"},
+		{"certificate", x509.UnknownAuthorityError{}, "TLS certificate validation failed"},
+		{"certificate_expired", x509.CertificateInvalidError{Reason: x509.Expired}, "TLS certificate validation failed"},
+		{"certificate_wrong_host", x509.HostnameError{Host: "secret.invalid"}, "TLS certificate validation failed"},
+		{"worker_bind", syscall.EADDRNOTAVAIL, "worker network address unavailable"},
+		{"refused", syscall.ECONNREFUSED, "connection refused"},
+		{"route", syscall.ENETUNREACH, "network route unavailable"},
+		{"host_unreachable", syscall.EHOSTUNREACH, "network route unavailable"},
+		{"closed", io.EOF, "connection closed"},
+		{"closed_socket", net.ErrClosed, "connection closed"},
+		{"timeout", context.DeadlineExceeded, "connection timed out"},
+		{"op_timeout", &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ETIMEDOUT}, "connection timed out"},
+		{"other", errors.New("secret.invalid password=secret"), "connection failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := fmt.Errorf("secret.invalid password=secret: %w", tc.err)
+			got := connectionFailureReason(err)
+			if got != tc.want {
+				t.Fatalf("connectionFailureReason = %q, want %q", got, tc.want)
+			}
+			message := errx.ErrMailServerUnreachableAt(errx.MailConnectionStageIMAPDial, errors.New(got)).Message
+			if !errx.IsKnownIMAPConnectionMessage(message) {
+				t.Fatal("fixed producer category not recognized by incoming validator")
+			}
+			if strings.Contains(message, "secret") || strings.Contains(message, "secret.invalid") {
+				t.Fatalf("warning disclosed connection details: %q", message)
+			}
+		})
+	}
+}
 
 // A transport error must never read as success: mapping net.ErrClosed to nil
 // is what let a dropped Gmail session run as a clean "no folders" pass every

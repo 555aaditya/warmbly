@@ -91,8 +91,9 @@ type GoogleHistoryRecovery struct {
 // owns the live copy and relays every change as SYNC_STATE; the consumer
 // persists it and the loader hands it back on the next (re)assignment.
 type SyncState struct {
-	BackfillStatus SyncBackfillStatus `json:"backfill_status" avro:"backfill_status"`
-	BackfillCursor SyncCursor         `json:"backfill_cursor" avro:"backfill_cursor"`
+	TransportGeneration uuid.UUID          `json:"transport_generation,omitempty" avro:"transport_generation"`
+	BackfillStatus      SyncBackfillStatus `json:"backfill_status" avro:"backfill_status"`
+	BackfillCursor      SyncCursor         `json:"backfill_cursor" avro:"backfill_cursor"`
 	// BackfillSynced counts messages the import has stored so far.
 	BackfillSynced int `json:"backfill_synced" avro:"backfill_synced"`
 	// BackfillSince is the cutoff the running import uses; fixed at start so

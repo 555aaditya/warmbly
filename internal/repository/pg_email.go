@@ -223,8 +223,33 @@ type EmailRepository interface {
 }
 
 type emailRepository struct {
-	DB      *db.DB
-	Encrypt *encrypt.Encrypter
+	DB                *db.DB
+	Encrypt           *encrypt.Encrypter
+	transportSnapshot pgx.Tx
+}
+
+type EmailTransportSnapshot interface {
+	WithTransportSnapshot(context.Context, func(EmailRepository) error) error
+}
+
+func (r *emailRepository) WithTransportSnapshot(ctx context.Context, read func(EmailRepository) error) error {
+	tx, err := r.DB.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	snapshot := &emailRepository{DB: r.DB, Encrypt: r.Encrypt, transportSnapshot: tx}
+	if err := read(snapshot); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (r *emailRepository) transportQueryRow(ctx context.Context, query string, args ...any) pgx.Row {
+	if r.transportSnapshot != nil {
+		return r.transportSnapshot.QueryRow(ctx, query, args...)
+	}
+	return r.DB.QueryRow(ctx, query, args...)
 }
 
 // NewEmailRepostory builds the email repository. enc seals SMTP/IMAP and
@@ -493,7 +518,7 @@ func (r *emailRepository) GetDelegation(ctx context.Context, accountID uuid.UUID
 		WHERE id = $1 AND auth_method = 'delegated' AND domain_grant_id IS NOT NULL AND organization_id IS NOT NULL`
 	var d models.DelegatedMailbox
 	var provider string
-	err := r.DB.QueryRow(ctx, query, accountID).Scan(&d.AccountID, &d.OrganizationID, &provider, &d.Email, &d.GrantID, &d.Subject, &d.Status)
+	err := r.transportQueryRow(ctx, query, accountID).Scan(&d.AccountID, &d.OrganizationID, &provider, &d.Email, &d.GrantID, &d.Subject, &d.Status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -1649,6 +1674,20 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 		return nil, errx.InternalError()
 	}
 	defer tx.Rollback(ctx)
+	if resolution := udata.SendRecoveryResolution; resolution != nil {
+		mailboxID, parseErr := uuid.Parse(emailAccountID)
+		if parseErr != nil || resolution.HeldTaskID == uuid.Nil {
+			return nil, errx.ErrInvalid
+		}
+		if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,268))`, resolution.HeldTaskID.String()); err != nil {
+			db.CaptureError(err, "lock send recovery task", nil, "exec")
+			return nil, errx.InternalError()
+		}
+		if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,269))`, mailboxID.String()); err != nil {
+			db.CaptureError(err, "lock send recovery mailbox", nil, "exec")
+			return nil, errx.InternalError()
+		}
+	}
 	if udata.WarmupStartTime != nil || udata.WarmupEndTime != nil {
 		// Lock the stored half of a partial patch so concurrent changes cannot cross.
 		query := `SELECT warmup_start_time::text, warmup_end_time::text FROM email_accounts WHERE organization_id=$1 AND id=$2 FOR UPDATE`
@@ -1695,8 +1734,8 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 		 AND EXISTS(SELECT 1 FROM tasks e WHERE e.id=$4 AND e.email_account_id=held.id AND e.send_result_state='sent' AND e.send_result_applied_at>held.completed_at AND e.send_executor_started_at>held.completed_at))
 		 OR ($3='operator_provider_confirmation' AND held.send_recovery_reason IN('authentication','permanent','conflict') AND length($5)>0 AND $4::uuid IS NOT NULL
 		 AND EXISTS(SELECT 1 FROM tasks e WHERE e.id=$4 AND e.email_account_id=held.id AND e.send_result_state IN('sent','failed') AND e.send_result_applied_at IS NOT NULL)))),
-		 history AS(INSERT INTO send_recovery_resolutions(organization_id,email_account_id,recovery_task_id,evidence_task_id,previous_reason,evidence_type,confirmation_reference)
-		 SELECT organization_id,id,send_recovery_task_id,$4,send_recovery_reason,$3,$5 FROM valid RETURNING email_account_id)
+		 history AS(INSERT INTO send_recovery_resolutions(organization_id,email_account_id,recovery_task_id,evidence_task_id,previous_reason,evidence_type,confirmation_reference,recorded_locally_at)
+		 SELECT organization_id,id,send_recovery_task_id,$4,send_recovery_reason,$3,$5,clock_timestamp() FROM valid RETURNING email_account_id)
 		 UPDATE email_accounts ea SET send_recovery_hold=false,send_recovery_reason=NULL,send_recovery_task_id=NULL
 		 FROM history WHERE ea.id=history.email_account_id`, orgID, emailAccountID, resolution.EvidenceType, evidenceTask, strings.TrimSpace(resolution.ConfirmationReference), resolution.HeldTaskID, resolution.HeldReason)
 			if resolveErr != nil {
@@ -1705,6 +1744,23 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 			}
 			if tag.RowsAffected() != 1 {
 				return nil, errx.ErrInvalid
+			}
+			if resolution.HeldReason == "conflict" {
+				if _, resolveErr := tx.Exec(ctx, `UPDATE send_recovery_resolutions SET conflict_resolved_at=clock_timestamp()
+					WHERE organization_id=$1 AND email_account_id=$2 AND recovery_task_id=$3
+					AND conflict_detected_at IS NOT NULL AND conflict_resolved_at IS NULL
+					AND (previous_reason='unknown' OR evidence_type='authoritative_result_conflict')`, orgID, emailAccountID, resolution.HeldTaskID); resolveErr != nil {
+					db.CaptureError(resolveErr, "resolve outcome conflict", nil, "exec")
+					return nil, errx.InternalError()
+				}
+			}
+			mailboxID, parseErr := uuid.Parse(emailAccountID)
+			if parseErr != nil {
+				return nil, errx.ErrInvalid
+			}
+			if resolveErr := refreshSendHold(ctx, tx, mailboxID, nil, nil); resolveErr != nil {
+				db.CaptureError(resolveErr, "refresh send recovery", nil, "exec")
+				return nil, errx.InternalError()
 			}
 		}
 	}
@@ -2222,6 +2278,7 @@ func (r *emailRepository) SetWarmupLifecycle(ctx context.Context, orgID, emailAc
 func (r *emailRepository) GetByID(ctx context.Context, emailAccountID uuid.UUID) (*models.Email, *errx.Error) {
 	query := `
 		SELECT
+		 ea.transport_generation,
 		 ea.id, ea.user_id, ea.organization_id, ea.worker_id, ea.email, ea.name, ea.signature_plain, ea.signature_html, ea.signature_sync, ea.signature_code, ea.send_as_email,
 		 ea.provider, ea.mail_host, ea.auth_method, ea.domain_grant_id, ea.vendor_connection_id, COALESCE((SELECT vc.vendor FROM mailbox_vendor_connections vc WHERE vc.id = ea.vendor_connection_id), ''), ea.avatar_url, ea.status, COALESCE(ea.last_synced_at, ea.created_at) AS last_synced_at, ea.last_id, ea.campaign_limit,
 		 ea.min_wait_time, ea.reply_to, ea.tracking_domain, ea.tracking_domain_verified, ea.tracking_domain_verified_at, ea.track_direct_mail, ea.warmup, ea.warmup_paused_at, ea.warmup_base,
@@ -2237,7 +2294,8 @@ func (r *emailRepository) GetByID(ctx context.Context, emailAccountID uuid.UUID)
 	`
 
 	var i models.Email
-	err := r.DB.QueryRow(ctx, query, emailAccountID).Scan(
+	err := r.transportQueryRow(ctx, query, emailAccountID).Scan(
+		&i.TransportGeneration,
 		&i.ID, &i.UserID, &i.OrganizationID, &i.WorkerID, &i.Email, &i.Name, &i.SignaturePlain, &i.SignatureHTML, &i.SignatureSync, &i.SignatureCode, &i.SendAsEmail,
 		&i.Provider, &i.MailHost, &i.AuthMethod, &i.DomainGrantID, &i.VendorConnectionID, &i.Vendor, &i.AvatarURL, &i.Status, &i.LastSyncedAt, &i.LastID, &i.CampaignLimit,
 		&i.MinWaitTime, &i.ReplyTo, &i.TrackingDomain, &i.TrackingDomainVerified, &i.TrackingDomainVerifiedAt, &i.TrackDirectMail, &i.Warmup, &i.WarmupPausedAt, &i.WarmupBase,
@@ -2558,7 +2616,7 @@ func (r *emailRepository) GetSMTPCredentials(ctx context.Context, emailAccountID
 	var creds SMTPCredentials
 	var smtpHost, smtpUser, smtpPassword, imapHost, imapUser, imapPassword string
 
-	err := r.DB.QueryRow(ctx, query, emailAccountID).Scan(
+	err := r.transportQueryRow(ctx, query, emailAccountID).Scan(
 		&smtpHost, &creds.SMTPPort, &smtpUser, &smtpPassword, &creds.SMTPSecurity,
 		&imapHost, &creds.IMAPPort, &imapUser, &imapPassword, &creds.IMAPSecurity,
 	)
@@ -2621,7 +2679,7 @@ func (r *emailRepository) GetOAuthCredentials(ctx context.Context, emailAccountI
 	var accessToken, refreshToken string
 	var expiresAt time.Time
 
-	err := r.DB.QueryRow(ctx, query, emailAccountID).Scan(
+	err := r.transportQueryRow(ctx, query, emailAccountID).Scan(
 		&accessToken, &refreshToken, &expiresAt,
 	)
 	if err != nil {
@@ -2643,7 +2701,7 @@ func (r *emailRepository) GetOAuthCredentials(ctx context.Context, emailAccountI
 		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
-	if accessLegacy || refreshLegacy {
+	if (accessLegacy || refreshLegacy) && r.transportSnapshot == nil {
 		r.resealOAuthCredentials(ctx, emailAccountID, decryptedAccessToken, decryptedRefreshToken)
 	}
 
@@ -2776,7 +2834,7 @@ func (r *emailRepository) UpdateTrackDirectMail(ctx context.Context, orgID, emai
 func (r *emailRepository) GetSyncSkipFolders(ctx context.Context, emailAccountID uuid.UUID) ([]string, *errx.Error) {
 	query := `SELECT sync_skip_folders FROM email_accounts WHERE id = $1`
 	var folders []string
-	if err := r.DB.QueryRow(ctx, query, emailAccountID).Scan(&folders); err != nil {
+	if err := r.transportQueryRow(ctx, query, emailAccountID).Scan(&folders); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errx.ErrNotFound
 		}

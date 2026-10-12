@@ -1,5 +1,5 @@
 // Modal that surfaces the per-org inbound webhook URL exactly once after
-// a Calendly/Cal.com/DMARC connection is created. The secret is embedded
+// a Calendly, Cal.com or Clay connection is created, or its URL is rotated. The secret is embedded
 // in the URL path — if the user closes without copying, they must
 // rotate the secret to get it again.
 
@@ -15,11 +15,13 @@ import { API_URL } from "@/lib/information";
 const PROVIDER_NAMES: Partial<Record<IntegrationProvider, string>> = {
     calendly: "Calendly",
     cal_com: "Cal.com",
+    clay: "Clay",
 };
 
 const HINTS: Partial<Record<IntegrationProvider, string>> = {
     calendly: "Paste this in Calendly under Account, Integrations, Webhooks, Create Webhook. Subscribe to invitee.created.",
     cal_com: "Paste this in Cal.com under Settings, Developer, Webhooks. Subscribe to BOOKING_CREATED.",
+    clay: "Paste this as the endpoint of an HTTP API column in your Clay table, method POST, with the row's columns in a JSON body.",
 };
 
 export default function InboundUrlDialog({

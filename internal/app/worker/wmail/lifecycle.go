@@ -22,6 +22,7 @@ func ExecutionKey(data *models.AddWorkerEmail) [32]byte {
 		return credential{t.AccessToken, t.RefreshToken}
 	}
 	key := struct {
+		TransportGeneration            uuid.UUID
 		ID, User                       uuid.UUID
 		Org                            *uuid.UUID
 		Provider                       models.InboxProvider
@@ -31,7 +32,8 @@ func ExecutionKey(data *models.AddWorkerEmail) [32]byte {
 		SMTP, IMAP                     *models.Service
 		Skip                           []string
 	}{ID: data.ID, User: data.UserID, Org: data.OrganizationID, Provider: data.Type,
-		Email: data.Email, First: data.FirstName, Last: data.LastName, Brokered: data.Brokered,
+		TransportGeneration: data.TransportGeneration,
+		Email:               data.Email, First: data.FirstName, Last: data.LastName, Brokered: data.Brokered,
 		ImapSync: data.Type == models.InboxProviderSMTPIMAP && data.ImapSync, SaveToSent: data.Type == models.InboxProviderSMTPIMAP && data.SavesSentCopy()}
 	if data.Type == models.InboxProviderGoogle && data.Google != nil && !data.Brokered {
 		key.Token = tokenKey(data.Google.Token)
@@ -138,6 +140,7 @@ func (w *WMail) ResumeInto(data *models.AddWorkerEmail) {
 			data.Sync = &s
 		}
 		state := w.tracker.state
+		state.TransportGeneration = uuid.Nil
 		state.BackfillCursor.Folders = make(map[string]models.SyncFolderCursor, len(w.tracker.state.BackfillCursor.Folders))
 		for k, v := range w.tracker.state.BackfillCursor.Folders {
 			state.BackfillCursor.Folders[k] = v

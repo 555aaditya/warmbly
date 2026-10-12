@@ -751,7 +751,7 @@ func (s *schedulerService) placeCampaignSend(ctx context.Context, campaign *mode
 					pick = clear
 				}
 			}
-			selected = selectAccountByRotationMode(campaign.RotationMode, pick)
+			selected = selectAccountByRotationMode(campaign.RotationMode, pick, campaign.ID)
 		}
 	}
 	if selected == nil {
@@ -887,13 +887,16 @@ func (s *schedulerService) placeCampaignSend(ctx context.Context, campaign *mode
 	}
 	candidateTime = notBefore(candidateTime)
 
-	// STEP 12: Check conflicts with other scheduled tasks
+	// STEP 12: Keep clear of sends already booked on this mailbox. Another
+	// campaign's parked wake-up is not one (issue #942): it re-picks its
+	// mailbox when it fires, and the gap is enforced then by STEP 10 and the
+	// send claim, so spacing around it only throttles campaigns sharing a pool.
 	if !preview {
-		scheduledTasks, terr := s.taskRepo.GetScheduledTasksForAccount(ctx, account.ID, candidateTime)
+		booked, terr := s.taskRepo.GetBookedSendsForAccount(ctx, account.ID, candidateTime)
 		if terr != nil {
 			return time.Time{}, nil, uuid.Nil, terr
 		}
-		candidateTime = resolveConflicts(candidateTime, scheduledTasks, gapSeconds)
+		candidateTime = resolveConflicts(candidateTime, booked, gapSeconds)
 	}
 
 	// STEP 13: Apply human-like distribution (favor morning/afternoon peaks).
