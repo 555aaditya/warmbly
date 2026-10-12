@@ -51,7 +51,7 @@ struct AuthFlowView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            SkyBackdrop(largeCloud: heroExpanded)
+            SkyBackdrop()
             stepScreen
         }
         .sensoryFeedback(.impact(weight: .light), trigger: step)
@@ -227,6 +227,10 @@ struct AuthFlowView: View {
             // keyboard for a few frames.
             UnevenRoundedRectangle(cornerRadii: .init(topLeading: 32, topTrailing: 32), style: .continuous)
                 .fill(WTheme.canvas)
+                .overlay(
+                    UnevenRoundedRectangle(cornerRadii: .init(topLeading: 32, topTrailing: 32), style: .continuous)
+                        .stroke(WTheme.sheetEdge, lineWidth: 1)
+                )
                 .padding(.bottom, -600)
                 .ignoresSafeArea()
         }
@@ -278,10 +282,10 @@ struct AuthFlowView: View {
                 }
             }
             .font(.system(size: 16.5, weight: .medium))
-            .foregroundStyle(WTheme.inkInverse)
+            .foregroundStyle(disabled && !busy ? WTheme.inkTertiary : WTheme.inkInverse)
             .frame(maxWidth: .infinity)
             .frame(height: 54)
-            .background(WTheme.ink.opacity(disabled && !busy ? 0.18 : 1), in: Capsule())
+            .background(disabled && !busy ? WTheme.fill : WTheme.ink, in: Capsule())
         }
         .buttonStyle(PressableButtonStyle())
         .disabled(busy || disabled)
@@ -1286,18 +1290,23 @@ struct PasswordStrengthBar: View {
 
 // MARK: - Brand backdrop
 
-/// The brand moment behind sign-in and onboarding. Light: the site's sheer
-/// sky photo, drifting slowly under a soft veil. Dark: a near-black canvas
-/// with the dot grid and a sky aurora. Content on it uses `WTheme.onSky`.
+/// The brand moment behind sign-in and onboarding: the site's sheer sky photo
+/// (its night variant in dark mode), drifting slowly under a veil that fades
+/// into the sheet. Content on it uses `WTheme.onSky`.
 struct SkyBackdrop: View {
-    var largeCloud = false
-
     @Environment(\.colorScheme) private var scheme
     @State private var drift = false
 
     var body: some View {
-        Group {
-            if scheme == .dark { night } else { photo }
+        GeometryReader { proxy in
+            Image("SheerSky")
+                .resizable()
+                .scaledToFill()
+                .frame(width: proxy.size.width * 1.12, height: proxy.size.height)
+                .offset(x: proxy.size.width * (drift ? -0.1 : -0.02))
+                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
+                .clipped()
+                .overlay { veil }
         }
         .ignoresSafeArea()
         .onAppear {
@@ -1307,68 +1316,14 @@ struct SkyBackdrop: View {
         }
     }
 
-    private var photo: some View {
-        GeometryReader { proxy in
-            Image("SheerSky")
-                .resizable()
-                .scaledToFill()
-                .frame(width: proxy.size.width * 1.12, height: proxy.size.height)
-                .offset(x: proxy.size.width * (drift ? -0.1 : -0.02))
-                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
-                .clipped()
-                .overlay {
-                    // A veil so ink reads on the darker folds, fading into the sheet.
-                    LinearGradient(
-                        colors: [.white.opacity(0.42), .white.opacity(0.08), .white.opacity(0.3), .white],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                }
-        }
-    }
-
-    private var night: some View {
-        GeometryReader { proxy in
-            let size = proxy.size
-            ZStack {
-                WTheme.night
-
-                DotGrid(spacing: 22, opacity: 0.11, color: .white)
-                    .mask(
-                        RadialGradient(
-                            colors: [.black, .black.opacity(0.4), .clear],
-                            center: UnitPoint(x: 0.5, y: 0.1),
-                            startRadius: 0,
-                            endRadius: max(size.width, size.height) * 0.75
-                        )
-                    )
-
-                // Sky aurora: two soft blooms drifting against each other.
-                Ellipse()
-                    .fill(Color(hex: 0x0EA5E9).opacity(0.42))
-                    .frame(width: size.width * 1.2, height: size.width * 0.75)
-                    .blur(radius: 80)
-                    .position(x: size.width * (drift ? 0.32 : 0.42), y: -size.width * 0.06)
-                Ellipse()
-                    .fill(Color(hex: 0x6366F1).opacity(0.26))
-                    .frame(width: size.width * 0.9, height: size.width * 0.6)
-                    .blur(radius: 90)
-                    .position(x: size.width * (drift ? 0.92 : 0.78), y: size.width * (largeCloud ? 0.2 : 0.06))
-                Ellipse()
-                    .fill(Color(hex: 0x7DD3FC).opacity(0.18))
-                    .frame(width: size.width * 0.7, height: size.width * 0.32)
-                    .blur(radius: 60)
-                    .position(x: size.width * 0.5, y: size.width * (drift ? 0.16 : 0.1))
-
-                // Faint grain of light across the top edge, like a horizon.
-                LinearGradient(
-                    colors: [.clear, .white.opacity(0.14), .clear],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-                .frame(height: 1)
-                .position(x: size.width / 2, y: size.height * 0.001 + 0.5)
-            }
-        }
+    /// Keeps ink readable on the folds and fades into the sheet below.
+    private var veil: some View {
+        let edge: Color = scheme == .dark ? .black : .white
+        let stops: [Double] = scheme == .dark ? [0.2, 0, 0.12] : [0.42, 0.08, 0.3]
+        return LinearGradient(
+            colors: [edge.opacity(stops[0]), edge.opacity(stops[1]), edge.opacity(stops[2]), WTheme.canvas],
+            startPoint: .top,
+            endPoint: .bottom
+        )
     }
 }

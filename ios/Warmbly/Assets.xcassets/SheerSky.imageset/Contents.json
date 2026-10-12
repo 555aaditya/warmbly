@@ -3,6 +3,16 @@
     {
       "filename" : "sheer-sky.jpg",
       "idiom" : "universal"
+    },
+    {
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "dark"
+        }
+      ],
+      "filename" : "sheer-sky-night.jpg",
+      "idiom" : "universal"
     }
   ],
   "info" : {

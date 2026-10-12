@@ -343,7 +343,6 @@ struct PhotoFrame<Content: View>: View {
     var photo = "SheerSky"
     var cornerRadius: CGFloat = 22
     @ViewBuilder var content: Content
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         content
@@ -351,7 +350,6 @@ struct PhotoFrame<Content: View>: View {
                 Image(photo)
                     .resizable()
                     .scaledToFill()
-                    .overlay(WTheme.night.opacity(colorScheme == .dark ? 0.45 : 0))
                     .allowsHitTesting(false)
             }
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))

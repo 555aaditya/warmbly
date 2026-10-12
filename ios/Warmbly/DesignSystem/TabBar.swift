@@ -123,7 +123,8 @@ struct WTabBar: View {
                     }
                 }
                 .padding(5)
-                .glassEffect(.regular.interactive(), in: Capsule())
+                .background(WTheme.glassTint, in: Capsule())
+                .glassEffect(.regular.tint(WTheme.glassTint).interactive(), in: Capsule())
                 .glassEffectID("bar", in: glassNS)
 
                 if let action {
@@ -143,7 +144,8 @@ struct WTabBar: View {
                         .contentShape(Circle())
                     }
                     .buttonStyle(TabPressStyle())
-                    .glassEffect(.regular.interactive(), in: Circle())
+                    .background(WTheme.glassTint, in: Circle())
+                    .glassEffect(.regular.tint(WTheme.glassTint).interactive(), in: Circle())
                     .glassEffectID("action", in: glassNS)
                     .accessibilityLabel(action.title)
                 }

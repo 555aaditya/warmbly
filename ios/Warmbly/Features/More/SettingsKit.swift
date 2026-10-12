@@ -517,8 +517,8 @@ private struct AppearanceThumbnail: View {
     }
 
     private func screen(dark: Bool) -> some View {
-        let bg = dark ? Color(hex: 0x09090B) : Color(hex: 0xF2F2F7)
-        let card = dark ? Color(hex: 0x1F1F23) : .white
+        let bg = dark ? Color(hex: 0x131315) : Color(hex: 0xF2F2F7)
+        let card = dark ? Color(hex: 0x202024) : .white
         let line = dark ? Color(hex: 0x3A3A40) : Color(hex: 0xD9D9DE)
         return RoundedRectangle(cornerRadius: 11, style: .continuous)
             .fill(bg)
