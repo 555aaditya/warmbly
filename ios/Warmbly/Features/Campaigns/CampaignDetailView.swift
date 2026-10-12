@@ -103,46 +103,7 @@ struct CampaignDetailView: View {
     private static let rowTextLeading: CGFloat = 66
 
     var body: some View {
-        VStack(spacing: 0) {
-            hero
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Hairline()
-            hubList
-        }
-        .background(alignment: .top) {
-            AirSkyWash()
-                .frame(height: 320)
-                .ignoresSafeArea(edges: .top)
-        }
-        .background(WTheme.canvas)
-        .toolbarBackground(.hidden, for: .navigationBar)
-        .navigationTitle("")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar { toolbarContent }
-        .presenceResource(presenceKey)
-        .task {
-            appeared = true
-            await store.refresh(env.api)
-            dailyLimit = store.campaign.dailyLimit ?? 50
-            // Counts for the browse rows load alongside the analytics.
-            async let overview: Void = overviewStore.load(env.api, campaignID: campaign.id)
-            async let steps: Void = stepsStore.load(env.api, campaignID: campaign.id)
-            async let senders: Void = sendersStore.load(env.api, campaignID: campaign.id)
-            _ = await (overview, steps, senders)
-        }
-        .onChange(of: env.realtime.pulse(for: .campaigns)) {
-            Task {
-                await store.refresh(env.api)
-                dailyLimit = store.campaign.dailyLimit ?? 50
-            }
-        }
-        .onChange(of: env.realtime.pulse(for: .analytics)) {
-            Task { await overviewStore.load(env.api, campaignID: campaign.id) }
-        }
-        .onChange(of: dailyLimit) { _, newValue in
-            guard newValue != campaign.dailyLimit else { return }
-            saveDailyLimitDebounced(newValue)
-        }
+        page
         .confirmationDialog(
             toggleAction?.isStart == true ? "Start this campaign?" : "Pause this campaign?",
             isPresented: $confirmToggle,
@@ -187,6 +148,50 @@ struct CampaignDetailView: View {
         }
         .fullScreenCover(isPresented: $showLeads, onDismiss: { leadsStore.exitSelection() }) {
             CampaignLeadsPageView(campaignID: campaign.id, campaignName: campaign.name, store: leadsStore)
+        }
+    }
+
+    /// The page and what keeps it current; `body` adds the dialogs.
+    private var page: some View {
+        VStack(spacing: 0) {
+            hero
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Hairline()
+            hubList
+        }
+        .background(alignment: .top) {
+            AirSkyWash()
+                .frame(height: 320)
+                .ignoresSafeArea(edges: .top)
+        }
+        .background(WTheme.canvas)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { toolbarContent }
+        .presenceResource(presenceKey)
+        .task {
+            appeared = true
+            await store.refresh(env.api)
+            dailyLimit = store.campaign.dailyLimit ?? 50
+            // Counts for the browse rows load alongside the analytics.
+            async let overview: Void = overviewStore.load(env.api, campaignID: campaign.id)
+            async let steps: Void = stepsStore.load(env.api, campaignID: campaign.id)
+            async let senders: Void = sendersStore.load(env.api, campaignID: campaign.id)
+            _ = await (overview, steps, senders)
+        }
+        .onChange(of: env.realtime.pulse(for: .campaigns)) {
+            Task {
+                await store.refresh(env.api)
+                dailyLimit = store.campaign.dailyLimit ?? 50
+            }
+        }
+        .onChange(of: env.realtime.pulse(for: .analytics)) {
+            Task { await overviewStore.load(env.api, campaignID: campaign.id) }
+        }
+        .onChange(of: dailyLimit) { _, newValue in
+            guard newValue != campaign.dailyLimit else { return }
+            saveDailyLimitDebounced(newValue)
         }
     }
 

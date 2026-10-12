@@ -194,17 +194,7 @@ struct CRMDealsView: View {
             }
             if !values.isEmpty {
                 GeometryReader { proxy in
-                    HStack(spacing: 3) {
-                        ForEach(Array(values.enumerated()), id: \.offset) { index, item in
-                            if item.1 > 0 {
-                                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                    .fill(CRMHex.color(item.0.color) ?? WTheme.paused)
-                                    .frame(width: shown ? max(8, (proxy.size.width - CGFloat(values.count) * 3) * CGFloat(item.1 / total)) : 0)
-                                    .animation(.spring(response: 0.85, dampingFraction: 0.8).delay(0.2 + Double(index) * 0.08), value: shown)
-                            }
-                        }
-                        Spacer(minLength: 0)
-                    }
+                    stageBar(values, total: total, width: proxy.size.width)
                 }
                 .frame(height: 10)
                 VStack(spacing: 9) {
@@ -231,6 +221,25 @@ struct CRMDealsView: View {
             }
         }
         .coverCard()
+    }
+
+    /// One segment per stage, sized by its share of the open value.
+    private func stageBar(_ values: [(CRMStage, Double)], total: Double, width: CGFloat) -> some View {
+        let usable: CGFloat = width - CGFloat(values.count) * 3
+        return HStack(spacing: 3) {
+            ForEach(Array(values.enumerated()), id: \.offset) { index, item in
+                if item.1 > 0 {
+                    let share = CGFloat(item.1 / total)
+                    let barWidth: CGFloat = shown ? max(8, usable * share) : 0
+                    let delay: Double = 0.2 + Double(index) * 0.08
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(CRMHex.color(item.0.color) ?? WTheme.paused)
+                        .frame(width: barWidth)
+                        .animation(.spring(response: 0.85, dampingFraction: 0.8).delay(delay), value: shown)
+                }
+            }
+            Spacer(minLength: 0)
+        }
     }
 
     // MARK: List
