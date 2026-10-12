@@ -126,6 +126,10 @@ Mail whose warmup verification is temporarily unavailable waits in the `unibox_p
 
 A [tracking comparison](/guides/placement-tests/#tracking) renders each seed's copy once and sends it from both halves, so while it runs it keeps that rendered copy, with merge fields and AI blocks filled in for the chosen contact, in the `placement_renders` Postgres table, sealed with the workspace's data key. The placement poller deletes it once neither half of the comparison is running. It is included in instance backups and excluded from workspace exports.
 
+### Native app keys
+
+The iOS app proves it is a genuine copy with [App Attest](/api/reference/account-org/#app-attest-native-apps), and each install registers one key in the `app_attest_keys` Postgres table: the key id, its public key, the app ID and environment it was attested under, its counter, Apple's receipt, and when it was created and last used. A row names no user and no workspace. It has no retention window, is included in instance backups, and does not travel in workspace exports, because it belongs to the instance the app verified against.
+
 ### Warmup reconnect recovery
 
 `warmup_recovery_identifiers` holds SHA-256 fingerprints of a mailbox address and exact warmup message IDs or verification tokens, scoped to a workspace. They survive removing a mailbox so adding the same address again can recognize recent warmup mail without retaining its content or credentials. Each expires 90 days after its source record, expired identifiers are swept every minute in bounded batches, and deleting the workspace removes them immediately. They travel in the Warmup group of a [workspace export](/guides/workspace-export-import/).

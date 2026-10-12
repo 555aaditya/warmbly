@@ -1522,6 +1522,26 @@ type leadRowJSON struct {
 	Hold   *models.LeadHold        `json:"hold"`
 }
 
+// contactOutreachSelect is a search row's engagement across every campaign,
+// the same counts and times the contact 360 reports. One indexed aggregate per
+// returned row, so it costs a page, not the organization.
+var contactOutreachSelect = `(
+	SELECT json_build_object(
+		'sent',    COUNT(*) FILTER (WHERE a.sent_at IS NOT NULL AND ` + progressIsEmailStep("a") + `),
+		'opened',  COUNT(*) FILTER (WHERE a.opened_at IS NOT NULL AND NOT a.opened_machine),
+		'clicked', COUNT(*) FILTER (WHERE a.clicked_at IS NOT NULL),
+		'replied', COUNT(*) FILTER (WHERE a.replied_at IS NOT NULL),
+		'bounced', COUNT(*) FILTER (WHERE a.bounced_at IS NOT NULL),
+		'last_sent_at',    MAX(a.sent_at) FILTER (WHERE ` + progressIsEmailStep("a") + `),
+		'last_opened_at',  MAX(a.opened_at) FILTER (WHERE NOT a.opened_machine),
+		'last_clicked_at', MAX(a.clicked_at),
+		'last_replied_at', MAX(a.replied_at),
+		'last_bounced_at', MAX(a.bounced_at)
+	)
+	FROM campaign_contact_progress a
+	WHERE a.contact_id = c.id
+)`
+
 func (r *contactRepository) Search(
 	ctx context.Context,
 	orgID string,
@@ -1748,6 +1768,7 @@ func (r *contactRepository) Search(
 				), '[]'::json
 			) AS categories,
 			%s AS lead_progress,
+			`+contactOutreachSelect+` AS outreach,
 			%s AS sort_value
 		FROM contacts c
 		%s
@@ -1806,6 +1827,7 @@ func (r *contactRepository) Search(
 		var campaignsJSON []byte
 		var categoriesJSON []byte
 		var leadProgressJSON []byte
+		var outreachJSON []byte
 		var sortValue *string
 
 		if err := rows.Scan(
@@ -1815,7 +1837,7 @@ func (r *contactRepository) Search(
 			&c.VerificationStatus, &c.VerificationReason, &c.IsCatchAll, &c.VerificationCheckedAt,
 			&c.VerificationSource, &c.VerificationProvider, &c.VerificationSubStatus, &c.VerificationConfidence,
 			&c.VerificationRequestedAt, &c.MailHost, &c.ESPProvider,
-			&campaignsJSON, &categoriesJSON, &leadProgressJSON,
+			&campaignsJSON, &categoriesJSON, &leadProgressJSON, &outreachJSON,
 			&sortValue,
 		); err != nil {
 			db.CaptureError(err, "", nil, "scan")
@@ -1904,6 +1926,14 @@ func (r *contactRepository) Search(
 				LastActivityAt: lp.LastAt,
 				CurrentStep:    currentStep,
 				FailureReason:  failureReason,
+			}
+		}
+
+		c.Outreach = &models.ContactOutreach{}
+		if len(outreachJSON) > 0 {
+			if err := json.Unmarshal(outreachJSON, c.Outreach); err != nil {
+				errs.CaptureException(err)
+				return nil, errx.InternalError()
 			}
 		}
 

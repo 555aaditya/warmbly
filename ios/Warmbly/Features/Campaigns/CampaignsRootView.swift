@@ -15,6 +15,7 @@ struct CampaignsRootView: View {
     @State private var showCreate = false
     @State private var pendingDelete: Campaign?
     @State private var deleteError: String?
+    @State private var rowsShown = false
     @FocusState private var searchFocused: Bool
 
     private static let sidebarWidth: CGFloat = 300
@@ -38,7 +39,7 @@ struct CampaignsRootView: View {
                     mainPane
                         .scaleEffect(sidebarOpen ? 0.97 : 1, anchor: .trailing)
                     if sidebarOpen {
-                        Color.black.opacity(0.32)
+                        Color.black.opacity(0.28)
                             .ignoresSafeArea()
                             .transition(.opacity)
                             .onTapGesture { closeSidebar() }
@@ -47,7 +48,7 @@ struct CampaignsRootView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
-            .toolbarVisibility(sidebarOpen ? .hidden : .automatic, for: .tabBar)
+            .tabBarHidden(sidebarOpen)
             .navigationDestination(for: Campaign.self) { campaign in
                 CampaignDetailView(campaign: campaign)
             }
@@ -114,7 +115,20 @@ struct CampaignsRootView: View {
             scopeCaption
             list
         }
-        .background(Color(.systemBackground))
+        #if DEBUG
+        // Scripted debug runs can open the drawer (WARMBLY_DEBUG_DRAWER=1).
+        .onAppear {
+            if ProcessInfo.processInfo.environment["WARMBLY_DEBUG_DRAWER"] != nil { openSidebar() }
+        }
+        // WARMBLY_DEBUG_CAMPAIGN opens the campaign whose name contains it.
+        .onChange(of: store.hasLoaded) { _, loaded in
+            guard loaded, path.isEmpty, let match = ProcessInfo.processInfo.environment["WARMBLY_DEBUG_CAMPAIGN"],
+                  let campaign = store.campaigns.first(where: { $0.name.localizedCaseInsensitiveContains(match) }) ?? store.campaigns.first
+            else { return }
+            path.append(campaign)
+        }
+        #endif
+        .background(WTheme.canvas)
         .simultaneousGesture(
             DragGesture(minimumDistance: 25)
                 .onEnded { value in
@@ -126,109 +140,46 @@ struct CampaignsRootView: View {
         )
     }
 
-    // MARK: Search pill
+    // MARK: Header
 
     private var searchBar: some View {
         @Bindable var store = store
-        return HStack(spacing: 10) {
-            HStack(spacing: 6) {
-                Button {
-                    openSidebar()
-                } label: {
-                    Image(systemName: "line.3.horizontal")
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .frame(width: 38, height: 38)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Open campaigns menu")
-
-                TextField("Search campaigns", text: $store.query)
-                    .font(.subheadline)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.search)
-                    .focused($searchFocused)
-
-                if !store.query.isEmpty {
-                    Button {
-                        store.query = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 16))
-                            .foregroundStyle(.tertiary)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Clear search")
-                }
-                PresenceAvatars()
-                    .padding(.trailing, 8)
-            }
-            .frame(height: 44)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-
+        return GlassHeaderBar(
+            title: store.scope.title,
+            subtitle: subtitle,
+            query: $store.query,
+            searchPrompt: "Search campaigns",
+            searchFocused: $searchFocused,
+            menuLabel: "Open campaigns menu",
+            onMenu: openSidebar
+        ) {
             if canManage {
-                Button {
-                    showCreate = true
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .frame(width: 44, height: 44)
-                        .background(Color(.secondarySystemBackground), in: Circle())
-                }
-                .buttonStyle(TapScaleStyle())
-                .accessibilityLabel("New campaign")
+                HeaderPrimaryButton(symbol: "plus", label: "New campaign") { showCreate = true }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 4)
-        .padding(.bottom, 6)
     }
 
-    // MARK: Scope caption
+    /// "2 campaigns · 1 sending", the live count in green.
+    private var subtitle: Text? {
+        guard let count = store.totalCount else { return nil }
+        let total = Text("\(WFormat.compact(count)) campaign\(count == 1 ? "" : "s")")
+        guard store.scope == .all, store.runningCount > 0 else { return total }
+        let sending = Text("\(WFormat.compact(store.runningCount)) sending").foregroundStyle(WTheme.positive).fontWeight(.semibold)
+        return Text("\(total)  ·  \(sending)")
+    }
 
+    @ViewBuilder
     private var scopeCaption: some View {
-        HStack(spacing: 6) {
-            Text(store.isSearching ? "SEARCH RESULTS" : store.scope.title.uppercased())
-                .font(.caption.weight(.semibold))
-                .tracking(0.9)
-                .foregroundStyle(.secondary)
-            if !store.isSearching, let count = store.totalCount, count > 0 {
-                Text(WFormat.compact(count))
-                    .font(.caption.weight(.semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(.tertiary)
-                    .contentTransition(.numericText())
-            }
-            Spacer()
-            if store.isSearching {
-                if store.hasLoaded, let count = store.totalCount {
-                    Text("\(count) found")
-                        .font(.caption.weight(.semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                        .contentTransition(.numericText())
-                }
-            } else if store.scope == .all, store.runningCount > 0 {
-                Text("\(WFormat.compact(store.runningCount)) sending")
-                    .font(.caption.weight(.semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(WTheme.positive)
-                    .contentTransition(.numericText())
-            }
+        if store.isSearching, store.hasLoaded {
+            SearchResultsLine(count: store.totalCount ?? store.campaigns.count)
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 8)
-        .padding(.bottom, 2)
     }
 
     // MARK: List
 
     @ViewBuilder
     private var list: some View {
-        if store.isLoading, !store.hasLoaded {
+        if !store.hasLoaded, store.errorMessage == nil {
             ScrollView { SkeletonRows(rows: 10) }
         } else if let error = store.errorMessage, store.campaigns.isEmpty {
             ErrorStateView(title: "Couldn't load campaigns", message: error) {
@@ -238,20 +189,22 @@ struct CampaignsRootView: View {
             emptyState
         } else {
             List {
-                ForEach(store.campaigns) { campaign in
+                ForEach(Array(store.sortedCampaigns.enumerated()), id: \.element.id) { index, campaign in
                     row(campaign)
+                        .reveal(rowsShown, min(index, 8))
                 }
                 if store.hasMore {
                     HStack(spacing: 8) {
                         Spacer()
                         ProgressView().controlSize(.small)
-                        Text("Loading more…")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                        Text("Loading more")
+                            .font(WFont.meta(11.5))
+                            .foregroundStyle(WTheme.inkTertiary)
                         Spacer()
                     }
                     .padding(.vertical, 6)
                     .listRowSeparator(.hidden)
+                    .listRowBackground(WTheme.canvas)
                     .onAppear {
                         Task { await store.loadMore(env.api) }
                     }
@@ -260,7 +213,9 @@ struct CampaignsRootView: View {
                 }
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
             .scrollDismissesKeyboard(.immediately)
+            .onAppear { rowsShown = true }
             .refreshable { await store.load(env.api) }
         }
     }
@@ -271,36 +226,39 @@ struct CampaignsRootView: View {
         return HStack {
             Spacer()
             Text("\(count) campaign\(count == 1 ? "" : "s")")
-                .font(.footnote)
+                .font(.system(size: 13))
                 .monospacedDigit()
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(WTheme.inkTertiary)
             Spacer()
         }
-        .padding(.vertical, 10)
+        .padding(.top, 14)
+        .padding(.bottom, 90)
         .listRowSeparator(.hidden)
+        .listRowBackground(WTheme.canvas)
     }
 
     @ViewBuilder
     private var emptyState: some View {
         if store.isSearching {
-            EmptyStateView(title: "No matching campaigns", message: "Try a different search.")
+            EmptyStateView(title: "No matching campaigns", message: "Try a different search.", symbol: "magnifyingglass")
         } else {
             switch store.scope {
             case .running:
-                EmptyStateView(title: "Nothing is sending", message: "Start a campaign and it shows up here.")
+                EmptyStateView(title: "Nothing is sending", message: "Start a campaign and it shows up here.", symbol: "paperplane")
             case .paused:
-                EmptyStateView(title: "Nothing paused", message: "Paused campaigns show up here.")
+                EmptyStateView(title: "Nothing paused", message: "Paused campaigns show up here.", symbol: "pause")
             case .draft:
-                EmptyStateView(title: "No drafts", message: "Campaigns that haven't started yet show up here.")
+                EmptyStateView(title: "No drafts", message: "Campaigns that haven't started yet show up here.", symbol: "doc.text")
             case .finished:
-                EmptyStateView(title: "Nothing finished yet", message: "Completed campaigns show up here.")
+                EmptyStateView(title: "Nothing finished yet", message: "Completed campaigns show up here.", symbol: "checkmark")
             case .folder:
-                EmptyStateView(title: "Folder is empty", message: "File campaigns into this folder on the web dashboard.")
+                EmptyStateView(title: "Folder is empty", message: "File campaigns into this folder on the web dashboard.", symbol: "folder")
             case .all:
                 if canManage {
                     EmptyStateView(
                         title: "No campaigns yet",
                         message: "Create a campaign here, then finish steps and senders on the web dashboard.",
+                        symbol: "paperplane",
                         ctaTitle: "New campaign"
                     ) {
                         showCreate = true
@@ -308,7 +266,8 @@ struct CampaignsRootView: View {
                 } else {
                     EmptyStateView(
                         title: "No campaigns yet",
-                        message: "Campaigns your team creates will show up here."
+                        message: "Campaigns your team creates will show up here.",
+                        symbol: "paperplane"
                     )
                 }
             }
@@ -323,9 +282,10 @@ struct CampaignsRootView: View {
         } label: {
             rowLabel(campaign)
         }
-        .buttonStyle(.plain)
-        .listRowBackground(Color(.systemBackground))
-        .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 16))
+        .buttonStyle(TapScaleStyle())
+        .listRowBackground(WTheme.canvas)
+        .listRowSeparatorTint(WTheme.hairline)
+        .listRowInsets(EdgeInsets(top: 4, leading: 18, bottom: 4, trailing: 18))
         .contextMenu {
             if canSend, let action = quickAction(campaign) {
                 Button {
@@ -374,100 +334,103 @@ struct CampaignsRootView: View {
         return nil
     }
 
+    /// Name and status, how far through its leads it is, then results.
     private func rowLabel(_ campaign: Campaign) -> some View {
         let info = campaign.statusInfo
         let viewers = env.realtime.presence.viewers(of: "campaign:\(campaign.id)", excluding: env.session.user?.id)
-        return HStack(alignment: .top, spacing: 12) {
-            statusAvatar(campaign, info: info, viewers: viewers)
-            VStack(alignment: .leading, spacing: 2.5) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(campaign.name)
-                        .font(.body.weight(.medium))
-                        .lineLimit(1)
-                    Spacer(minLength: 4)
-                    if let created = campaign.createdAt {
-                        Text(WFormat.relative(created))
-                            .font(.footnote)
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    }
+        let stats = store.rowStats[campaign.id]
+        let leads = store.progress[campaign.id]
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 8) {
+                Text(campaign.name)
+                    .font(.system(size: 16.5, weight: .semibold))
+                    .tracking(-0.2)
+                    .foregroundStyle(WTheme.ink)
+                    .lineLimit(1)
+                if !viewers.isEmpty {
+                    Circle()
+                        .fill(viewers.contains { $0.primary?.action == "editing" } ? WTheme.presenceEditing : WTheme.presenceViewing)
+                        .frame(width: 7, height: 7)
+                        .accessibilityLabel("A teammate is here")
                 }
-                secondaryLine(campaign)
-                HStack(spacing: 6) {
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(info.tone.color)
-                            .frame(width: 6, height: 6)
-                            .modifier(PingEffect(active: info.isLive, color: info.tone.color))
-                        Text(info.label)
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(info.tone.color)
-                    }
-                    Text("·")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                    Text("\(campaign.dailyLimit ?? 50)/day")
-                        .font(.caption)
-                        .monospacedDigit()
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.top, 1)
+                Spacer(minLength: 6)
+                statusCapsule(info)
             }
+            // Late-arriving data swaps a line: the old one leaves at once so
+            // the two never overlap mid-fade.
+            if let leads, let progress = leads.progress {
+                progressBlock(progress, leads: leads, info: info)
+                    .transition(Self.swap)
+            } else if campaign.description?.isEmpty == false {
+                Text(campaign.description ?? "")
+                    .font(.system(size: 14))
+                    .foregroundStyle(WTheme.inkSecondary)
+                    .lineLimit(1)
+                    .transition(Self.swap)
+            }
+            Group {
+                if let stats, stats.sent > 0 {
+                    HStack(spacing: 6) {
+                        Text("\(Text(WFormat.compact(stats.sent)).foregroundStyle(WTheme.ink).fontWeight(.semibold)) sent")
+                        Text("·")
+                        Text("\(Text(rate(stats.opened, of: stats.sent)).foregroundStyle(WTheme.special).fontWeight(.semibold)) opened")
+                        Text("·")
+                        Text("\(Text(rate(stats.replied, of: stats.sent)).foregroundStyle(WTheme.positive).fontWeight(.semibold)) replied")
+                    }
+                    .transition(Self.swap)
+                } else {
+                    HStack(spacing: 6) {
+                        Text(leads?.total ?? 0 > 0 ? "No sends yet" : "No leads yet")
+                        Text("·")
+                        Text("\(campaign.dailyLimit ?? 50) a day")
+                    }
+                    .transition(Self.swap)
+                }
+            }
+            .font(.system(size: 13))
+            .monospacedDigit()
+            .foregroundStyle(WTheme.inkSecondary)
+            .lineLimit(1)
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 10)
         .contentShape(Rectangle())
     }
 
-    /// Status-toned disc in the avatar slot; a presence dot appears when a
-    /// teammate is on this campaign, like the unibox thread rows.
-    private func statusAvatar(_ campaign: Campaign, info: CampaignStatusInfo, viewers: [PresenceMember]) -> some View {
-        ZStack {
-            Circle().fill(info.tone.background)
-            Image(systemName: statusSymbol(campaign))
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(info.tone.color)
-        }
-        .frame(width: 44, height: 44)
-        .overlay(alignment: .topTrailing) {
-            if !viewers.isEmpty {
-                Circle()
-                    .fill(viewers.contains { $0.primary?.action == "editing" } ? WTheme.presenceEditing : WTheme.presenceViewing)
-                    .frame(width: 10, height: 10)
-                    .overlay(Circle().strokeBorder(Color(.systemBackground), lineWidth: 1.5))
-                    .offset(x: 1, y: -1)
+    private static let swap = AnyTransition.asymmetric(insertion: .opacity, removal: .identity)
+
+    private func statusCapsule(_ info: CampaignStatusInfo) -> some View {
+        HStack(spacing: 5) {
+            if info.isLive {
+                LiveDot(color: info.tone.color, size: 6)
             }
+            Text(info.label.prefix(1).uppercased() + info.label.dropFirst())
+                .font(.system(size: 12.5, weight: .semibold))
         }
+        .foregroundStyle(info.tone.color)
+        .padding(.horizontal, 9)
+        .frame(height: 24)
+        .background(info.tone.color.opacity(0.12), in: Capsule())
     }
 
-    /// Status-shaped symbol; the disc's tone carries the color.
-    private func statusSymbol(_ campaign: Campaign) -> String {
-        switch campaign.statusBucket {
-        case .running: "paperplane.fill"
-        case .paused: "pause.fill"
-        case .finished: "checkmark"
-        case .draft: "doc.text.fill"
-        }
+    private func rate(_ part: Int, of total: Int) -> String {
+        guard total > 0 else { return "0%" }
+        return "\(Int((Double(part) / Double(total) * 100).rounded()))%"
     }
 
-    @ViewBuilder
-    private func secondaryLine(_ campaign: Campaign) -> some View {
-        if let stats = store.rowStats[campaign.id] {
-            Text("\(WFormat.compact(stats.sent)) sent · \(WFormat.compact(stats.opened)) open\(stats.opened == 1 ? "" : "s") · \(WFormat.compact(stats.replied)) \(stats.replied == 1 ? "reply" : "replies")")
-                .font(.subheadline)
-                .monospacedDigit()
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .contentTransition(.numericText())
-        } else if let description = campaign.description, !description.isEmpty {
-            Text(description)
-                .font(.subheadline)
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-        } else {
-            Text("No sends yet")
-                .font(.subheadline)
-                .foregroundStyle(.tertiary)
+    /// "72% done" with a bar in the status tone and the lead count behind it.
+    private func progressBlock(_ progress: Double, leads: CampaignLeadCounts, info: CampaignStatusInfo) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                CampaignPercentText(progress: progress)
+                Spacer(minLength: 6)
+                Text("\(WFormat.compact(leads.finished)) of \(WFormat.compact(leads.total ?? 0)) leads")
+                    .font(.system(size: 12.5))
+                    .monospacedDigit()
+                    .foregroundStyle(WTheme.inkTertiary)
+            }
+            CampaignProgressBar(progress: progress, tone: info.tone.color, live: info.isLive)
         }
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: Drawer
@@ -489,9 +452,12 @@ struct CampaignsRootView: View {
         }
         .frame(width: Self.sidebarWidth)
         .frame(maxHeight: .infinity)
-        .background(Color(.systemBackground))
+        .background(WTheme.canvas)
         .clipShape(UnevenRoundedRectangle(bottomTrailingRadius: 26, topTrailingRadius: 26, style: .continuous))
-        .shadow(color: .black.opacity(sidebarOpen ? 0.22 : 0), radius: 30, x: 6, y: 0)
+        .overlay(
+            UnevenRoundedRectangle(bottomTrailingRadius: 26, topTrailingRadius: 26, style: .continuous)
+                .strokeBorder(WTheme.hairlineStrong, lineWidth: 1)
+        )
         .ignoresSafeArea()
         .offset(x: drawerOffset)
         .gesture(

@@ -7,6 +7,7 @@ import SwiftUI
 struct UniboxRootView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var store = UniboxStore()
+    @State private var rail = UniboxRailStore()
     @State private var path: [UniboxRoute] = []
     @State private var sidebarOpen = false
     @State private var sidebarDrag: CGFloat = 0
@@ -21,7 +22,7 @@ struct UniboxRootView: View {
     @State private var undoSend: ComposeUndoSend?
     @FocusState private var searchFocused: Bool
 
-    private static let sidebarWidth: CGFloat = 300
+    private static let sidebarWidth: CGFloat = 320
 
     private var inSelectionMode: Bool { !selectedIDs.isEmpty }
     private var canAct: Bool { env.session.can(.accessUnibox) }
@@ -35,7 +36,7 @@ struct UniboxRootView: View {
                     mainPane
                         .scaleEffect(sidebarOpen ? 0.97 : 1, anchor: .trailing)
                     if sidebarOpen {
-                        Color.black.opacity(0.32)
+                        Color.black.opacity(0.24)
                             .ignoresSafeArea()
                             .transition(.opacity)
                             .onTapGesture { closeSidebar() }
@@ -44,7 +45,7 @@ struct UniboxRootView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
-            .toolbarVisibility(sidebarOpen ? .hidden : .automatic, for: .tabBar)
+            .tabBarHidden(sidebarOpen)
             .navigationDestination(for: UniboxRoute.self) { route in
                 switch route {
                 case let .thread(thread, reply): UniboxThreadView(thread: thread, openComposerOnAppear: reply)
@@ -63,6 +64,7 @@ struct UniboxRootView: View {
                 try? await Task.sleep(for: .milliseconds(350))
             }
             guard !Task.isCancelled else { return }
+            Task { await rail.load(env.api, owner: "\(env.session.user?.id ?? ""):\(env.session.currentOrgID ?? "")") }
             await store.load(env.api, badges: env.badges)
         }
         .onChange(of: store.scope) {
@@ -73,6 +75,18 @@ struct UniboxRootView: View {
         .onChange(of: env.realtime.pulse(for: .unibox)) {
             Task { await store.load(env.api, badges: env.badges) }
         }
+        #if DEBUG
+        // Scripted debug runs can open the drawer (WARMBLY_DEBUG_DRAWER=1).
+        .onAppear {
+            if ProcessInfo.processInfo.environment["WARMBLY_DEBUG_DRAWER"] != nil { openSidebar() }
+        }
+        // WARMBLY_DEBUG_THREAD=1 opens the newest conversation once the list loads.
+        .onChange(of: store.messages.first?.id) {
+            guard path.isEmpty, ProcessInfo.processInfo.environment["WARMBLY_DEBUG_THREAD"] != nil,
+                  let first = store.messages.first else { return }
+            path.append(.thread(threadValue(first), reply: false))
+        }
+        #endif
         .sensoryFeedback(.impact(weight: .light), trigger: sidebarOpen)
         .sensoryFeedback(.selection, trigger: selectedIDs.count)
         .sensoryFeedback(.selection, trigger: store.scope)
@@ -125,21 +139,19 @@ struct UniboxRootView: View {
             list
         }
         .animation(.snappy, value: searchFocused)
-        .background(Color(.systemBackground))
-        .overlay(alignment: .bottomTrailing) {
-            if canCompose, !inSelectionMode {
-                composeFAB
-            }
+        .background(WTheme.canvas)
+        .tabBarAction("Compose email", symbol: "square.and.pencil", enabled: canCompose && !inSelectionMode) {
+            composeItem = ComposeSheetItem(id: UUID().uuidString, draft: nil)
         }
         .overlay(alignment: .bottom) {
             VStack(spacing: 8) {
                 if let toast {
                     Text(toast)
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 9)
-                        .background(.black.opacity(0.82), in: Capsule())
+                        .font(.system(size: 13.5, weight: .medium))
+                        .foregroundStyle(WTheme.inkInverse)
+                        .padding(.horizontal, 16)
+                        .frame(height: 38)
+                        .background(WTheme.ink, in: Capsule())
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
                 if let undoSend {
@@ -164,25 +176,6 @@ struct UniboxRootView: View {
         )
     }
 
-    /// Gmail-style compose FAB: opens a fresh compose window.
-    private var composeFAB: some View {
-        Button {
-            composeItem = ComposeSheetItem(id: UUID().uuidString, draft: nil)
-        } label: {
-            Image(systemName: "square.and.pencil")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 56, height: 56)
-                .background(WTheme.accent, in: Circle())
-                .shadow(color: WTheme.accent.opacity(0.35), radius: 12, y: 5)
-        }
-        .buttonStyle(TapScaleStyle())
-        .padding(.trailing, 18)
-        .padding(.bottom, 18)
-        .accessibilityLabel("Compose email")
-        .transition(.scale(scale: 0.6).combined(with: .opacity))
-    }
-
     // MARK: Top bar
 
     @ViewBuilder
@@ -198,48 +191,21 @@ struct UniboxRootView: View {
 
     private var searchBar: some View {
         @Bindable var store = store
-        return HStack(spacing: 10) {
-            HStack(spacing: 6) {
-                Button {
-                    openSidebar()
-                } label: {
-                    Image(systemName: "line.3.horizontal")
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .frame(width: 38, height: 38)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Open inbox menu")
-
-                TextField("Search in emails", text: $store.query)
-                    .font(.subheadline)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.search)
-                    .focused($searchFocused)
-
-                if !store.query.isEmpty {
-                    Button {
-                        store.query = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 16))
-                            .foregroundStyle(.tertiary)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Clear search")
-                }
-                PresenceAvatars()
-                    .padding(.trailing, 8)
-            }
-            .frame(height: 44)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        return GlassHeaderBar(
+            title: scopeTitle,
+            subtitle: store.unreadCount > 0
+                ? Text("\(Text(WFormat.compact(store.unreadCount)).foregroundStyle(WTheme.accent).fontWeight(.semibold)) unread")
+                : Text("All caught up"),
+            query: $store.query,
+            searchPrompt: "Search \(scopeTitle.lowercased())",
+            searchFocused: $searchFocused,
+            menuLabel: "Open inbox menu"
+        ) {
+            openSidebar()
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 4)
-        .padding(.bottom, 6)
     }
+
+    private var scopeTitle: String { store.scope.title }
 
     private var selectionBar: some View {
         HStack(spacing: 4) {
@@ -254,10 +220,15 @@ struct UniboxRootView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Exit selection")
 
-            Text("\(selectedIDs.count)")
-                .font(.title3.weight(.semibold))
-                .monospacedDigit()
-                .contentTransition(.numericText())
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("\(selectedIDs.count)")
+                    .displayFont(22)
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+                Text("selected")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(WTheme.inkTertiary)
+            }
 
             Spacer()
 
@@ -318,69 +289,26 @@ struct UniboxRootView: View {
             }
             .accessibilityLabel("More actions")
         }
-        .foregroundStyle(.primary)
+        .foregroundStyle(WTheme.ink)
         .padding(.horizontal, 12)
         .frame(height: 54)
-        .background(Tone.sky.background)
+        .background(WTheme.canvas)
+        .overlay(alignment: .bottom) { Hairline() }
     }
 
+    /// Under the search field while searching: how many results matched.
+    @ViewBuilder
     private var scopeCaption: some View {
-        HStack(spacing: 6) {
-            Text(scopeCaptionTitle)
-                .font(.caption.weight(.semibold))
-                .tracking(0.9)
-                .foregroundStyle(.secondary)
-            if !store.isSearching, let count = scopeCount, count > 0 {
-                Text(WFormat.compact(count))
-                    .font(.caption.weight(.semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(.tertiary)
-                    .contentTransition(.numericText())
-            }
-            Spacer()
-            if store.isSearching {
-                if store.hasLoaded {
-                    Text("\(store.messages.count)\(store.hasMore ? "+" : "") result\(store.messages.count == 1 ? "" : "s")")
-                        .font(.caption.weight(.semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                        .contentTransition(.numericText())
-                }
-            } else if store.unreadCount > 0 {
-                Text("\(WFormat.compact(store.unreadCount)) unread")
-                    .font(.caption.weight(.semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(WTheme.negative)
-                    .contentTransition(.numericText())
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.top, 8)
-        .padding(.bottom, 2)
-    }
-
-    private var scopeCaptionTitle: String {
-        if store.isSearching { return "SEARCH RESULTS" }
-        switch store.scope {
-        case .all: return "ALL INBOXES"
-        default: return store.scope.title.uppercased()
-        }
-    }
-
-    /// The current view's total, from the overview where it knows the scope;
-    /// otherwise the loaded count.
-    private var scopeCount: Int? {
-        switch store.scope {
-        case .all: return store.allCount
-        case .unread: return store.unreadCount
-        case .today: return store.todayCount
-        case .week: return store.weekCount
-        case .awaiting: return store.awaitingCount
-        case .snoozed: return store.snoozedCount
-        case .scheduled: return store.scheduledCount
-        case let .mailbox(id, _): return store.mailboxes.first { $0.id == id }?.total
-        case let .category(id, _, _): return store.categories.first { $0.id == id }?.total
-        case .uncategorized: return store.hasLoaded ? store.messages.count : nil
+        if store.isSearching, store.hasLoaded {
+            Text("\(store.messages.count)\(store.hasMore ? "+" : "") \(store.messages.count == 1 ? "result" : "results")")
+                .font(.system(size: 13.5, weight: .medium))
+                .monospacedDigit()
+                .foregroundStyle(WTheme.inkSecondary)
+                .contentTransition(.numericText())
+                .padding(.horizontal, 20)
+                .padding(.top, 4)
+                .padding(.bottom, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -417,12 +345,12 @@ struct UniboxRootView: View {
             store.query = query
         } label: {
             Text(token)
-                .font(.footnote.weight(.medium))
-                .monospaced()
-                .foregroundStyle(WTheme.accent)
+                .font(.system(size: 13.5, weight: .medium))
+                .foregroundStyle(WTheme.inkSecondary)
                 .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(Tone.sky.background, in: Capsule())
+                .frame(height: 28)
+                .background(WTheme.raised, in: Capsule())
+                .overlay(Capsule().strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
         }
         .buttonStyle(TapScaleStyle())
     }
@@ -449,18 +377,21 @@ struct UniboxRootView: View {
                         Spacer()
                         ProgressView().controlSize(.small)
                         Text("Loading more…")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: 13))
+                            .foregroundStyle(WTheme.inkSecondary)
                         Spacer()
                     }
                     .padding(.vertical, 6)
                     .listRowSeparator(.hidden)
+                    .listRowBackground(WTheme.canvas)
                     .onAppear { Task { await store.loadMore(env.api) } }
                 } else {
                     endMarker
                 }
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(WTheme.canvas)
             .scrollDismissesKeyboard(.immediately)
             .refreshable { await store.load(env.api, badges: env.badges) }
         }
@@ -473,13 +404,15 @@ struct UniboxRootView: View {
         return HStack {
             Spacer()
             Text("\(count) \(noun)\(count == 1 ? "" : "s")")
-                .font(.footnote)
+                .font(.system(size: 13))
                 .monospacedDigit()
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(WTheme.inkTertiary)
             Spacer()
         }
-        .padding(.vertical, 10)
+        .padding(.top, 14)
+        .padding(.bottom, 90)
         .listRowSeparator(.hidden)
+        .listRowBackground(WTheme.canvas)
     }
 
     @ViewBuilder
@@ -516,8 +449,9 @@ struct UniboxRootView: View {
             rowLabel(message, selected: selected, viewers: viewers)
         }
         .buttonStyle(.plain)
-        .listRowBackground(selected ? Tone.sky.background : Color(.systemBackground))
-        .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 16))
+        .listRowBackground(selected ? WTheme.fill : WTheme.canvas)
+        .listRowSeparatorTint(WTheme.hairline)
+        .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 18))
         .contextMenu {
             if canAct {
                 Button {
@@ -575,7 +509,7 @@ struct UniboxRootView: View {
     }
 
     /// True when the thread's latest message went out from one of the org's
-    /// own mailboxes — the row then names the counterparty and marks the
+    /// own mailboxes: the row then names the counterparty and marks the
     /// snippet "You:", like Gmail's "Me".
     private func isFromMe(_ message: UniboxMessage) -> Bool {
         let sender = message.senderBare.lowercased()
@@ -593,39 +527,40 @@ struct UniboxRootView: View {
             VStack(alignment: .leading, spacing: 2.5) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(displayName)
-                        .font(.body.weight(message.isUnread ? .semibold : .medium))
+                        .font(.system(size: 15.5, weight: message.isUnread ? .semibold : .medium))
+                        .foregroundStyle(WTheme.ink)
                         .lineLimit(1)
                     Spacer(minLength: 4)
                     Text(UniboxFormat.listTime(message.internalDate))
-                        .font(.footnote.weight(message.isUnread ? .semibold : .regular))
+                        .font(.system(size: 13, weight: message.isUnread ? .semibold : .regular))
                         .monospacedDigit()
-                        .foregroundStyle(message.isUnread ? WTheme.negative : .secondary)
+                        .foregroundStyle(message.isUnread ? WTheme.ink : WTheme.inkTertiary)
                 }
                 HStack(alignment: .top, spacing: 8) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(message.subject?.isEmpty == false ? (message.subject ?? "") : "(no subject)")
-                            .font(.subheadline.weight(message.isUnread ? .medium : .regular))
-                            .foregroundStyle(message.isUnread ? Color.primary : .secondary)
+                            .font(.system(size: 14.5, weight: message.isUnread ? .medium : .regular))
+                            .foregroundStyle(message.isUnread ? WTheme.ink : WTheme.inkSecondary)
                             .lineLimit(1)
                         if let snippet = message.snippet, !snippet.isEmpty {
                             HStack(alignment: .top, spacing: 4) {
                                 if fromMe {
                                     Image(systemName: "arrowshape.turn.up.left.fill")
-                                        .font(.system(size: 9, weight: .semibold))
-                                        .foregroundStyle(.tertiary)
+                                        .font(.system(size: 9, weight: .medium))
+                                        .foregroundStyle(WTheme.inkTertiary)
                                         .padding(.top, 4)
                                 }
                                 Text(fromMe ? "You: \(snippet)" : snippet)
-                                    .font(.subheadline)
-                                    .foregroundStyle(.tertiary)
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(WTheme.inkTertiary)
                                     .lineLimit(2)
                             }
                         }
                     }
                     if message.isUnread {
                         Circle()
-                            .fill(WTheme.negative)
-                            .frame(width: 8, height: 8)
+                            .fill(WTheme.accent)
+                            .frame(width: 7, height: 7)
                             .padding(.top, 6)
                     }
                 }
@@ -651,11 +586,11 @@ struct UniboxRootView: View {
         ZStack {
             if selected {
                 Circle()
-                    .fill(WTheme.accent)
+                    .fill(WTheme.ink)
                     .frame(width: 44, height: 44)
                 Image(systemName: "checkmark")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(.white)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(WTheme.inkInverse)
             } else {
                 WAvatar(name: name, seed: seed, size: 44)
                     .overlay(alignment: .topTrailing) {
@@ -667,13 +602,13 @@ struct UniboxRootView: View {
                     .overlay(alignment: .bottomTrailing) {
                         if let count = message.messageCount, count > 1 {
                             Text("\(count)")
-                                .font(.system(size: 10, weight: .bold))
+                                .font(.system(size: 10.5, weight: .semibold, design: .rounded))
                                 .monospacedDigit()
-                                .foregroundStyle(.white)
+                                .foregroundStyle(WTheme.ink)
                                 .padding(.horizontal, 4.5)
-                                .frame(minWidth: 17, minHeight: 17)
-                                .background(Color(.systemGray), in: Capsule())
-                                .overlay(Capsule().strokeBorder(Color(.systemBackground), lineWidth: 1.5))
+                                .frame(minWidth: 18, minHeight: 18)
+                                .background(WTheme.raised, in: Capsule())
+                                .overlay(Capsule().strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
                                 .offset(x: 4, y: 3)
                         }
                     }
@@ -690,7 +625,7 @@ struct UniboxRootView: View {
         Circle()
             .fill(replying ? WTheme.warning : WTheme.positive)
             .frame(width: 10, height: 10)
-            .overlay(Circle().strokeBorder(Color(.systemBackground), lineWidth: 1.5))
+            .overlay(Circle().strokeBorder(WTheme.canvas, lineWidth: 1.5))
             .modifier(PingEffect(active: true, color: replying ? WTheme.warning : WTheme.positive))
     }
 
@@ -704,17 +639,18 @@ struct UniboxRootView: View {
                         .fill(Color(uniboxHex: label.color) ?? WTheme.accent)
                         .frame(width: 6, height: 6)
                     Text(label.title ?? "")
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(WTheme.inkSecondary)
                 }
                 .padding(.horizontal, 7)
-                .padding(.vertical, 2.5)
-                .background(Tone.slate.background, in: Capsule())
+                .frame(height: 20)
+                .background(WTheme.raised, in: Capsule())
+                .overlay(Capsule().strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
             }
             if labels.count > 3 {
                 Text("+\(labels.count - 3)")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(WTheme.inkTertiary)
             }
         }
         .padding(.top, 2)
@@ -761,7 +697,16 @@ struct UniboxRootView: View {
     }
 
     private func drawer(topInset: CGFloat) -> some View {
-        UniboxSidebar(store: store, labels: drawerLabels, selection: store.scope, topInset: topInset, revealed: sidebarOpen) { scope in
+        UniboxSidebar(
+            store: store,
+            rail: rail,
+            labels: drawerLabels,
+            selection: store.scope,
+            topInset: topInset,
+            revealed: sidebarOpen,
+            canCompose: canCompose,
+            canMarkRead: canAct
+        ) { scope in
             withAnimation(.spring(response: 0.38, dampingFraction: 0.8)) { store.scope = scope }
             // Let the highlight capsule slide to the tapped row before closing.
             Task {
@@ -777,9 +722,12 @@ struct UniboxRootView: View {
         }
         .frame(width: Self.sidebarWidth)
         .frame(maxHeight: .infinity)
-        .background(Color(.systemBackground))
-        .clipShape(UnevenRoundedRectangle(bottomTrailingRadius: 26, topTrailingRadius: 26, style: .continuous))
-        .shadow(color: .black.opacity(sidebarOpen ? 0.22 : 0), radius: 30, x: 6, y: 0)
+        .background(WTheme.canvas)
+        .clipShape(UnevenRoundedRectangle(bottomTrailingRadius: 20, topTrailingRadius: 20, style: .continuous))
+        .overlay {
+            UnevenRoundedRectangle(bottomTrailingRadius: 20, topTrailingRadius: 20, style: .continuous)
+                .stroke(WTheme.hairlineStrong, lineWidth: 1)
+        }
         .ignoresSafeArea()
         .offset(x: drawerOffset)
         .gesture(

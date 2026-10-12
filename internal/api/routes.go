@@ -363,6 +363,15 @@ func Run(
 	// has typed. It gets its own per-IP budget so opening that page repeatedly
 	// cannot spend the allowance password sign-in, registration and reset all
 	// draw on. Finishing the ceremony is an attempt and stays on /auth below.
+	// The native app's App Attest handshake: a single-use challenge, and the
+	// once-per-install key registration that Apple's attestation authorises.
+	appAttestPublic := v1.Group("/auth/app-attest")
+	appAttestPublic.Use(m.AppAttestIPRateLimitMiddleware())
+	{
+		appAttestPublic.POST("/challenge", h.AppAttestChallenge)
+		appAttestPublic.POST("/keys", h.AppAttestRegisterKey)
+	}
+
 	passkeyPublic := v1.Group("/auth/passkey")
 	passkeyPublic.Use(m.PasskeyChallengeIPRateLimitMiddleware())
 	{
@@ -1825,6 +1834,8 @@ func Run(
 		adminRoutes.POST("/testers", middleware.RequireAdminPermission(models.AdminPermManageTesters), h.AdminCreateTester)
 		adminRoutes.POST("/organizations/:id/sample-data", middleware.RequireAdminPermission(models.AdminPermManageTesters), h.AdminSeedTesterWorkspace)
 		adminRoutes.DELETE("/testers/:id", middleware.RequireAdminPermission(models.AdminPermManageTesters), h.AdminRevokeTester)
+		// Removing a sign-in step from an account changes who can get in.
+		adminRoutes.PUT("/users/:id/login-code-exempt", middleware.RequireAdminPermission(models.AdminPermManageTesters), middleware.RequireFreshAuth(), h.AdminSetLoginCodeExempt)
 		adminRoutes.POST("/users/:id/ban", middleware.RequireAdminPermission(models.AdminPermBanUsers), h.AdminBanUser)
 		adminRoutes.POST("/users/:id/unban", middleware.RequireAdminPermission(models.AdminPermBanUsers), h.AdminUnbanUser)
 		adminRoutes.GET("/users/:id/bans", middleware.RequireAdminPermission(models.AdminPermViewUsers), h.AdminGetUserBans)

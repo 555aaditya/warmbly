@@ -344,8 +344,10 @@ struct OrgCounts: Codable, Sendable {
     var totalContacts: Int?
     var totalMembers: Int?
     var emailAccounts: Int?
+    var emailsSentToday: Int?
 
     enum CodingKeys: String, CodingKey {
+        case emailsSentToday = "emails_sent_today"
         case totalCampaigns = "total_campaigns"
         case activeCampaigns = "active_campaigns"
         case totalContacts = "total_contacts"

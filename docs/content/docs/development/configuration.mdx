@@ -148,6 +148,7 @@ TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12
 | `AUTH_IP_RATE_LIMIT` | Unauthenticated auth requests allowed per source IP per 15 minutes | `60` | yes |
 | `CLI_AUTH_IP_RATE_LIMIT` | CLI sign-in handshake requests allowed per source IP per 15 minutes. Its own budget, because one `warmbly auth login` polls around 200 times and must not exhaust the allowance above | `500` | yes |
 | `PASSKEY_IP_RATE_LIMIT` | Passkey login challenges allowed per source IP per 15 minutes. Its own budget, because the sign-in page asks for a challenge on load rather than when someone acts, so opening that page must not spend the allowance above. Finishing the ceremony is an authentication attempt and counts against `AUTH_IP_RATE_LIMIT` | `300` | yes |
+| `APP_ATTEST_IP_RATE_LIMIT` | Native app App Attest challenges and key registrations allowed per source IP per 15 minutes. Its own budget, because the app asks for a challenge before every protected call; the call the challenge is spent on counts against `AUTH_IP_RATE_LIMIT` | `300` | yes |
 | `PUBLIC_IP_RATE_LIMIT` | Requests allowed per source IP per 15 minutes on the remaining public routes: unsubscribe, invitation preview, fleet enrolment and the analytics proxy. Each carries its authorization in a high-entropy token, so this bounds unmetered writes and relayed bandwidth rather than guessing. Counts reads as well as writes, unlike the auth limiter | `600` | yes |
 | `WARMBLY_BOOTSTRAP_EMAIL` | First owner's address, read only while the users table is empty | unset | yes |
 | `WARMBLY_BOOTSTRAP_PASSWORD_HASH` | Argon2id PHC string for that owner, as `warmblyctl hash-password` prints it. Preferred over the plaintext form. A malformed hash, or one whose cost parameters are below `m=65536,t=3,p=2` with a 16-byte salt and 32-byte key, is refused and no owner is created | unset | yes |
@@ -160,7 +161,7 @@ TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Sign in with Google in the browser. Both are required; unrelated to the `BOX_GOOGLE_*` mailbox client. The same client carries a Google Workspace administrator's sign-in that [proves a domain](/development/whole-domain-connect/#proving-the-domain) for a whole-domain connect, asking only for `openid` and `email`; that sign-in signs nobody in | unset | yes |
 | `GOOGLE_REDIRECT_URI` | Redirect URI registered at Google. Served by the API, not the dashboard. An administrator's domain proof returns here too and is handed back to the dashboard window that opened it, so no second URI is registered | `API_PUBLIC_URL` plus `/v1/auth/google/callback` | yes |
 | `GOOGLE_IOS_CLIENT_ID` | Additional Google client id accepted from the iOS app. Native only: it does not enable the browser button | unset | yes |
-| `APPLE_APP_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_KEY_SECRET` | Sign in with Apple. `APPLE_APP_ID` is the Services ID | unset | yes |
+| `APPLE_APP_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_KEY_SECRET` | Sign in with Apple. `APPLE_APP_ID` is the Services ID; `APPLE_KEY_SECRET` is the `.p8` file as PEM or base64 (`base64 -i AuthKey_XXXX.p8` keeps it on one line) | unset | yes |
 | `APPLE_REDIRECT_URI` | Return URL registered at Apple. Must be HTTPS | `API_PUBLIC_URL` plus `/v1/auth/apple/callback` | yes |
 | `APPLE_IOS_BUNDLE_ID` | Bundle id accepted from the iOS app | `com.warmbly.app` | yes |
 | `OIDC_ISSUER_URL` | Generic OpenID Connect issuer. Discovery runs at boot | unset | yes |
@@ -202,11 +203,15 @@ The proxy forwards only what PostHog needs to read the request. Cookies and `Aut
 | `WARMBLY_CONFIG_OUT` | Where the dashboard and admin panel write their runtime `config.js`. Defaults to the path nginx serves; a static host sets it to the build output so the same script renders the file at build time instead of container start | the nginx path | yes (build or container start) |
 | `WARMBLY_CSP_CONNECT_ORIGINS` | Additional dashboard CSP connection origins, separated by spaces. Realtime is discovered automatically from the backend; use this as an offline fallback or for other connection destinations. Use exact HTTP(S) or WS(S) URLs, not wildcard hosts or CSP directives. `VITE_CSP_CONNECT_ORIGINS` supplies the build-time/development fallback | unset | yes (build or container start) |
 | `TURNSTILE_BYPASS_TOKEN` | A token that skips verification. Only honoured when `APP_ENV=dev` | unset | yes |
+| `APP_ATTEST_APP_IDS` | Comma-separated `<team id>.<bundle id>` App IDs whose App Attest proofs the backend accepts in place of a captcha. Unset with no `APPLE_TEAM_ID`, App Attest is off | `APPLE_TEAM_ID` + `.` + `APPLE_IOS_BUNDLE_ID` when `APPLE_TEAM_ID` is set | yes |
+| `APP_ATTEST_ALLOW_DEVELOPMENT` | Accept App Attest proofs from development-signed builds (an Xcode install on a device). Leave it off in production | `false` | yes |
 | `TURNSTILE_SITE_KEY` | The public Turnstile widget key. The backend hands it to the forms service, which renders it on hosted form pages that enable spam protection. The frontends carry their own copy in `WARMBLY_TURNSTILE_KEY` | unset | no (read per request) |
 
 `CAPTCHA_PROVIDER` has no constant default. Unset, it resolves to `turnstile` when `TURNSTILE_SECRET` holds a value, whether from the environment or from AWS Secrets Manager, and to `none` when it does not, so configuring the secret is what turns captcha on and clearing it is what turns captcha off. The panel reports the resolved value with source `derived`.
 
 Setting `CAPTCHA_PROVIDER=turnstile` explicitly while `TURNSTILE_SECRET` is empty is the one combination that breaks: every verification fails, which means nobody can sign in. Set the secret or set the provider back to `none`.
+
+The native iOS app never renders Turnstile. It proves it is a genuine copy of the app with Apple [App Attest](/api/reference/account-org/#app-attest-native-apps), which stands in for the captcha on sign-in, registration and password reset. With `CAPTCHA_PROVIDER=none` the app sends nothing. With Turnstile on, the app offers email and password sign-in only when `APP_ATTEST_APP_IDS` names its App ID; otherwise it offers Sign in with Apple, Google and passkeys, which never need a captcha. A self-hosted instance that runs Turnstile and wants the iOS app to sign in with a password sets `APP_ATTEST_APP_IDS` to the iOS app's App ID. Verification needs no Apple account and makes no outbound call: it checks against Apple's App Attest root certificate, which ships in the binary. Each install's key is stored in the `app_attest_keys` table, which belongs to the instance and is not part of a [workspace export](/guides/workspace-export-import/). The iOS simulator cannot use App Attest, so local development keeps using `TURNSTILE_BYPASS_TOKEN`.
 
 ## Platform mail
 
@@ -533,7 +538,7 @@ Before giving assessors access:
 - Set the assessment frontend's `WARMBLY_API_URL` to the shared API, and use an exact `WARMBLY_APP_URL` origin without a trailing slash.
 - Allow the assessment hostname on the existing Cloudflare Turnstile widget. A widget restricted to `app.warmbly.com` does not cover its sibling assessment hostname. Keep CAPTCHA enabled.
 - Append the assessment origin to the realtime service's `CHECK_ORIGIN_HOSTS`, preserving its existing origins. The API origin allowlist does not configure websocket origin checks.
-- For password-only assessor accounts, use **Admin > Testers**. These accounts are exempt from the emailed login-code step, but still use CAPTCHA and existing permission checks. Accounts with 2FA enabled still need their second factor.
+- For password-only assessor accounts, use **Admin > Testers**, or turn on **Skip emailed sign-in code** on an existing account's page under **Users**. These accounts are exempt from the emailed login-code step, but still use CAPTCHA and existing permission checks. Accounts with 2FA enabled still need their second factor.
 - Keep the existing `WEBAUTHN_RP_ID` unchanged. An `app.warmbly.com` passkey RP ID cannot serve a sibling assessment hostname, and changing it invalidates existing credentials. Reviewers can use email/password; passkey support across both hosts needs a separate migration decision.
 
 This is not a global rewrite of every primary-dashboard link. Dashboard Google/Apple/OIDC login remains primary-dashboard routed; assessment reviewers should use email/password. Server-generated notifications, Slack-launched links, CLI/bootstrap links and self-hosted Cloud broker returns retain their canonical instance routing. Cloud broker return origins remain bound to the registered instance, not the hosted assessment dashboard.
@@ -803,7 +808,7 @@ Session replay masks what is typed into a password field in the browser, before 
 
 | Variable | What it does | Default |
 |---|---|---|
-| `APNS_KEY` or `APNS_KEY_PATH`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_TOPIC` | Mobile push on backend and consumer. Partial configuration disables push with a warning, never a crash | unset |
+| `APNS_KEY` or `APNS_KEY_PATH`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_TOPIC` | Mobile push on backend and consumer. `APNS_KEY` is the `.p8` file as PEM or base64, and `APNS_TOPIC` the app's bundle id. Partial configuration disables push with a warning, never a crash | unset |
 
 ## Updates
 

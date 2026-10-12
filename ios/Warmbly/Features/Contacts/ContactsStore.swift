@@ -66,6 +66,8 @@ final class ContactsStore {
     var displayTotal: Int { counts?.total ?? totalCount ?? contacts.count }
     var isSearching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
     var hasFilters: Bool { filters.isActive }
+    /// Criteria that narrow the list; a sort alone narrows nothing.
+    var isNarrowed: Bool { filters.activeCount > 0 }
 
     // MARK: Selection
 
@@ -148,7 +150,7 @@ final class ContactsStore {
         body.updatedAfter = f.updatedAfter.map { Self.isoDate.format($0) }
         body.updatedBefore = f.updatedBefore.map { Self.isoDate.format($0) }
         body.sortBy = f.sortBy.rawValue
-        body.reverse = f.reverse
+        body.reverse = f.sortBy.isAlphabetical ? !f.reverse : f.reverse
         return body
     }
 
@@ -254,7 +256,10 @@ final class ContactsStore {
     /// without waiting for the realtime pulse.
     func apply(_ updated: Contact) {
         guard let index = contacts.firstIndex(where: { $0.id == updated.id }) else { return }
-        withAnimation(.snappy) { contacts[index] = updated }
+        var merged = updated
+        // Only search rows carry outreach; keep the row's when the edit has none.
+        merged.outreach = updated.outreach ?? contacts[index].outreach
+        withAnimation(.snappy) { contacts[index] = merged }
     }
 
     /// Drop a row that was deleted elsewhere (e.g. from the detail screen).
@@ -263,6 +268,23 @@ final class ContactsStore {
             contacts.removeAll { $0.id == id }
             if let total = totalCount, total > 0 { totalCount = total - 1 }
             bumpCounts(created: false)
+        }
+    }
+
+    /// Subscribe or unsubscribe one contact, shown at once and put back if the
+    /// server refuses.
+    func setSubscribed(_ api: APIClient, id: String, _ subscribed: Bool) async throws {
+        guard let index = contacts.firstIndex(where: { $0.id == id }) else { return }
+        let previous = contacts[index]
+        withAnimation(.snappy) { contacts[index].subscribed = subscribed }
+        do {
+            let updated: [Contact] = try await api.patch("contacts", body: ContactBulkEditBody(contacts: [id], subscribe: subscribed))
+            if let fresh = updated.first(where: { $0.id == id }) { apply(fresh) }
+        } catch {
+            if let back = contacts.firstIndex(where: { $0.id == id }) {
+                withAnimation(.snappy) { contacts[back] = previous }
+            }
+            throw error
         }
     }
 

@@ -114,6 +114,9 @@ var (
 
 	// Captch
 	ErrCaptcha = New(BadRequest, "We couldn’t verify you’re human. Please try the security check again or reload the page.")
+	// The native app's proof in place of the captcha.
+	ErrAppAttest        = NewWithIdentifier(BadRequest, "app_attest_failed", "We couldn’t verify this copy of the app. Update it from the App Store and try again.")
+	ErrAppAttestUnknown = NewWithIdentifier(BadRequest, "app_attest_key_unknown", "This device needs to verify the app again.")
 
 	// Group
 	ErrGroupTitle = New(BadRequest, "The title length must be between 1 and 50 characters.")

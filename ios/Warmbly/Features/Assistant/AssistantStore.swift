@@ -42,6 +42,10 @@ final class AssistantChatStore {
     private(set) var freeModel = false
     private(set) var creditsRemaining: Int?
     private(set) var errorMessage: String?
+    /// The live run's start, step and step budget, for the working status.
+    private(set) var runStartedAt: Date?
+    private(set) var iteration = 0
+    private(set) var budget = 0
 
     private var streamTask: Task<Void, Never>?
 
@@ -107,6 +111,7 @@ final class AssistantChatStore {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isStreaming else { return }
         errorMessage = nil
+        beginRun()
         withAnimation(.snappy) {
             turns.append(Turn(role: "user", blocks: [Block(kind: .text, text: trimmed, done: true)]))
         }
@@ -146,6 +151,7 @@ final class AssistantChatStore {
         guard let sessionID = session?.id, !isStreaming else { return }
         withAnimation(.snappy) { pending = nil }
         errorMessage = nil
+        beginRun()
         isStreaming = true
         streamTask = Task {
             do {
@@ -205,6 +211,8 @@ final class AssistantChatStore {
             }
         case "iteration":
             if let credits = event.creditsRemaining { creditsRemaining = credits }
+            if let step = event.iteration { iteration = step }
+            if let total = event.budget { budget = total }
         case "done":
             if let credits = event.creditsRemaining { creditsRemaining = credits }
             if let free = event.freeModel { freeModel = free }
@@ -213,6 +221,61 @@ final class AssistantChatStore {
         default:
             break
         }
+    }
+
+    #if DEBUG
+    /// Plays a scripted run through the real event folding, like the web's dev demo.
+    func playDemo(approval: Bool) {
+        guard !isStreaming else { return }
+        errorMessage = nil
+        beginRun()
+        withAnimation(.snappy) {
+            turns.append(Turn(role: "user", blocks: [Block(kind: .text, text: "Which mailboxes need attention?", done: true)]))
+        }
+        isStreaming = true
+        let reply = "Two mailboxes need a look. **anna@sunrise.io** is landing in spam at 14% on Gmail, so I'd lower its daily volume for a week. **mark@sunrise.io** failed to sync twice today with an auth error; reconnecting it should fix that.\n\n- Lower anna's cold limit from 50 to 30\n- Reconnect mark's mailbox"
+        streamTask = Task {
+            @MainActor func step(_ ms: Int, _ event: AgentStreamEvent) async throws {
+                try await Task.sleep(for: .milliseconds(ms))
+                apply(event)
+            }
+            do {
+                try await step(900, AgentStreamEvent(type: "iteration", iteration: 1, creditsRemaining: 4820, budget: 8))
+                try await step(300, AgentStreamEvent(type: "tool_start", tool: "list_email_accounts", argsSummary: "status: all"))
+                try await step(1300, AgentStreamEvent(type: "tool_result", tool: "list_email_accounts", result: "12 mailboxes"))
+                try await step(200, AgentStreamEvent(type: "tool_start", tool: "get_dashboard_analytics", argsSummary: "last 7 days"))
+                try await step(1200, AgentStreamEvent(type: "tool_result", tool: "get_dashboard_analytics", result: "inbox rate 91%"))
+                try await step(200, AgentStreamEvent(type: "tool_start", tool: "get_advisor_summary"))
+                try await step(1000, AgentStreamEvent(type: "tool_result", tool: "get_advisor_summary", result: "2 open findings"))
+                try await step(400, AgentStreamEvent(type: "iteration", iteration: 2, creditsRemaining: 4811, budget: 8))
+                var sent = ""
+                for word in reply.split(separator: " ", omittingEmptySubsequences: false) {
+                    let chunk = (sent.isEmpty ? "" : " ") + word
+                    sent += chunk
+                    try await step(45, AgentStreamEvent(type: "text_delta", text: chunk))
+                }
+                try await step(100, AgentStreamEvent(type: "text", text: reply))
+                if approval {
+                    try await step(600, AgentStreamEvent(
+                        type: "approval_required",
+                        tool: "update_email_account",
+                        risk: "write",
+                        argsSummary: "email: anna@sunrise.io\ncampaign_limit: 50 -> 30",
+                        toolCallID: "demo"
+                    ))
+                } else {
+                    try await step(200, AgentStreamEvent(type: "done", creditsRemaining: 4807))
+                }
+            } catch {}
+            markStreamEnded()
+        }
+    }
+    #endif
+
+    private func beginRun() {
+        runStartedAt = .now
+        iteration = 0
+        budget = 0
     }
 
     private func ensureAssistantTurn() -> Int {

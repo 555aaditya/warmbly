@@ -51,9 +51,8 @@ final class MoreTeamStore {
     }
 }
 
-/// Workspace roster: search pill up top, dense flat member rows with role
-/// pills, pending invitations, invite sheet. Visible to every member; writes
-/// gated on manage_team.
+/// Who is in the workspace: how many, who is here right now and who is still
+/// invited, searchable, with the invite one tap away for those who can.
 struct TeamMembersView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var store = MoreTeamStore()
@@ -61,14 +60,24 @@ struct TeamMembersView: View {
     @State private var showInvite = false
     @State private var memberPendingRemoval: TeamMember?
     @State private var actionError: String?
-    @FocusState private var searchFocused: Bool
 
     private var canManage: Bool { env.session.can(.manageTeam) }
 
+    private var onlineIDs: Set<String> { Set(env.realtime.presence.online.map(\.id)) }
+
     private var filteredMembers: [TeamMember] {
         let q = search.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return store.members }
-        return store.members.filter {
+        let online = onlineIDs
+        let me = env.session.user?.id
+        let sorted = store.members.sorted { a, b in
+            // You first, then whoever is online, then by name.
+            if (a.userID == me) != (b.userID == me) { return a.userID == me }
+            let ao = online.contains(a.userID), bo = online.contains(b.userID)
+            if ao != bo { return ao }
+            return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
+        }
+        guard !q.isEmpty else { return sorted }
+        return sorted.filter {
             $0.displayName.lowercased().contains(q) || $0.displayEmail.lowercased().contains(q)
         }
     }
@@ -136,104 +145,130 @@ struct TeamMembersView: View {
                 SkeletonRows()
             }
         } else {
-            VStack(spacing: 0) {
-                searchBar
-                list
+            SettingsPage(title: "Members", spacing: 22) {
+                stats
+                searchField
+                membersSection
+                if canManage, !store.invitations.isEmpty {
+                    invitationsSection
+                }
             }
-            .background(Color(.systemBackground))
+            .refreshable { await store.load(env.api, canManage: canManage) }
         }
     }
 
-    // MARK: Search pill
+    // MARK: Stats
 
-    private var searchBar: some View {
-        HStack(spacing: 6) {
+    private var stats: some View {
+        HStack(spacing: 0) {
+            stat(value: store.members.count, label: "Members", color: WTheme.ink)
+            Rectangle().fill(WTheme.hairline).frame(width: 1, height: 36)
+            stat(value: env.realtime.presence.onlineCount, label: "Online now", color: WTheme.positive, live: true)
+            if canManage {
+                Rectangle().fill(WTheme.hairline).frame(width: 1, height: 36)
+                stat(value: store.invitations.count, label: "Invited", color: store.invitations.isEmpty ? WTheme.ink : WTheme.warning)
+            }
+        }
+        .padding(.vertical, 16)
+        .background(WTheme.groupedCard, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+
+    private func stat(value: Int, label: String, color: Color, live: Bool = false) -> some View {
+        VStack(spacing: 3) {
+            HStack(spacing: 6) {
+                if live, value > 0 {
+                    LiveDot(color: WTheme.positive, size: 7, pulsing: true)
+                }
+                Text("\(value)")
+                    .font(.system(size: 26, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(color)
+                    .contentTransition(.numericText())
+            }
+            Text(label)
+                .font(.system(size: 12.5))
+                .foregroundStyle(WTheme.inkSecondary)
+        }
+        .frame(maxWidth: .infinity)
+        .animation(.snappy, value: value)
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(.secondary)
-                .padding(.leading, 14)
-            TextField("Search members", text: $search)
-                .font(.subheadline)
+                .foregroundStyle(WTheme.inkTertiary)
+            TextField("Search by name or email", text: $search)
+                .font(.system(size: 16))
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .submitLabel(.search)
-                .focused($searchFocused)
             if !search.isEmpty {
                 Button {
                     search = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 16))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(WTheme.inkTertiary)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Clear search")
             }
-            PresenceAvatars()
-                .padding(.trailing, 8)
         }
-        .frame(height: 44)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .padding(.horizontal, 12)
-        .padding(.top, 4)
-        .padding(.bottom, 6)
+        .frame(height: 40)
+        .background(WTheme.groupedCard, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    // MARK: List
+    // MARK: Members
 
-    private var list: some View {
-        List {
-            statsRow
-            membersSection
-            if canManage, !store.invitations.isEmpty {
-                invitationsSection
-            }
-        }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .environment(\.defaultMinListRowHeight, 0)
-        .refreshable { await store.load(env.api, canManage: canManage) }
-    }
-
-    private var statsRow: some View {
-        HStack(spacing: 12) {
-            StatCell(label: "Members", value: "\(store.members.count)")
-            Divider().frame(height: 32)
-            StatCell(label: "Online", value: "\(env.realtime.presence.onlineCount)", tone: .emerald)
-            if canManage {
-                Divider().frame(height: 32)
-                StatCell(
-                    label: "Pending",
-                    value: "\(store.invitations.count)",
-                    tone: store.invitations.isEmpty ? nil : .amber
-                )
-            }
-        }
-        .padding(.top, 8)
-        .padding(.bottom, 4)
-        .moreFlatRow(separator: .hidden)
-    }
-
-    @ViewBuilder
     private var membersSection: some View {
-        MoreFlatSectionHeader("Members", top: 12)
-        if filteredMembers.isEmpty {
-            EmptyStateView(title: "No matches", message: "No member matches that search.")
-                .moreFlatRow(separator: .hidden)
-        }
-        ForEach(filteredMembers) { member in
-            memberRow(member)
-                .moreFlatRow(textLeading: MoreFlatMetrics.avatarTextLeading)
-                .swipeActions(edge: .trailing) {
-                    if canRemove(member) {
+        SettingsSection(search.isEmpty ? "Everyone" : "\(filteredMembers.count) found", dividerLeading: 70) {
+            if canManage, search.isEmpty {
+                Button {
+                    showInvite = true
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(WTheme.accent)
+                            .frame(width: 42, height: 42)
+                            .background(WTheme.accentSoft, in: Circle())
+                        Text("Invite a teammate")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(WTheme.accent)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(MoreRowPressStyle())
+            }
+            if filteredMembers.isEmpty {
+                Text("Nobody matches \u{201C}\(search)\u{201D}.")
+                    .font(.system(size: 15))
+                    .foregroundStyle(WTheme.inkSecondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 22)
+            }
+            ForEach(filteredMembers) { member in
+                if canRemove(member) {
+                    Menu {
                         Button(role: .destructive) {
                             memberPendingRemoval = member
                         } label: {
-                            Label("Remove", systemImage: "person.badge.minus")
+                            Label("Remove from workspace", systemImage: "person.badge.minus")
                         }
+                    } label: {
+                        memberRow(member)
                     }
+                    .buttonStyle(MoreRowPressStyle())
+                } else {
+                    memberRow(member)
                 }
+            }
         }
+        .animation(.snappy, value: filteredMembers.map(\.id))
     }
 
     private func canRemove(_ member: TeamMember) -> Bool {
@@ -241,111 +276,130 @@ struct TeamMembersView: View {
     }
 
     private func memberRow(_ member: TeamMember) -> some View {
-        HStack(spacing: 12) {
-            WAvatar(
-                name: member.displayName,
-                imageURL: member.user?.avatarURL,
-                seed: member.userID,
-                size: 40
-            )
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    Text(member.displayName)
-                        .font(.body.weight(.medium))
-                        .lineLimit(1)
-                    if member.isOwner {
-                        Image(systemName: "crown.fill")
-                            .font(.caption2)
-                            .foregroundStyle(Tone.amber.color)
+        let online = onlineIDs.contains(member.userID)
+        return HStack(spacing: 12) {
+            WAvatar(name: member.displayName, imageURL: member.user?.avatarURL, seed: member.userID, size: 42)
+                .overlay(alignment: .bottomTrailing) {
+                    if online {
+                        Circle()
+                            .fill(WTheme.positive)
+                            .frame(width: 12, height: 12)
+                            .overlay(Circle().strokeBorder(WTheme.groupedCard, lineWidth: 2.5))
+                            .offset(x: 1, y: 1)
+                            .transition(.scale.combined(with: .opacity))
                     }
+                }
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    Text(member.displayName)
+                        .font(.system(size: 16))
+                        .foregroundStyle(WTheme.ink)
+                        .lineLimit(1)
                     if member.userID == env.session.user?.id {
-                        Text("you")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
+                        Text("You")
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundStyle(WTheme.inkSecondary)
+                            .padding(.horizontal, 6)
+                            .frame(height: 18)
+                            .background(WTheme.fill, in: Capsule())
                     }
                 }
                 Text(member.displayEmail)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 13))
+                    .foregroundStyle(WTheme.inkSecondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
             roleChips(member)
         }
-        .padding(.vertical, 9)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
+        .animation(.snappy, value: online)
     }
 
     @ViewBuilder
     private func roleChips(_ member: TeamMember) -> some View {
         HStack(spacing: 4) {
             if member.isOwner {
-                MoreRoleChipView(name: "Owner", color: Tone.amber.color)
+                HStack(spacing: 4) {
+                    Image(systemName: "crown.fill").font(.system(size: 9))
+                    Text("Owner")
+                }
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(Tone.amber.color)
+                .padding(.horizontal, 8)
+                .frame(height: 22)
+                .background(Tone.amber.background, in: Capsule())
             } else if let roles = member.roles, !roles.isEmpty {
                 ForEach(roles.prefix(2)) { chip in
-                    MoreRoleChipView(
-                        name: chip.name ?? "Role",
-                        color: MoreStyle.color(hex: chip.color) ?? WTheme.paused
-                    )
+                    MoreRoleChipView(name: chip.name ?? "Role", color: MoreStyle.color(hex: chip.color) ?? WTheme.paused)
                 }
                 if roles.count > 2 {
                     Text("+\(roles.count - 2)")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(WTheme.inkTertiary)
                 }
             } else if let role = member.role, !role.isEmpty {
-                MoreRoleChipView(name: role, color: WTheme.paused)
+                MoreRoleChipView(name: role.capitalized, color: WTheme.paused)
             }
         }
     }
 
-    @ViewBuilder
+    // MARK: Invitations
+
     private var invitationsSection: some View {
-        MoreFlatSectionHeader("Pending invitations")
-        ForEach(store.invitations) { invitation in
-            invitationRow(invitation)
-                .moreFlatRow(textLeading: MoreFlatMetrics.tileTextLeading)
-                .swipeActions(edge: .trailing) {
+        SettingsSection("Invited", footer: "Tap an invitation to revoke it before it is accepted.", dividerLeading: 70) {
+            ForEach(store.invitations) { invitation in
+                Menu {
                     Button(role: .destructive) {
                         Task { await revoke(invitation) }
                     } label: {
-                        Label("Revoke", systemImage: "xmark.circle")
+                        Label("Revoke invitation", systemImage: "xmark.circle")
                     }
+                } label: {
+                    invitationRow(invitation)
                 }
+                .buttonStyle(MoreRowPressStyle())
+            }
         }
-        Text("Swipe an invitation to revoke it.")
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-            .padding(.top, 8)
-            .padding(.bottom, 28)
-            .moreFlatRow(separator: .hidden)
     }
 
     private func invitationRow(_ invitation: TeamInvitation) -> some View {
         HStack(spacing: 12) {
-            IconTile(symbol: "envelope.badge.fill", tone: .amber, size: 34)
+            Image(systemName: "envelope.badge.fill")
+                .font(.system(size: 17))
+                .foregroundStyle(Tone.amber.color)
+                .frame(width: 42, height: 42)
+                .background(Tone.amber.background, in: Circle())
+                .overlay(Circle().strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [3, 3])).foregroundStyle(Tone.amber.color.opacity(0.4)))
             VStack(alignment: .leading, spacing: 2) {
                 Text(invitation.email ?? "Invitation")
-                    .font(.body.weight(.medium))
+                    .font(.system(size: 16))
+                    .foregroundStyle(WTheme.ink)
                     .lineLimit(1)
                 Text(expiryText(invitation))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 13))
+                    .foregroundStyle(isExpired(invitation) ? WTheme.negative : WTheme.inkSecondary)
             }
             Spacer(minLength: 8)
             HStack(spacing: 4) {
                 ForEach((invitation.roles ?? []).prefix(2)) { chip in
-                    MoreRoleChipView(
-                        name: chip.name ?? "Role",
-                        color: MoreStyle.color(hex: chip.color) ?? WTheme.paused
-                    )
+                    MoreRoleChipView(name: chip.name ?? "Role", color: MoreStyle.color(hex: chip.color) ?? WTheme.paused)
                 }
             }
         }
-        .padding(.vertical, 9)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
+    }
+
+    private func isExpired(_ invitation: TeamInvitation) -> Bool {
+        (invitation.expiresAt ?? .distantFuture) < Date()
     }
 
     private func expiryText(_ invitation: TeamInvitation) -> String {
-        guard let expires = invitation.expiresAt else { return "Pending" }
+        guard let expires = invitation.expiresAt else { return "Waiting to accept" }
         if expires < Date() { return "Expired" }
         return "Expires \(WFormat.relative(expires))"
     }
@@ -378,6 +432,7 @@ struct MoreInviteMemberSheet: View {
     @State private var selectedRoleIDs: Set<String> = []
     @State private var sending = false
     @State private var errorMessage: String?
+    @FocusState private var emailFocused: Bool
 
     private var emailValid: Bool {
         let trimmed = email.trimmingCharacters(in: .whitespaces)
@@ -386,39 +441,56 @@ struct MoreInviteMemberSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                MoreFlatSectionHeader("Invite by email", top: 8)
-                TextField("name@company.com", text: $email)
-                    .keyboardType(.emailAddress)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .padding(.vertical, 12)
-                    .moreFlatRow()
-                MoreFlatSectionHeader("Roles")
-                if store.roles.isEmpty {
-                    Text("No roles in this workspace yet.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .padding(.vertical, 8)
-                        .moreFlatRow(separator: .hidden)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 26) {
+                    SettingsSection("Email", footer: "They get a link to join this workspace.", dividerLeading: 16) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "at")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(WTheme.inkTertiary)
+                            TextField("name@company.com", text: $email)
+                                .font(.system(size: 16))
+                                .keyboardType(.emailAddress)
+                                .textContentType(.emailAddress)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .focused($emailFocused)
+                                .submitLabel(.send)
+                                .onSubmit { if emailValid { send() } }
+                            if emailValid {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(WTheme.positive)
+                                    .transition(.scale.combined(with: .opacity))
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .frame(height: 52)
+                        .animation(.snappy, value: emailValid)
+                    }
+                    SettingsSection(
+                        "Roles",
+                        footer: "You can only grant permissions you hold yourself.",
+                        dividerLeading: 40
+                    ) {
+                        if store.roles.isEmpty {
+                            Text("No roles in this workspace yet.")
+                                .font(.system(size: 15))
+                                .foregroundStyle(WTheme.inkSecondary)
+                                .padding(16)
+                        }
+                        ForEach(store.roles) { role in
+                            roleRow(role)
+                        }
+                    }
                 }
-                ForEach(store.roles) { role in
-                    roleRow(role)
-                        .moreFlatRow()
-                }
-                Text("You can only grant permissions you hold yourself.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 8)
-                    .padding(.bottom, 28)
-                    .moreFlatRow(separator: .hidden)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 32)
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .background(Color(.systemBackground))
-            .environment(\.defaultMinListRowHeight, 0)
-            .navigationTitle("Invite member")
+            .background(WTheme.groupedPage)
+            .navigationTitle("Invite a teammate")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(WTheme.groupedPage, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -428,6 +500,7 @@ struct MoreInviteMemberSheet: View {
                         ProgressView().controlSize(.small)
                     } else {
                         Button("Send") { send() }
+                            .fontWeight(.semibold)
                             .disabled(!emailValid)
                     }
                 }
@@ -446,47 +519,54 @@ struct MoreInviteMemberSheet: View {
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+        .presentationBackground(WTheme.groupedPage)
+        .onAppear { emailFocused = true }
     }
 
     private func roleRow(_ role: TeamRole) -> some View {
         let selected = selectedRoleIDs.contains(role.id)
         return Button {
-            if selected {
-                selectedRoleIDs.remove(role.id)
-            } else {
-                selectedRoleIDs.insert(role.id)
+            withAnimation(.snappy) {
+                if selected {
+                    selectedRoleIDs.remove(role.id)
+                } else {
+                    selectedRoleIDs.insert(role.id)
+                }
             }
         } label: {
-            HStack(spacing: 10) {
+            HStack(spacing: 12) {
                 Circle()
                     .fill(MoreStyle.color(hex: role.color) ?? WTheme.paused)
-                    .frame(width: 8, height: 8)
+                    .frame(width: 12, height: 12)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(role.name ?? "Role")
-                        .font(.body.weight(.medium))
-                        .foregroundStyle(.primary)
+                        .font(.system(size: 16))
+                        .foregroundStyle(WTheme.ink)
                     if let description = role.description, !description.isEmpty {
                         Text(description)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                            .font(.system(size: 13))
+                            .foregroundStyle(WTheme.inkSecondary)
+                            .lineLimit(2)
                     }
                 }
-                Spacer()
+                Spacer(minLength: 8)
                 if let count = role.memberCount {
                     Text("\(count)")
-                        .font(.footnote)
+                        .font(.system(size: 14))
                         .monospacedDigit()
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(WTheme.inkTertiary)
                 }
-                Image(systemName: selected ? "checkmark.square.fill" : "square")
-                    .font(.system(size: 18))
-                    .foregroundStyle(selected ? WTheme.accent : Color.secondary)
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 22))
+                    .foregroundStyle(selected ? WTheme.accent : WTheme.inkTertiary.opacity(0.6))
+                    .contentTransition(.symbolEffect(.replace))
             }
-            .padding(.vertical, 10)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 11)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MoreRowPressStyle())
+        .sensoryFeedback(.selection, trigger: selected)
     }
 
     private func send() {

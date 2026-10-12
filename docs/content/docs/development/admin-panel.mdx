@@ -155,6 +155,8 @@ Reading the tabs needs `view_organizations`; every action needs `manage_organiza
 
 Detail pages need the same bit as the list they open from. Actions inside a page can need more than the page itself: reading an organization's abuse posture or the Outreach list needs `view_organizations`, while changing a posture or sending outreach needs `manage_organizations`, as [accounts and access](/development/accounts-and-access/#workspace-abuse-posture) lists.
 
+On a user's detail page, `manage_testers` also allows turning **Skip emailed sign-in code** on or off for that account, for an App Store or OAuth reviewer; see [excusing one account](/development/accounts-and-access/#excusing-one-account).
+
 On **Admins > Testers**, `manage_testers` allows creating or revoking reviewer accounts and adding [sample data](/development/accounts-and-access/#adding-sample-data) to active dedicated Test workspaces. The confirmation lists what will be added; a seeded row shows its timestamp. It never creates a mailbox or sends email, and it cannot populate a customer workspace that a tester joined.
 
 ## See also

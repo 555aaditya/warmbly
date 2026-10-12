@@ -40,7 +40,6 @@ struct OnboardingFlowView: View {
     @State private var busy = false
     @State private var errorMessage: String?
     @State private var errorPulse = 0
-    @State private var badgeAppeared = false
 
     @FocusState private var focusedName: NameField?
     private enum NameField { case first, last }
@@ -81,7 +80,18 @@ struct OnboardingFlowView: View {
         }
         .sensoryFeedback(.impact(weight: .light), trigger: page)
         .sensoryFeedback(.error, trigger: errorPulse)
-        .onAppear { prefillName() }
+        .onAppear {
+            prefillName()
+            #if DEBUG
+            // Scripted runs can open a later page (WARMBLY_DEBUG_ONBOARDING) to see it.
+            switch ProcessInfo.processInfo.environment["WARMBLY_DEBUG_ONBOARDING"] {
+            case "referral": page = .referral
+            case "role": page = .role
+            case "team": page = .teamSize
+            default: break
+            }
+            #endif
+        }
     }
 
     private var pageTransition: AnyTransition {
@@ -94,144 +104,22 @@ struct OnboardingFlowView: View {
     // MARK: - Sky chrome
 
     private var topBar: some View {
-        HStack(spacing: 12) {
-            if page != .name {
-                Button {
-                    goBack()
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 40, height: 40)
-                        .background(.white.opacity(0.16), in: Circle())
-                }
-                .buttonStyle(PressableButtonStyle())
-                .accessibilityLabel("Back")
-                .transition(.opacity.combined(with: .scale(scale: 0.7)))
-            }
-
-            HStack(spacing: 8) {
-                WarmblyLogo()
-                    .fill(.white)
-                    .frame(width: 27, height: 28)
-                Text("Warmbly")
-                    .font(.system(size: 20, weight: .heavy))
-                    .tracking(-0.4)
-                    .foregroundStyle(.white)
-                    .fixedSize()
-            }
-            .shadow(color: Color(hex: 0x0C4A6E).opacity(0.25), radius: 8, y: 3)
-
-            Spacer()
-
-            Button("Sign out") {
+        FlowTopBar(
+            onBack: page == .name ? nil : { goBack() },
+            progress: (page.rawValue, Page.allCases.count)
+        ) {
+            FlowSkyPill(title: "Sign out") {
                 Task { await env.session.logout() }
             }
-            .font(.system(size: 13.5, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.9))
-            .padding(.horizontal, 14)
-            .frame(height: 34)
-            .background(.white.opacity(0.16), in: Capsule())
-            .buttonStyle(PressableButtonStyle())
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 6)
-        .animation(.spring(response: 0.45, dampingFraction: 0.86), value: page)
     }
 
-    /// The animated sky window: flight ambience plus the current page's badge
-    /// (icon, question name, position). Picks the tallest badge that fits so
-    /// the keyboard on the name page only compacts it, never kills it.
+    /// The sky between the top bar and the sheet: the page's icon and name
+    /// when there is room, plain sky while the keyboard is up.
     private var skyArea: some View {
-        ZStack {
-            Color.clear
-                .contentShape(Rectangle())
-                .onTapGesture { focusedName = nil }
-
-            HeroFlightScene()
-
-            pageBadge
-                .scaleEffect(badgeAppeared ? 1 : 0.9)
-                .opacity(badgeAppeared ? 1 : 0)
-        }
-        .frame(maxWidth: .infinity, minHeight: 40, maxHeight: .infinity)
-        .animation(.spring(response: 0.5, dampingFraction: 0.85), value: page)
-        .onAppear {
-            withAnimation(.spring(response: 0.7, dampingFraction: 0.75).delay(0.05)) {
-                badgeAppeared = true
-            }
-        }
+        FlowSkyStage(icon: page.icon, title: page.skyLabel) { focusedName = nil }
+            .frame(maxWidth: .infinity, minHeight: 88, maxHeight: .infinity)
     }
-
-    private var pageBadge: some View {
-        ViewThatFits(in: .vertical) {
-            VStack(spacing: 12) {
-                ZStack {
-                    Circle().fill(.white.opacity(0.16))
-                    Circle().strokeBorder(.white.opacity(0.3), lineWidth: 1)
-                    Image(systemName: page.icon)
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .contentTransition(.symbolEffect(.replace))
-                }
-                .frame(width: 54, height: 54)
-
-                VStack(spacing: 4) {
-                    Text(page.skyLabel)
-                        .font(.system(size: 15.5, weight: .bold))
-                        .foregroundStyle(.white)
-                        .contentTransition(.opacity)
-                    Text("Step \(page.rawValue + 1) of \(Page.allCases.count)")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.7))
-                        .contentTransition(.numericText())
-                }
-
-                pageSegments
-            }
-            .padding(.vertical, 16)
-
-            HStack(spacing: 10) {
-                ZStack {
-                    Circle().fill(.white.opacity(0.16))
-                    Circle().strokeBorder(.white.opacity(0.3), lineWidth: 1)
-                    Image(systemName: page.icon)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .contentTransition(.symbolEffect(.replace))
-                }
-                .frame(width: 34, height: 34)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(page.skyLabel)
-                        .font(.system(size: 13.5, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .contentTransition(.opacity)
-                    HStack(spacing: 7) {
-                        pageSegments
-                        Text("Step \(page.rawValue + 1) of \(Page.allCases.count)")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.white.opacity(0.7))
-                            .contentTransition(.numericText())
-                    }
-                }
-            }
-            .padding(.vertical, 8)
-        }
-        .shadow(color: Color(hex: 0x0C4A6E).opacity(0.25), radius: 6, y: 2)
-    }
-
-    private var pageSegments: some View {
-        HStack(spacing: 6) {
-            ForEach(Page.allCases, id: \.rawValue) { segment in
-                Capsule()
-                    .fill(.white.opacity(segment.rawValue <= page.rawValue ? 0.95 : 0.3))
-                    .frame(width: segment == page ? 26 : 14, height: 4)
-            }
-        }
-    }
-
-    // MARK: - The sheet
 
     private var sheet: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -293,7 +181,7 @@ struct OnboardingFlowView: View {
             } label: {
                 Group {
                     if busy {
-                        ProgressView().tint(.white)
+                        ProgressView().tint(WTheme.inkInverse)
                     } else {
                         HStack(spacing: 8) {
                             Text(page == .teamSize ? "Enter Warmbly" : "Continue")
@@ -304,21 +192,11 @@ struct OnboardingFlowView: View {
                         }
                     }
                 }
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white)
+                .font(.system(size: 16.5, weight: .medium))
+                .foregroundStyle(WTheme.inkInverse)
                 .frame(maxWidth: .infinity)
-                .frame(height: 56)
-                .background(
-                    LinearGradient(
-                        colors: !canAdvance && !busy
-                            ? [WTheme.accent.opacity(0.35), WTheme.accent.opacity(0.35)]
-                            : [Color(hex: 0x0EA5E9), Color(hex: 0x0284C7)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    ),
-                    in: RoundedRectangle(cornerRadius: 17)
-                )
-                .shadow(color: !canAdvance ? .clear : Color(hex: 0x0284C7).opacity(0.32), radius: 12, y: 6)
+                .frame(height: 54)
+                .background(WTheme.ink.opacity(!canAdvance && !busy ? 0.18 : 1), in: Capsule())
             }
             .buttonStyle(PressableButtonStyle())
             .disabled(busy || !canAdvance)
@@ -346,12 +224,11 @@ struct OnboardingFlowView: View {
     private func pageTitle(_ title: String, _ subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             Text(title)
-                .font(.system(size: 30, weight: .bold))
-                .tracking(-0.6)
-                .foregroundStyle(.primary)
+                .displayFont(32)
+                .foregroundStyle(WTheme.ink)
             Text(subtitle)
                 .font(.system(size: 15.5))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(WTheme.inkSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

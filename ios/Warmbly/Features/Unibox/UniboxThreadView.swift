@@ -3,9 +3,9 @@ import SwiftUI
 /// Pushed conversation view: a flat, full-width Gmail-style stack. Messages
 /// share one background, separated by hairline dividers, connected by a left
 /// rail between avatars with "Replying to" references resolved from
-/// `In-Reply-To`; unread messages are marked in red. Tools live per message
-/// (reply / copy / mark unread) — no bottom action bar; AI stays a helper
-/// inside the composer.
+/// `In-Reply-To`; unread messages carry a sky dot. Tools live per message
+/// (reply / copy / mark unread), with no bottom action bar. AI shows up as the
+/// inbox agent's drafted reply at the foot, a one-tap drafted reply, and Remie.
 struct UniboxThreadView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(\.dismiss) private var dismiss
@@ -24,6 +24,14 @@ struct UniboxThreadView: View {
     @State private var restoreSnapshot: UniboxReplySnapshot?
     @State private var toast: String?
     @State private var toastPulse = 0
+    /// Opens the composer already drafting a reply from the thread.
+    @State private var composerAutoDraft = false
+    @State private var composerAgentDraft: AgentThreadDraft?
+    @State private var agentDraft: AgentThreadDraft?
+    @State private var agentDraftText = ""
+    @State private var agentDraftBusy = false
+    @State private var confirmDiscardDraft = false
+    @State private var remiePrompt: AssistantLaunch?
 
     /// Jumps straight into the reply composer once the thread loads
     /// (the list row's "Reply" quick action).
@@ -36,32 +44,41 @@ struct UniboxThreadView: View {
 
     private var presenceKey: String { "thread:\(store.thread.key)" }
     private var canReply: Bool { env.session.can(.accessUnibox) }
+    private var canAI: Bool { env.session.can(.useAI) }
 
     var body: some View {
         content
             .navigationTitle(store.subject)
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(WTheme.canvas, for: .navigationBar)
             .toolbar { toolbarContent }
             .presenceResource(presenceKey, action: showComposer ? "replying" : "viewing")
+            // A conversation reads full height, like Mail; its actions live in the thread.
+            .tabBarHidden(true)
             .task {
+                async let draft: Void = loadAgentDraft()
                 await store.load(env.api)
+                await draft
                 if openComposerOnAppear, !autoReplyConsumed, canReply, composeContext != nil {
                     autoReplyConsumed = true
                     showComposer = true
                 }
             }
             .onChange(of: env.realtime.pulse(for: .unibox)) {
-                Task { await store.load(env.api) }
+                Task {
+                    await store.load(env.api)
+                    await loadAgentDraft()
+                }
             }
             .overlay(alignment: .bottom) {
                 VStack(spacing: 8) {
                     if let toast {
                         Text(toast)
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 9)
-                            .background(.black.opacity(0.82), in: Capsule())
+                            .font(.system(size: 13.5, weight: .medium))
+                            .foregroundStyle(WTheme.inkInverse)
+                            .padding(.horizontal, 16)
+                            .frame(height: 38)
+                            .background(WTheme.ink, in: Capsule())
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                     if let undoSend {
@@ -77,9 +94,22 @@ struct UniboxThreadView: View {
                 .padding(.bottom, 12)
             }
             .sensoryFeedback(.success, trigger: toastPulse)
-            .sheet(isPresented: $showComposer, onDismiss: { restoreSnapshot = nil }) {
+            .sheet(isPresented: $showComposer, onDismiss: {
+                restoreSnapshot = nil
+                composerAutoDraft = false
+                composerAgentDraft = nil
+            }) {
                 if let context = composeContext {
-                    UniboxComposer(context: context, restore: restoreSnapshot) { response, snapshot in
+                    UniboxComposer(
+                        context: context,
+                        autoDraft: composerAutoDraft,
+                        restore: restoreSnapshot,
+                        agentDraft: composerAgentDraft,
+                        onKeepDraft: composerAgentDraft == nil ? nil : { text in agentDraftText = text }
+                    ) { response, snapshot in
+                        if composerAgentDraft != nil {
+                            withAnimation(.snappy) { agentDraft = nil }
+                        }
                         Task { await store.load(env.api) }
                         switch response.sendMode {
                         case "smart", "scheduled":
@@ -94,6 +124,16 @@ struct UniboxThreadView: View {
                         }
                     }
                 }
+            }
+            .fullScreenCover(item: $remiePrompt) { launch in
+                AssistantView(page: "unibox", initialPrompt: launch.prompt)
+            }
+            .confirmationDialog("Discard this drafted reply?", isPresented: $confirmDiscardDraft, titleVisibility: .visible) {
+                Button("Discard", role: .destructive) {
+                    Task { await discardAgentDraft() }
+                }
+            } message: {
+                Text("Nothing was sent. You can still write a reply yourself.")
             }
             .sheet(isPresented: $showLabelEditor) {
                 UniboxLabelPicker(mode: .thread(store))
@@ -131,8 +171,25 @@ struct UniboxThreadView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        // The subject lives in the content header; the bar carries a quiet count.
+        ToolbarItem(placement: .principal) {
+            if store.hasLoaded, !store.messages.isEmpty {
+                Text("\(store.messages.count) message\(store.messages.count == 1 ? "" : "s")")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(WTheme.inkTertiary)
+                    .contentTransition(.numericText())
+            }
+        }
         ToolbarItemGroup(placement: .topBarTrailing) {
             ResourceViewers(resource: presenceKey)
+            if canReply, canAI, composeContext != nil, agentDraft == nil {
+                Button {
+                    openComposer(drafting: true)
+                } label: {
+                    Image(systemName: "sparkles")
+                }
+                .accessibilityLabel("Draft a reply with AI")
+            }
             if canReply, composeContext != nil {
                 Button {
                     showComposer = true
@@ -165,6 +222,13 @@ struct UniboxThreadView: View {
                         Label("Snooze", systemImage: "moon.zzz")
                     }
                 }
+                if canAI {
+                    Button {
+                        remiePrompt = AssistantLaunch(prompt: remieSummaryPrompt)
+                    } label: {
+                        Label("Summarize with Remie", systemImage: "sparkle")
+                    }
+                }
                 Button {
                     Task { await store.load(env.api) }
                 } label: {
@@ -192,7 +256,9 @@ struct UniboxThreadView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        if !store.labels.isEmpty { labelStrip }
+                        subjectHeader
+                        if !store.labels.isEmpty || canReply { labelStrip }
+                        Hairline()
                         ForEach(Array(store.messages.enumerated()), id: \.element.id) { index, message in
                             UniboxMessageRow(
                                 message: message,
@@ -201,7 +267,11 @@ struct UniboxThreadView: View {
                                 isLast: index == store.messages.count - 1,
                                 repliedTo: store.repliedToMessage(before: index),
                                 onReply: canReply && composeContext != nil ? {
-                                    showComposer = true
+                                    openComposer(drafting: false)
+                                } : nil,
+                                onAIReply: canReply && canAI && composeContext != nil && agentDraft == nil
+                                    && index == store.messages.count - 1 ? {
+                                    openComposer(drafting: true)
                                 } : nil,
                                 onJump: { id in
                                     withAnimation(.snappy) { proxy.scrollTo(id, anchor: .top) }
@@ -209,20 +279,75 @@ struct UniboxThreadView: View {
                             )
                             .id(message.id)
                         }
+                        if let agentDraft, canReply {
+                            AgentDraftCard(
+                                draft: agentDraft,
+                                text: agentDraftText,
+                                busy: agentDraftBusy,
+                                onSend: { Task { await sendAgentDraft() } },
+                                onEdit: { editAgentDraft(agentDraft) },
+                                onRevert: { withAnimation(.snappy) { agentDraftText = agentDraft.body } },
+                                onDiscard: { confirmDiscardDraft = true }
+                            )
+                            .padding(.horizontal, 16)
+                            .padding(.top, 6)
+                            .padding(.bottom, 14)
+                            .id("agent-draft")
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
+                        }
                         if !store.scheduled.isEmpty { scheduledStrip }
+                        Color.clear.frame(height: 1).id("thread-end")
                     }
+                    .animation(.spring(response: 0.4, dampingFraction: 0.86), value: agentDraft?.id)
                     .padding(.vertical, 4)
                 }
-                .background(Color(.systemBackground))
+                .background(WTheme.canvas)
                 .refreshable { await store.load(env.api) }
-                .onChange(of: store.hasLoaded) {
+                // This view only exists once loaded, so land here rather than on a load change.
+                .task {
                     // Land on the newest message like a mail client.
-                    if let last = store.messages.last?.id {
+                    if store.messages.count > 1, let last = store.messages.last?.id {
+                        await Task.yield()
                         proxy.scrollTo(last, anchor: .top)
                     }
+                    #if DEBUG
+                    if ProcessInfo.processInfo.environment["WARMBLY_DEBUG_THREAD"] == "end" {
+                        Task {
+                            try? await Task.sleep(for: .seconds(1.5))
+                            proxy.scrollTo("thread-end", anchor: .bottom)
+                        }
+                    }
+                    if ProcessInfo.processInfo.environment["WARMBLY_DEBUG_THREAD"] == "edit" {
+                        Task {
+                            try? await Task.sleep(for: .seconds(1.5))
+                            if let agentDraft { editAgentDraft(agentDraft) }
+                        }
+                    }
+                    #endif
                 }
             }
         }
+    }
+
+    // MARK: Header
+
+    private var subjectHeader: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let mailbox = store.thread.mailboxEmail ?? store.replyAccountEmail {
+                Text(mailbox)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(WTheme.inkTertiary)
+                    .lineLimit(1)
+            }
+            Text(store.subject.isEmpty ? "(no subject)" : store.subject)
+                .displayFont(24)
+                .foregroundStyle(WTheme.ink)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 12)
     }
 
     // MARK: Labels
@@ -237,11 +362,22 @@ struct UniboxThreadView: View {
                     Button {
                         showLabelEditor = true
                     } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(6)
-                            .background(Tone.slate.background, in: Circle())
+                        HStack(spacing: 4) {
+                            Image(systemName: store.labels.isEmpty ? "tag" : "plus")
+                                .font(.system(size: 10, weight: .medium))
+                            if store.labels.isEmpty {
+                                Text("Add label")
+                                    .font(.system(size: 12, weight: .medium))
+                            }
+                        }
+                        .foregroundStyle(WTheme.inkSecondary)
+                        .padding(.horizontal, store.labels.isEmpty ? 10 : 0)
+                        .frame(minWidth: 26, minHeight: 26)
+                        .background(WTheme.raised, in: Capsule())
+                        .overlay(
+                            Capsule().strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                                .foregroundStyle(WTheme.hairlineStrong)
+                        )
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Edit labels")
@@ -250,15 +386,17 @@ struct UniboxThreadView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 2)
         }
-        .padding(.bottom, 8)
+        .padding(.bottom, 14)
     }
 
     // MARK: Scheduled inline
 
     private var scheduledStrip: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Divider()
-            EyebrowLabel("Scheduled")
+            Hairline()
+            Text("Scheduled")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(WTheme.inkTertiary)
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
             ForEach(store.scheduled) { item in
@@ -294,6 +432,84 @@ struct UniboxThreadView: View {
         )
     }
 
+    // MARK: AI
+
+    private func openComposer(drafting: Bool) {
+        composerAutoDraft = drafting
+        showComposer = true
+    }
+
+    /// Opens the full composer on the draft, with every AI tool, instead of editing in the card.
+    private func editAgentDraft(_ draft: AgentThreadDraft) {
+        restoreSnapshot = UniboxReplySnapshot(to: [draft.toAddr], cc: [], bcc: [], subject: draft.subject, body: agentDraftText)
+        composerAgentDraft = draft
+        composerAutoDraft = false
+        showComposer = true
+    }
+
+    /// Sent to Remie as the first message; the agent reads the thread itself.
+    private var remieSummaryPrompt: String {
+        let who = store.counterpartyAddress.map { " with \($0)" } ?? ""
+        let subject = store.subject.isEmpty ? "" : " (subject \"\(store.subject)\")"
+        return "Summarize my email conversation\(who)\(subject), thread \(store.thread.key). Tell me where it stands and what I should do next."
+    }
+
+    private struct DataList<T: Decodable>: Decodable { var data: [T] }
+
+    /// The inbox agent's pending draft for this thread, if any.
+    private func loadAgentDraft() async {
+        guard canReply else { return }
+        guard let list: DataList<AgentThreadDraft> = try? await env.api.get("unibox/agent-drafts") else { return }
+        let match = list.data.first { $0.threadID == store.thread.key && $0.status == "pending" }
+        if match?.id != agentDraft?.id { agentDraftText = match?.body ?? "" }
+        agentDraft = match
+    }
+
+    private func sendAgentDraft() async {
+        guard let draft = agentDraft, !agentDraftBusy else { return }
+        agentDraftBusy = true
+        defer { agentDraftBusy = false }
+        let text = agentDraftText.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            let response: UniboxSendResponse = try await env.api.post(
+                "unibox/agent-drafts/\(draft.id)/approve",
+                body: AgentDraftApproveBody(body: text == draft.body ? nil : text),
+                idempotent: true
+            )
+            withAnimation(.snappy) { agentDraft = nil }
+            await store.load(env.api)
+            let snapshot = UniboxReplySnapshot(to: [draft.toAddr], cc: [], bcc: [], subject: draft.subject, body: text)
+            if response.sendMode == "instant" || response.sendMode == nil,
+               let taskID = response.taskID, let scheduledAt = response.scheduledAt {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                    undoSend = ReplyUndoSend(taskID: taskID, scheduledAt: scheduledAt, snapshot: snapshot)
+                }
+            } else {
+                showToast("Reply queued")
+            }
+        } catch let error as APIError where error.code == "conflict" {
+            withAnimation(.snappy) { agentDraft = nil }
+            showToast("This draft was already handled")
+        } catch {
+            actionError = error.localizedDescription
+        }
+    }
+
+    private func discardAgentDraft() async {
+        guard let draft = agentDraft, !agentDraftBusy else { return }
+        agentDraftBusy = true
+        defer { agentDraftBusy = false }
+        do {
+            let _: EmptyBody = try await env.api.post("unibox/agent-drafts/\(draft.id)/discard")
+            withAnimation(.snappy) { agentDraft = nil }
+            showToast("Draft discarded")
+        } catch APIError.server(let status, _) where status == 404 {
+            withAnimation(.snappy) { agentDraft = nil }
+        } catch {
+            actionError = error.localizedDescription
+        }
+    }
+
     // MARK: Actions
 
     private func snooze(until: Date) async {
@@ -317,7 +533,7 @@ struct UniboxThreadView: View {
             let _: EmptyBody = try await env.api.delete("unibox/scheduled/\(undo.taskID)")
             withAnimation(.snappy) { undoSend = nil }
             restoreSnapshot = undo.snapshot
-            showComposer = true
+            openComposer(drafting: false)
         } catch APIError.server(let status, _) where status == 404 {
             withAnimation(.snappy) { undoSend = nil }
             showToast("Already sent")
@@ -352,7 +568,7 @@ private struct ReplyUndoSend {
 
 /// One flat, full-width message: avatar hangs on a connector rail that links
 /// the conversation top to bottom, a hairline divider separates rows, a
-/// "Replying to" reference names the quoted message, unread is marked in red,
+/// "Replying to" reference names the quoted message, unread carries a sky dot,
 /// and expanded messages get their own tool row (reply / copy / read state).
 private struct UniboxMessageRow: View {
     @Environment(AppEnvironment.self) private var env
@@ -362,6 +578,7 @@ private struct UniboxMessageRow: View {
     let isLast: Bool
     let repliedTo: UniboxMessage?
     var onReply: (() -> Void)?
+    var onAIReply: (() -> Void)?
     let onJump: (String) -> Void
 
     @State private var showDetails = false
@@ -399,7 +616,8 @@ private struct UniboxMessageRow: View {
                     if let native = UniboxWebView.nativeText(html: detail.bodyHTML, plain: detail.bodyPlain) {
                         Text(native)
                             .font(.system(size: 15))
-                            .lineSpacing(3)
+                            .foregroundStyle(WTheme.ink)
+                            .lineSpacing(4)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.vertical, 2)
@@ -419,16 +637,16 @@ private struct UniboxMessageRow: View {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
                         Text("Loading message")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: 13))
+                            .foregroundStyle(WTheme.inkTertiary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 8)
                 }
             } else {
                 Text(message.snippet ?? "")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 14))
+                    .foregroundStyle(WTheme.inkSecondary)
                     .lineLimit(2)
                     .contentShape(Rectangle())
                     .onTapGesture { toggle() }
@@ -446,7 +664,7 @@ private struct UniboxMessageRow: View {
         .background(alignment: .leading) { rail }
         .overlay(alignment: .bottom) {
             if !isLast {
-                Divider().padding(.leading, Self.contentInset)
+                Hairline().padding(.leading, Self.contentInset)
             }
         }
         .task(id: expanded) {
@@ -478,7 +696,7 @@ private struct UniboxMessageRow: View {
 
     private var railSegment: some View {
         Rectangle()
-            .fill(Color(.systemGray4))
+            .fill(WTheme.hairlineStrong)
             .frame(width: 2)
     }
 
@@ -490,12 +708,12 @@ private struct UniboxMessageRow: View {
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "arrow.turn.up.left")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.system(size: 9, weight: .medium))
                 Text("Replying to \(Self.fromMe(target, store: store) ? "you" : target.senderDisplay)")
                     .lineLimit(1)
             }
-            .font(.caption2.weight(.medium))
-            .foregroundStyle(.secondary)
+            .font(.system(size: 12.5, weight: .medium))
+            .foregroundStyle(WTheme.inkTertiary)
         }
         .buttonStyle(.plain)
     }
@@ -505,12 +723,13 @@ private struct UniboxMessageRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(isFromMe ? "You" : message.senderDisplay)
-                        .font(.subheadline.weight(isUnread ? .bold : .semibold))
+                        .font(.system(size: 15, weight: isUnread ? .semibold : .medium))
+                        .foregroundStyle(WTheme.ink)
                         .lineLimit(1)
                     if isFromMe {
                         Image(systemName: "arrowshape.turn.up.left.fill")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(WTheme.accent)
+                            .font(.system(size: 9.5, weight: .medium))
+                            .foregroundStyle(WTheme.inkTertiary)
                     }
                 }
                 if expanded {
@@ -521,28 +740,28 @@ private struct UniboxMessageRow: View {
                             Text(message.recipientBare.isEmpty ? message.senderBare : "to \(message.recipientBare)")
                                 .lineLimit(1)
                             Image(systemName: "chevron.down")
-                                .font(.system(size: 8, weight: .bold))
+                                .font(.system(size: 8, weight: .semibold))
                                 .rotationEffect(.degrees(showDetails ? 180 : 0))
                         }
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 13))
+                        .foregroundStyle(WTheme.inkSecondary)
                     }
                     .buttonStyle(.plain)
                 } else {
                     Text(message.recipientBare.isEmpty ? message.senderBare : "to \(message.recipientBare)")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 13))
+                        .foregroundStyle(WTheme.inkSecondary)
                         .lineLimit(1)
                 }
             }
             Spacer(minLength: 6)
             VStack(alignment: .trailing, spacing: 5) {
                 Text(UniboxFormat.listTime(message.internalDate))
-                    .font(.footnote)
+                    .font(.system(size: 13, weight: isUnread ? .semibold : .regular))
                     .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isUnread ? WTheme.ink : WTheme.inkTertiary)
                 if isUnread {
-                    Circle().fill(WTheme.negative).frame(width: 8, height: 8)
+                    Circle().fill(WTheme.accent).frame(width: 7, height: 7)
                 }
             }
         }
@@ -554,18 +773,24 @@ private struct UniboxMessageRow: View {
         HStack(spacing: 10) {
             if let onReply {
                 Button(action: onReply) {
-                    HStack(spacing: 5) {
+                    HStack(spacing: 6) {
                         Image(systemName: "arrowshape.turn.up.left")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(.system(size: 11.5, weight: .medium))
                         Text("Reply")
-                            .font(.footnote.weight(.semibold))
                     }
-                    .foregroundStyle(WTheme.accent)
-                    .padding(.horizontal, 13)
-                    .padding(.vertical, 7)
-                    .background(Tone.sky.background, in: Capsule())
                 }
-                .buttonStyle(TapScaleStyle())
+                .buttonStyle(OutlineButtonStyle(size: .small))
+            }
+            if let onAIReply {
+                Button(action: onAIReply) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundStyle(WTheme.accent)
+                        Text("Draft with AI")
+                    }
+                }
+                .buttonStyle(OutlineButtonStyle(size: .small))
             }
             Spacer(minLength: 0)
             Button(action: copyBody) {
@@ -599,10 +824,11 @@ private struct UniboxMessageRow: View {
 
     private func toolIcon(_ symbol: String) -> some View {
         Image(systemName: symbol)
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .frame(width: 32, height: 32)
-            .background(Tone.slate.background, in: Circle())
+            .font(.system(size: 12.5, weight: .medium))
+            .foregroundStyle(WTheme.inkSecondary)
+            .frame(width: 34, height: 34)
+            .background(WTheme.raised, in: Circle())
+            .overlay(Circle().strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
     }
 
     private func copyBody() {
@@ -625,7 +851,11 @@ private struct UniboxMessageRow: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Tone.slate.background, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(WTheme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(WTheme.hairlineStrong, lineWidth: 1)
+        )
         .transition(.opacity.combined(with: .move(edge: .top)))
     }
 
@@ -634,12 +864,13 @@ private struct UniboxMessageRow: View {
         if let value, !value.isEmpty {
             HStack(alignment: .top, spacing: 8) {
                 Text(label)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-                    .frame(width: 48, alignment: .leading)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(WTheme.inkTertiary)
+                    .frame(width: 56, alignment: .leading)
+                    .padding(.top, 1.5)
                 Text(value)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(WTheme.inkSecondary)
                     .textSelection(.enabled)
             }
         }
@@ -683,15 +914,17 @@ private struct UniboxContactPanel: View {
                     VStack(spacing: 14) {
                         IconTile(symbol: "person.crop.circle.badge.questionmark", tone: .slate, size: 54)
                         Text("Not in contacts")
-                            .font(.body.weight(.semibold))
+                            .displayFont(17)
+                            .foregroundStyle(WTheme.ink)
                         Text(email)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: 14))
+                            .foregroundStyle(WTheme.inkSecondary)
                             .textSelection(.enabled)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
+            .background(WTheme.canvas)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
@@ -727,11 +960,12 @@ struct LabelChip: View {
         HStack(spacing: 5) {
             Circle().fill(tint).frame(width: 7, height: 7)
             Text(label.title ?? "Label")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(tint)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(WTheme.ink)
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
-        .background(tint.opacity(0.12), in: Capsule())
+        .padding(.horizontal, 10)
+        .frame(height: 26)
+        .background(WTheme.raised, in: Capsule())
+        .overlay(Capsule().strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
     }
 }

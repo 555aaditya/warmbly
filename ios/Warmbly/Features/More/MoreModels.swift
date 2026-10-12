@@ -343,13 +343,114 @@ struct MorePlan: Codable, Sendable {
     var dailyEmails: Int?
     var maxContacts: Int?
     var accountLimit: Int?
+    var monthlyCredits: Int?
+    var dedicatedWorkers: Int?
+    var savings: Double?
+    var isPublic: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, price, duration
+        case id, name, price, duration, savings
         case discountedPrice = "discounted_price"
         case dailyEmails = "daily_emails"
         case maxContacts = "max_contacts"
         case accountLimit = "account_limit"
+        case monthlyCredits = "monthly_credits"
+        case dedicatedWorkers = "dedicated_workers"
+        case isPublic = "public"
+    }
+}
+
+/// `GET plans`.
+struct PlansResponse: Codable, Sendable {
+    var plans: [MorePlan]?
+}
+
+/// `GET organization/current/limits`: what the server enforces, and the counts against it.
+struct OrgUsageSnapshot: Codable, Sendable {
+    var counts: OrgCounts?
+    var limits: OrgLimits?
+    var mailboxes: Mailboxes?
+    var storage: Storage?
+
+    struct Mailboxes: Codable, Sendable {
+        var used: Int?
+        var allowance: Int?
+    }
+
+    struct Storage: Codable, Sendable {
+        var limitBytes: Int64?
+        var usedBytes: Int64?
+
+        enum CodingKeys: String, CodingKey {
+            case limitBytes = "limit_bytes"
+            case usedBytes = "used_bytes"
+        }
+    }
+}
+
+/// `GET subscription/credits`.
+struct CreditBalance: Codable, Sendable {
+    var balance: Int?
+    var monthlyAllowance: Int?
+    var monthlyBalance: Int?
+    var purchasedBalance: Int?
+    var nextResetAt: Date?
+    var unlimited: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case balance, unlimited
+        case monthlyAllowance = "monthly_allowance"
+        case monthlyBalance = "monthly_balance"
+        case purchasedBalance = "purchased_balance"
+        case nextResetAt = "next_reset_at"
+    }
+}
+
+/// `GET subscription/credits/usage`.
+struct CreditUsage: Codable, Sendable {
+    var spentToday: Int?
+    var spentWeek: Int?
+    var spentMonth: Int?
+    var series: [Point]?
+    var byReason: [Bucket]?
+
+    struct Point: Codable, Sendable {
+        var date: String
+        var credits: Int
+    }
+
+    struct Bucket: Codable, Sendable {
+        var key: String
+        var credits: Int
+        var count: Int?
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case series
+        case spentToday = "spent_today"
+        case spentWeek = "spent_week"
+        case spentMonth = "spent_month"
+        case byReason = "by_reason"
+    }
+}
+
+/// `GET subscription/referral`.
+struct ReferralSummary: Codable, Sendable {
+    var code: String?
+    var shareURL: String?
+    var currency: String?
+    var inviteePercentOff: Int?
+    var inviteeMonths: Int?
+    var lifetimeEarnedCents: Int?
+    var totalReferred: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case code, currency
+        case shareURL = "share_url"
+        case inviteePercentOff = "invitee_percent_off"
+        case inviteeMonths = "invitee_months"
+        case lifetimeEarnedCents = "lifetime_earned_cents"
+        case totalReferred = "total_referred"
     }
 }
 
@@ -424,52 +525,6 @@ struct MoreSubscriptionLimits: Codable, Sendable {
     }
 }
 
-// MARK: - Flat list language
-
-/// Shared metrics for the flat account screens (mirrors CampaignDetailView).
-enum MoreFlatMetrics {
-    /// Hairline leading for IconTile(34) rows: 34 tile + 12 gap + 16.
-    static let tileTextLeading: CGFloat = 62
-    /// Hairline leading for WAvatar(40) rows: 40 avatar + 12 gap + 16.
-    static let avatarTextLeading: CGFloat = 68
-}
-
-/// Eyebrow caption as a bare row, never a grouped `Section` header (that
-/// reintroduces the sticky gray band). Whitespace above is the separator.
-struct MoreFlatSectionHeader: View {
-    let title: String
-    var top: CGFloat = 20
-
-    init(_ title: String, top: CGFloat = 20) {
-        self.title = title
-        self.top = top
-    }
-
-    var body: some View {
-        EyebrowLabel(title)
-            .padding(.horizontal, 20)
-            .padding(.top, top)
-            .padding(.bottom, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .listRowInsets(EdgeInsets())
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color(.systemBackground))
-    }
-}
-
-extension View {
-    /// Flat full-bleed row; the hairline tucks under the text column when
-    /// `textLeading` is given, Gmail-style.
-    func moreFlatRow(separator: Visibility = .automatic, textLeading: CGFloat? = nil) -> some View {
-        listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
-            .listRowSeparator(separator)
-            .alignmentGuide(.listRowSeparatorLeading) { dims in
-                textLeading ?? dims[.listRowSeparatorLeading]
-            }
-            .listRowBackground(Color(.systemBackground))
-    }
-}
-
 // MARK: - Styling helpers
 
 enum MoreStyle {
@@ -479,27 +534,5 @@ enum MoreStyle {
         if s.hasPrefix("#") { s.removeFirst() }
         guard s.count == 6, let value = UInt32(s, radix: 16) else { return nil }
         return Color(hex: value)
-    }
-
-    /// Plan pill palette: free slate, starter emerald, grow amber,
-    /// business indigo, enterprise violet.
-    static func planColors(_ name: String) -> (fg: Color, bg: Color) {
-        switch name.lowercased() {
-        case "free":
-            return (Tone.slate.color, Tone.slate.background)
-        case "starter":
-            return (Tone.emerald.color, Tone.emerald.background)
-        case "grow":
-            return (Tone.amber.color, Tone.amber.background)
-        case "business":
-            return (Tone.indigo.color, Tone.indigo.background)
-        case "enterprise":
-            return (
-                Color.dynamic(light: 0x6D28D9, dark: 0xC4B5FD),
-                Color.dynamic(light: 0xF5F3FF, dark: 0x4C1D95)
-            )
-        default:
-            return (Tone.sky.color, Tone.sky.background)
-        }
     }
 }

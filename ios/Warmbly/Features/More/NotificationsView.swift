@@ -209,55 +209,100 @@ private enum MoreNotificationMeta {
     }
 }
 
-/// In-app notification feed plus per-category preferences, rendered as one
-/// flat surface: dense tile-led feed rows with hairline separators, eyebrow
-/// captions instead of grouped bands.
+/// Everything Warmbly told you, grouped by day with the unread ones marked, and
+/// what it may tell you and where, as switches.
 struct NotificationsView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var store = MoreNotificationsStore()
-    @State private var tab = 0
+    @State private var tab = Tab.feed
+    @Namespace private var tabSpace
+
+    private enum Tab: String, CaseIterable {
+        case feed = "Inbox"
+        case preferences = "Preferences"
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("View", selection: $tab) {
-                Text("Feed").tag(0)
-                Text("Preferences").tag(1)
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 16)
-            .padding(.bottom, 8)
-            content
-        }
-        .background(Color(.systemBackground))
-        .navigationTitle("Notifications")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                if tab == 0, store.unread > 0 {
-                    Button("Mark all read") {
-                        Task { await store.markAllRead(env.api) }
+        content
+            .safeAreaInset(edge: .top, spacing: 0) { tabSwitcher }
+            .background(WTheme.groupedPage)
+            .navigationTitle("Notifications")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(WTheme.groupedPage, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    if tab == .feed, store.unread > 0 {
+                        Button("Read all") {
+                            Task { await store.markAllRead(env.api) }
+                        }
                     }
                 }
             }
+            .task {
+                #if DEBUG
+                if ProcessInfo.processInfo.environment["WARMBLY_DEBUG_NOTIFICATIONS"] == "preferences" { tab = .preferences }
+                #endif
+                await store.load(env.api)
+                await PushManager.shared.refreshAuthorization()
+            }
+            .onChange(of: env.realtime.pulse(for: .notifications)) {
+                Task { await store.load(env.api) }
+            }
+            .alert(
+                "Couldn't save preferences",
+                isPresented: Binding(
+                    get: { store.actionError != nil },
+                    set: { if !$0 { store.actionError = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(store.actionError ?? "")
+            }
+    }
+
+    private var tabSwitcher: some View {
+        HStack(spacing: 4) {
+            ForEach(Tab.allCases, id: \.self) { option in
+                Button {
+                    withAnimation(.snappy) { tab = option }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(option.rawValue)
+                            .font(.system(size: 14.5, weight: tab == option ? .semibold : .medium))
+                        if option == .feed, store.unread > 0 {
+                            Text("\(store.unread)")
+                                .font(.system(size: 11.5, weight: .bold))
+                                .monospacedDigit()
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 6)
+                                .frame(minWidth: 18, minHeight: 18)
+                                .background(WTheme.negative, in: Capsule())
+                                .contentTransition(.numericText())
+                        }
+                    }
+                    .foregroundStyle(tab == option ? WTheme.ink : WTheme.inkSecondary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 34)
+                    .background {
+                        if tab == option {
+                            Capsule()
+                                .fill(WTheme.groupedCard)
+                                .shadow(color: .black.opacity(0.08), radius: 4, y: 1)
+                                .matchedGeometryEffect(id: "tab", in: tabSpace)
+                        }
+                    }
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
         }
-        .task {
-            await store.load(env.api)
-            await PushManager.shared.refreshAuthorization()
-        }
-        .onChange(of: env.realtime.pulse(for: .notifications)) {
-            Task { await store.load(env.api) }
-        }
-        .alert(
-            "Couldn't save preferences",
-            isPresented: Binding(
-                get: { store.actionError != nil },
-                set: { if !$0 { store.actionError = nil } }
-            )
-        ) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(store.actionError ?? "")
-        }
+        .padding(3)
+        .background(WTheme.fill, in: Capsule())
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(WTheme.groupedPage)
+        .sensoryFeedback(.selection, trigger: tab)
     }
 
     @ViewBuilder
@@ -270,40 +315,72 @@ struct NotificationsView: View {
             } else {
                 SkeletonRows()
             }
-        } else if tab == 0 {
-            feedList
         } else {
-            preferencesList
+            ScrollView {
+                Group {
+                    switch tab {
+                    case .feed: feed
+                    case .preferences: preferences
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 120)
+                .transition(.opacity)
+            }
+            .scrollIndicators(.hidden)
+            .refreshable { await store.load(env.api) }
         }
     }
 
     // MARK: Feed
 
-    @ViewBuilder
-    private var feedList: some View {
-        if store.items.isEmpty {
-            List {
-                EmptyStateView(
-                    title: "All caught up",
-                    message: "Replies, deliverability alerts, and sign-in notices land here."
-                )
-                .listRowSeparator(.hidden)
-                .listRowBackground(Color(.systemBackground))
+    private var dayGroups: [(title: String, items: [UserNotification])] {
+        let calendar = Calendar.current
+        var groups: [(title: String, items: [UserNotification])] = []
+        for item in store.items {
+            let date = item.createdAt ?? .distantPast
+            let title: String
+            if calendar.isDateInToday(date) {
+                title = "Today"
+            } else if calendar.isDateInYesterday(date) {
+                title = "Yesterday"
+            } else if let week = calendar.date(byAdding: .day, value: -7, to: .now), date > week {
+                title = "This week"
+            } else {
+                title = "Earlier"
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .refreshable { await store.load(env.api) }
+            if groups.last?.title == title {
+                groups[groups.count - 1].items.append(item)
+            } else {
+                groups.append((title, [item]))
+            }
+        }
+        return groups
+    }
+
+    @ViewBuilder
+    private var feed: some View {
+        if store.items.isEmpty {
+            VStack(spacing: 0) {
+                SettingsHero(
+                    symbol: "bell.badge.fill",
+                    color: SettingsPalette.notifications,
+                    title: "All caught up",
+                    subtitle: "Replies, deliverability alerts and sign-in notices land here."
+                )
+            }
+            .padding(.top, 60)
         } else {
-            List {
-                ForEach(store.items) { item in
-                    feedRow(item)
-                        .moreFlatRow(textLeading: MoreFlatMetrics.tileTextLeading)
+            VStack(alignment: .leading, spacing: 26) {
+                ForEach(dayGroups, id: \.title) { group in
+                    SettingsSection(group.title, dividerLeading: 62) {
+                        ForEach(group.items) { item in
+                            feedRow(item)
+                        }
+                    }
                 }
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .environment(\.defaultMinListRowHeight, 0)
-            .refreshable { await store.load(env.api) }
         }
     }
 
@@ -313,39 +390,42 @@ struct NotificationsView: View {
             Task { await store.markRead(item.id, env.api) }
         } label: {
             HStack(alignment: .top, spacing: 12) {
-                IconTile(symbol: MoreNotificationMeta.icon(item.category), tone: tone, size: 34)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.title ?? "Notification")
-                        .font(.subheadline.weight(item.isUnread ? .semibold : .regular))
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
+                SettingsIcon(symbol: MoreNotificationMeta.icon(item.category), color: tone.color, size: 34)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(item.title ?? "Notification")
+                            .font(.system(size: 15.5, weight: item.isUnread ? .semibold : .regular))
+                            .foregroundStyle(WTheme.ink)
+                            .lineLimit(2)
+                        Spacer(minLength: 4)
+                        if let created = item.createdAt {
+                            HStack(spacing: 5) {
+                                Text(WFormat.ago(created))
+                                    .font(.system(size: 13))
+                                    .monospacedDigit()
+                                    .foregroundStyle(item.isUnread ? WTheme.accent : WTheme.inkTertiary)
+                                if item.isUnread {
+                                    Circle().fill(WTheme.accent).frame(width: 8, height: 8)
+                                        .transition(.scale.combined(with: .opacity))
+                                }
+                            }
+                        }
+                    }
                     if let body = item.body, !body.isEmpty {
                         Text(body)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
+                            .font(.system(size: 14))
+                            .foregroundStyle(WTheme.inkSecondary)
+                            .lineLimit(3)
+                            .multilineTextAlignment(.leading)
                     }
                 }
-                Spacer(minLength: 8)
-                VStack(alignment: .trailing, spacing: 6) {
-                    if let created = item.createdAt {
-                        Text(WFormat.relative(created))
-                            .font(.footnote)
-                            .monospacedDigit()
-                            .foregroundStyle(item.isUnread ? AnyShapeStyle(WTheme.accent) : AnyShapeStyle(Color(.tertiaryLabel)))
-                    }
-                    if item.isUnread {
-                        Circle()
-                            .fill(WTheme.accent)
-                            .frame(width: 7, height: 7)
-                    }
-                }
-                .padding(.top, 2)
             }
-            .padding(.vertical, 10)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
             .contentShape(Rectangle())
         }
-        .buttonStyle(TapScaleStyle())
+        .buttonStyle(MoreRowPressStyle())
+        .animation(.snappy, value: item.isUnread)
     }
 
     // MARK: Preferences
@@ -355,96 +435,62 @@ struct NotificationsView: View {
         return store.preferences.keys.filter { !known.contains($0) }.sorted()
     }
 
-    private var preferencesList: some View {
-        List {
+    private var preferences: some View {
+        VStack(alignment: .leading, spacing: 28) {
+            SettingsSection("Delivered to", footer: "Each channel applies to every kind of alert you keep on below.") {
+                SettingsRow(
+                    icon: "app.badge.fill", color: WTheme.accent, title: "In the app",
+                    value: "Always", accessory: .none
+                )
+                SettingsToggleRow(
+                    icon: "iphone.radiowaves.left.and.right", color: SettingsPalette.notifications, title: "Push",
+                    subtitle: PushManager.shared.authorization == .denied ? "Off for Warmbly in iOS Settings" : "The first alert right away, a burst as one summary",
+                    isOn: channelBinding(\.push),
+                    disabled: PushManager.shared.authorization == .denied
+                )
+                if PushManager.shared.authorization == .denied {
+                    Button {
+                        if let url = URL(string: UIApplication.openNotificationSettingsURLString) {
+                            UIApplication.shared.open(url)
+                        }
+                    } label: {
+                        SettingsRow(icon: "gearshape.fill", color: SettingsPalette.profile, title: "Turn on in iOS Settings", accessory: .external)
+                    }
+                    .buttonStyle(MoreRowPressStyle())
+                }
+                SettingsToggleRow(
+                    icon: "envelope.fill", color: SettingsPalette.templates, title: "Email",
+                    subtitle: "Bundled, and never for alerts you already read",
+                    isOn: channelBinding(\.email)
+                )
+                SettingsToggleRow(
+                    icon: "number", color: SettingsPalette.members, title: "Slack",
+                    subtitle: "To the channel set up in Integrations on the web",
+                    isOn: channelBinding(\.slack)
+                )
+            }
+
             ForEach(MoreNotificationMeta.knownGroups, id: \.title) { group in
                 let present = group.keys.filter { store.preferences[$0] != nil }
                 if !present.isEmpty {
-                    MoreFlatSectionHeader(group.title, top: group.title == MoreNotificationMeta.knownGroups.first?.title ? 8 : 20)
-                    ForEach(present, id: \.self) { key in
-                        preferenceRow(key)
+                    SettingsSection(group.title) {
+                        ForEach(present, id: \.self) { key in
+                            preferenceRow(key)
+                        }
                     }
                 }
             }
             if !extraKeys.isEmpty {
-                MoreFlatSectionHeader("Other")
-                ForEach(extraKeys, id: \.self) { key in
-                    preferenceRow(key)
-                }
-            }
-            MoreFlatSectionHeader("Channels")
-            channelRow(
-                symbol: "app.badge.fill",
-                tone: .sky,
-                label: "In-app",
-                caption: "The feed above; always on for enabled categories."
-            ) {
-                Text("On")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Tone.emerald.color)
-            }
-            channelRow(
-                symbol: "iphone.gen3.radiowaves.left.and.right",
-                tone: .rose,
-                label: "Push",
-                caption: "Alerts on this device. The first event pushes right away; bursts arrive as one summary instead of a ping per event."
-            ) {
-                Toggle("", isOn: channelBinding(\.push))
-                    .labelsHidden()
-                    .tint(WTheme.accent)
-                    .disabled(PushManager.shared.authorization == .denied)
-            }
-            if PushManager.shared.authorization == .denied {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(Tone.amber.color)
-                    Text("Notifications are off for Warmbly in iOS Settings.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 8)
-                    Button("Open Settings") {
-                        if let url = URL(string: UIApplication.openNotificationSettingsURLString) {
-                            UIApplication.shared.open(url)
-                        }
+                SettingsSection("Other") {
+                    ForEach(extraKeys, id: \.self) { key in
+                        preferenceRow(key)
                     }
-                    .font(.footnote.weight(.medium))
                 }
-                .padding(.vertical, 6)
-                .moreFlatRow(textLeading: MoreFlatMetrics.tileTextLeading)
             }
-            channelRow(
-                symbol: "envelope.fill",
-                tone: .indigo,
-                label: "Email",
-                caption: "Delivery to your account email."
-            ) {
-                Toggle("", isOn: channelBinding(\.email))
-                    .labelsHidden()
-                    .tint(WTheme.accent)
-            }
-            channelRow(
-                symbol: "bubble.left.and.bubble.right.fill",
-                tone: .emerald,
-                label: "Slack",
-                caption: "Posts to the Slack channel set up in Integrations on the web."
-            ) {
-                Toggle("", isOn: channelBinding(\.slack))
-                    .labelsHidden()
-                    .tint(WTheme.accent)
-            }
-            Text("Channels apply across every enabled category above.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .padding(.top, 16)
-                .padding(.bottom, 4)
-                .moreFlatRow(separator: .hidden)
-            MoreFlatSectionHeader("Email delivery")
-            channelRow(
-                symbol: "tray.full.fill",
-                tone: .indigo,
-                label: "Bundling window",
-                caption: MoreNotificationMeta.windowCaption(store.emailDigestMinutes)
+
+            SettingsSection(
+                "Email bundling",
+                footer: "\(MoreNotificationMeta.windowCaption(store.emailDigestMinutes)) Sign-in alerts always send right away."
             ) {
                 Menu {
                     Picker("Bundling window", selection: windowBinding) {
@@ -453,51 +499,25 @@ struct NotificationsView: View {
                         }
                     }
                 } label: {
-                    HStack(spacing: 4) {
-                        Text(MoreNotificationMeta.windowLabel(store.emailDigestMinutes))
-                            .font(.subheadline.weight(.medium))
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.caption2.weight(.semibold))
-                    }
-                    .foregroundStyle(WTheme.accent)
-                    .contentShape(Rectangle())
+                    SettingsRow(
+                        icon: "tray.full.fill", color: SettingsPalette.templates, title: "Send at most",
+                        value: MoreNotificationMeta.windowLabel(store.emailDigestMinutes).replacingOccurrences(of: "Every ", with: "every "),
+                        accessory: .menu
+                    )
                 }
+                .buttonStyle(MoreRowPressStyle())
             }
-            Text("Alerts you read in the app are never emailed. Security sign-in alerts always send immediately.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .padding(.top, 16)
-                .padding(.bottom, 28)
-                .moreFlatRow(separator: .hidden)
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .environment(\.defaultMinListRowHeight, 0)
-        .refreshable { await store.load(env.api) }
     }
 
     private func preferenceRow(_ key: String) -> some View {
-        Toggle(isOn: preferenceBinding(key)) {
-            HStack(spacing: 12) {
-                IconTile(
-                    symbol: MoreNotificationMeta.icon(key),
-                    tone: store.preferences[key]?.enabled == true ? MoreNotificationMeta.tone(key) : .slate,
-                    size: 34
-                )
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(MoreNotificationMeta.label(key))
-                        .font(.body.weight(.medium))
-                    if let caption = MoreNotificationMeta.caption(key) {
-                        Text(caption)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
-        .tint(WTheme.accent)
-        .padding(.vertical, 9)
-        .moreFlatRow(textLeading: MoreFlatMetrics.tileTextLeading)
+        SettingsToggleRow(
+            icon: MoreNotificationMeta.icon(key),
+            color: MoreNotificationMeta.tone(key).color,
+            title: MoreNotificationMeta.label(key),
+            subtitle: MoreNotificationMeta.caption(key),
+            isOn: preferenceBinding(key)
+        )
     }
 
     private func preferenceBinding(_ key: String) -> Binding<Bool> {
@@ -536,28 +556,5 @@ struct NotificationsView: View {
                 Task { await store.setChannel(channel, newValue, env.api) }
             }
         )
-    }
-
-    private func channelRow(
-        symbol: String,
-        tone: Tone,
-        label: String,
-        caption: String,
-        @ViewBuilder trailing: () -> some View
-    ) -> some View {
-        HStack(spacing: 12) {
-            IconTile(symbol: symbol, tone: tone, size: 34)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label)
-                    .font(.body.weight(.medium))
-                Text(caption)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 8)
-            trailing()
-        }
-        .padding(.vertical, 9)
-        .moreFlatRow(textLeading: MoreFlatMetrics.tileTextLeading)
     }
 }

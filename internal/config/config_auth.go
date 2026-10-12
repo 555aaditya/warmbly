@@ -35,6 +35,12 @@ type AuthConfig struct {
 	TurnstileSecret string
 	TurnstileBypass string
 
+	// AppAttestAppIDs are the "<team id>.<bundle id>" values whose App Attest
+	// proofs stand in for the captcha. Empty turns native app proofs off.
+	AppAttestAppIDs []string
+	// AppAttestAllowDevelopment accepts proofs from development-signed builds.
+	AppAttestAllowDevelopment bool
+
 	// TwoFASecret is the server-wide key the TOTP secret is sealed with (AES-GCM).
 	// Must be set when 2FA is in use; falls back to AuthSecret when unset so a
 	// deployment without the env var still functions (sealed under the auth key).
@@ -99,6 +105,13 @@ func (c *Config) LoadAuthConfig(ctx context.Context) (*AuthConfig, error) {
 	SetTurnstileSecretResolved(turnstileSecret != "")
 	turnstileBypass := c.GetSecretOptional(ctx, "TURNSTILE_BYPASS_TOKEN", "turnstile/bypass_token", "")
 
+	// Defaults to the iOS app this instance's Apple team ships, when it names one.
+	appAttestAppIDs := splitCSV(c.GetStringOptional(ctx, "APP_ATTEST_APP_IDS", "app-attest/app_ids", ""))
+	if len(appAttestAppIDs) == 0 && appleTeamID != "" && appleIOSBundleID != "" {
+		appAttestAppIDs = []string{appleTeamID + "." + appleIOSBundleID}
+	}
+	appAttestAllowDev := c.GetBoolOptional(ctx, "APP_ATTEST_ALLOW_DEVELOPMENT", "app-attest/allow_development", false)
+
 	// 2FA sealing key. Optional: falls back to AUTH_SECRET so existing
 	// deployments keep working; rotating it invalidates enrolled TOTP secrets.
 	twoFASecret := c.GetSecretOptional(ctx, "TWOFA_SECRET", "twofa_secret", authSecret)
@@ -125,7 +138,10 @@ func (c *Config) LoadAuthConfig(ctx context.Context) (*AuthConfig, error) {
 		AuthSecret:      authSecret,
 		TurnstileSecret: turnstileSecret,
 		TurnstileBypass: turnstileBypass,
-		TwoFASecret:     twoFASecret,
+
+		AppAttestAppIDs:           appAttestAppIDs,
+		AppAttestAllowDevelopment: appAttestAllowDev,
+		TwoFASecret:               twoFASecret,
 
 		WebAuthnRPID:          rpID,
 		WebAuthnRPDisplayName: rpDisplayName,

@@ -91,3 +91,17 @@ export function updateUserRateLimits(
         data: body,
     });
 }
+
+/** Grants (reason required) or clears the emailed sign-in code exemption.
+ *  Clearing also signs the account out everywhere. */
+export function setUserLoginCodeExempt(
+    id: string,
+    body: { exempt: true; reason: string } | { exempt: false },
+): Promise<{ login_code_exempt: boolean; password_cleared?: boolean }> {
+    return Request({
+        method: "PUT",
+        url: `/admin/users/${id}/login-code-exempt`,
+        authorization: true,
+        data: body,
+    });
+}

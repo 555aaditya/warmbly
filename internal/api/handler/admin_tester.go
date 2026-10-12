@@ -8,6 +8,7 @@ import (
 	"net/mail"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -278,23 +279,34 @@ func (h *Handler) AdminRevokeTester(c *gin.Context) {
 		errx.JSON(c, errx.New(errx.ServiceUnavailable, "accounts are not available on this instance"))
 		return
 	}
+	cleared, ok := h.revokeExemption(c, userID)
+	if !ok {
+		return
+	}
+	h.logTesterAction(c, *adminID, userID, "revoke_tester", map[string]any{"password_cleared": cleared})
+	c.JSON(http.StatusOK, gin.H{"revoked": true, "password_cleared": cleared})
+}
+
+// revokeExemption ends an exemption and every session the account holds,
+// answering the caller itself when it fails.
+func (h *Handler) revokeExemption(c *gin.Context, userID uuid.UUID) (passwordCleared, ok bool) {
 	ctx := c.Request.Context()
 	// Sessions end first, so a failure leaves the tester listed for a retry.
 	if h.TokenService != nil {
 		if xerr := h.TokenService.RevokeOtherSessions(ctx, userID, uuid.Nil); xerr != nil {
 			errs.CaptureException(xerr)
 			errx.JSON(c, errx.New(errx.Internal, "could not end the account's sessions"))
-			return
+			return false, false
 		}
 	}
 	cleared, err := h.UserRepo.RevokeTester(ctx, userID)
 	if err != nil {
 		if errors.Is(err, repository.ErrUserNotFound) {
 			errx.JSON(c, errx.New(errx.NotFound, "no such account"))
-			return
+			return false, false
 		}
 		errx.JSON(c, errx.New(errx.Internal, "could not revoke the exemption"))
-		return
+		return false, false
 	}
 	// A sign-in that landed between the two writes is ended too.
 	if h.TokenService != nil {
@@ -302,8 +314,70 @@ func (h *Handler) AdminRevokeTester(c *gin.Context) {
 			errs.CaptureException(xerr)
 		}
 	}
-	h.logTesterAction(c, *adminID, userID, "revoke_tester", map[string]any{"password_cleared": cleared})
-	c.JSON(http.StatusOK, gin.H{"revoked": true, "password_cleared": cleared})
+	return cleared, true
+}
+
+type adminSetLoginCodeExemptRequest struct {
+	Exempt *bool  `json:"exempt"`
+	Reason string `json:"reason"`
+}
+
+// loginCodeExemptReasonMax bounds the free-text reason kept on the user row.
+const loginCodeExemptReasonMax = 500
+
+// AdminSetLoginCodeExempt grants or clears the emailed-login-code exemption on
+// an existing account. Clearing goes through the same revoke as a tester.
+func (h *Handler) AdminSetLoginCodeExempt(c *gin.Context) {
+	adminID := middleware.GetAdminUserID(c)
+	if adminID == nil {
+		errx.JSON(c, errx.ErrUnauthorized)
+		return
+	}
+	userID, err := uuid.Parse(c.Param("id"))
+	if err != nil || userID == uuid.Nil {
+		errx.JSON(c, errx.New(errx.BadRequest, "that is not a user id"))
+		return
+	}
+	var req adminSetLoginCodeExemptRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.Exempt == nil {
+		errx.JSON(c, errx.New(errx.BadRequest, "exempt is required"))
+		return
+	}
+	if h.UserRepo == nil {
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "accounts are not available on this instance"))
+		return
+	}
+
+	if !*req.Exempt {
+		cleared, ok := h.revokeExemption(c, userID)
+		if !ok {
+			return
+		}
+		h.logTesterAction(c, *adminID, userID, "revoke_login_code_exempt", map[string]any{"password_cleared": cleared})
+		c.JSON(http.StatusOK, gin.H{"login_code_exempt": false, "password_cleared": cleared})
+		return
+	}
+
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		errx.JSON(c, errx.New(errx.BadRequest, "a reason is required"))
+		return
+	}
+	if utf8.RuneCountInString(reason) > loginCodeExemptReasonMax {
+		errx.JSON(c, errx.New(errx.BadRequest, "the reason is too long"))
+		return
+	}
+	if err := h.UserRepo.SetLoginCodeExempt(c.Request.Context(), userID, true, reason, adminID); err != nil {
+		if errors.Is(err, repository.ErrUserNotFound) {
+			errx.JSON(c, errx.New(errx.NotFound, "no such account"))
+			return
+		}
+		errs.CaptureException(err)
+		errx.JSON(c, errx.New(errx.Internal, "could not grant the exemption"))
+		return
+	}
+	h.logTesterAction(c, *adminID, userID, "grant_login_code_exempt", map[string]any{"reason": reason})
+	c.JSON(http.StatusOK, gin.H{"login_code_exempt": true, "reason": reason})
 }
 
 func (h *Handler) logTesterAction(c *gin.Context, adminID, userID uuid.UUID, action string, details map[string]any) {

@@ -243,6 +243,7 @@ func (r *adminRepository) SearchUsers(ctx context.Context, search *models.AdminU
 		SELECT
 			u.id, u.first_name, u.last_name, u.email, u.max_organizations, u.free_trial_used,
 			u.admin_permissions, u.admin_granted_at, u.admin_granted_by, u.banned_at,
+			u.login_code_exempt, u.login_code_exempt_reason, u.login_code_exempt_at, u.password_expires_at,
 			u.created_at, u.updated_at,
 			(SELECT COUNT(*) FROM organization_members om WHERE om.user_id = u.id) as org_count,
 			(SELECT COUNT(*) FROM email_accounts ea WHERE ea.user_id = u.id) as email_count,
@@ -267,6 +268,7 @@ func (r *adminRepository) SearchUsers(ctx context.Context, search *models.AdminU
 		err := rows.Scan(
 			&u.ID, &u.FirstName, &u.LastName, &u.Email, &u.MaxOrganizations, &u.FreeTrialUsed,
 			&u.AdminPermissions, &u.AdminGrantedAt, &u.AdminGrantedBy, &u.BannedAt,
+			&u.LoginCodeExempt, &u.LoginCodeExemptReason, &u.LoginCodeExemptAt, &u.PasswordExpiresAt,
 			&u.CreatedAt, &u.UpdatedAt,
 			&u.OrganizationCount, &u.EmailAccountCount, &u.CampaignCount,
 		)
@@ -304,6 +306,7 @@ func (r *adminRepository) GetUserDetail(ctx context.Context, userID uuid.UUID) (
 		SELECT
 			u.id, u.first_name, u.last_name, u.email, u.max_organizations, u.free_trial_used,
 			u.admin_permissions, u.admin_granted_at, u.admin_granted_by, u.banned_at,
+			u.login_code_exempt, u.login_code_exempt_reason, u.login_code_exempt_at, u.password_expires_at,
 			u.created_at, u.updated_at,
 			(SELECT COUNT(*) FROM organization_members om WHERE om.user_id = u.id) as org_count,
 			(SELECT COUNT(*) FROM email_accounts ea WHERE ea.user_id = u.id) as email_count,
@@ -316,6 +319,7 @@ func (r *adminRepository) GetUserDetail(ctx context.Context, userID uuid.UUID) (
 	err := r.db.QueryRow(ctx, query, userID).Scan(
 		&u.ID, &u.FirstName, &u.LastName, &u.Email, &u.MaxOrganizations, &u.FreeTrialUsed,
 		&u.AdminPermissions, &u.AdminGrantedAt, &u.AdminGrantedBy, &u.BannedAt,
+		&u.LoginCodeExempt, &u.LoginCodeExemptReason, &u.LoginCodeExemptAt, &u.PasswordExpiresAt,
 		&u.CreatedAt, &u.UpdatedAt,
 		&u.OrganizationCount, &u.EmailAccountCount, &u.CampaignCount,
 	)

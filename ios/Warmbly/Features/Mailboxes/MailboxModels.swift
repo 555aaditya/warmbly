@@ -20,6 +20,12 @@ struct EmailAccount: Codable, Identifiable, Hashable, Sendable {
     var signatureCode: Bool?
     var provider: String?
     var status: String?
+    /// Who hosts it (google_workspace, zoho, ...), "" until detected.
+    var mailHost: String?
+    var authMethod: String?
+    /// The inbox vendor it was imported from, if any.
+    var vendor: String?
+    var avatarURL: String?
     var lastSyncedAt: Date?
     var lastMessageID: Int64?
     var campaignLimit: Int?
@@ -47,7 +53,10 @@ struct EmailAccount: Codable, Identifiable, Hashable, Sendable {
     var updatedAt: Date?
 
     enum CodingKeys: String, CodingKey {
-        case id, email, name, provider, status, warmup, timezone, tags
+        case id, email, name, provider, status, warmup, timezone, tags, vendor
+        case mailHost = "mail_host"
+        case authMethod = "auth_method"
+        case avatarURL = "avatar_url"
         case userID = "user_id"
         case organizationID = "organization_id"
         case workerID = "worker_id"
@@ -88,14 +97,11 @@ struct EmailAccount: Codable, Identifiable, Hashable, Sendable {
         return .off
     }
 
-    var providerLabel: String {
-        switch provider {
-        case "gmail": return "Gmail"
-        case "outlook": return "Outlook"
-        case "smtp_imap": return "SMTP/IMAP"
-        default: return provider?.isEmpty == false ? provider! : "Mailbox"
-        }
+    var brand: MailboxBrand {
+        MailboxBrand(provider: provider, mailHost: mailHost, authMethod: authMethod, vendor: vendor)
     }
+
+    var providerLabel: String { brand.label }
 
     var statusLabel: String {
         switch status {
@@ -423,23 +429,14 @@ struct MailboxWarmupDailyStat: Codable, Sendable {
 
 // MARK: - Connect / onboarding (POST /emails/onboarding/*)
 
-/// `POST /emails/onboarding/oauth/start` body.
-struct MailboxOAuthStartBody: Encodable {
-    var provider: String
-}
-
-/// `POST /emails/onboarding/oauth/start` response.
-struct MailboxOAuthStartResponse: Codable, Sendable {
-    var url: String
-    var state: String
-}
-
 /// One SMTP or IMAP endpoint of the SMTP/IMAP connect body.
 struct MailboxServerCredentials: Encodable {
     var username: String
     var password: String
     var host: String
     var port: Int
+    /// `tls` or `starttls`; the server infers it from the port when absent.
+    var security: String?
 }
 
 /// `POST /emails/onboarding/smtp-imap` body.

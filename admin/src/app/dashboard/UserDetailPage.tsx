@@ -44,6 +44,7 @@ import {
 import type { UserBan } from "@/lib/api/models/admin";
 import { UserBanDialog } from "./UserBanDialog";
 import { UserRateLimitsDialog } from "./UserRateLimitsDialog";
+import { UserLoginCodeCard } from "./UserLoginCodeCard";
 
 const CRUMBS = [{ label: "Users", to: "/users" }];
 
@@ -129,6 +130,7 @@ export default function UserDetailPage() {
                                 Admin
                             </StatusBadge>
                         )}
+                        {u.login_code_exempt && <StatusBadge tone="warning">Skips sign-in code</StatusBadge>}
                     </>
                 }
             >
@@ -270,6 +272,10 @@ export default function UserDetailPage() {
                         )}
                     </Section>
 
+                    <Section title="Sign-in">
+                        <UserLoginCodeCard user={u} />
+                    </Section>
+
                     <Section title={<Count label="Ban history" n={bans.length || undefined} />}>
                         {bansQuery.isLoading ? (
                             <Skeleton className="h-24 w-full" />
@@ -342,6 +348,13 @@ export default function UserDetailPage() {
                                 </span>
                             </Property>
                         )}
+                        <Property label="Sign-in code">
+                            {u.login_code_exempt ? (
+                                <span className="text-amber-700 dark:text-amber-400">Skipped</span>
+                            ) : (
+                                <span className="text-muted-foreground">Instance policy</span>
+                            )}
+                        </Property>
                         <Property label="Free trial used">{u.free_trial_used ? "Yes" : "No"}</Property>
                         <Property label="Max orgs">
                             <span className="tabular-nums">{u.max_organizations}</span>

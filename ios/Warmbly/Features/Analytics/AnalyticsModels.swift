@@ -60,6 +60,34 @@ struct AnalyticsDataEnvelope<T: Codable & Sendable>: Codable, Sendable {
     var data: [T]?
 }
 
+/// Sends and engagement summed over a run of days.
+struct AnalyticsTotals: Equatable, Sendable {
+    var sent = 0
+    var opens = 0
+    var clicks = 0
+    var replies = 0
+
+    var openRate: Double? { sent > 0 ? Double(opens) / Double(sent) * 100 : nil }
+    var clickRate: Double? { sent > 0 ? Double(clicks) / Double(sent) * 100 : nil }
+    var replyRate: Double? { sent > 0 ? Double(replies) / Double(sent) * 100 : nil }
+
+    /// The `days` UTC days ending `days` ago, summed from a longer trend.
+    static func before(days: Int, in trend: [AnalyticsTrendPoint]) -> AnalyticsTotals {
+        let today = TrendDay.utc.startOfDay(for: .now)
+        guard let end = TrendDay.utc.date(byAdding: .day, value: -days, to: today),
+              let start = TrendDay.utc.date(byAdding: .day, value: -(days * 2 - 1), to: today) else { return .init() }
+        var totals = AnalyticsTotals()
+        for point in trend {
+            guard let day = AnalyticsDay.parse(point.date.map { String($0.prefix(10)) }), day >= start, day <= end else { continue }
+            totals.sent += point.sent ?? 0
+            totals.opens += point.opens ?? 0
+            totals.clicks += point.clicks ?? 0
+            totals.replies += point.replies ?? 0
+        }
+        return totals
+    }
+}
+
 // MARK: - Dashboard (GET analytics/dashboard)
 
 struct DashboardAnalytics: Codable, Sendable {
@@ -226,6 +254,8 @@ struct DeliverabilitySummary: Codable, Sendable {
     var intentOutOfOffice: Int?
     var intentQuestion: Int?
     var intentNeutral: Int?
+    var intentAutomated: Int?
+    var score: Int?
     var emailsSent: Int?
     var bounceRate: Double?
     var complaintRate: Double?
@@ -258,6 +288,8 @@ struct DeliverabilitySummary: Codable, Sendable {
         case intentOutOfOffice = "intent_out_of_office"
         case intentQuestion = "intent_question"
         case intentNeutral = "intent_neutral"
+        case intentAutomated = "intent_automated"
+        case score
         case emailsSent = "emails_sent"
         case bounceRate = "bounce_rate"
         case complaintRate = "complaint_rate"
@@ -399,7 +431,15 @@ struct AccountHealthRow: Codable, Sendable, Identifiable {
     var dailyUsage: AnalyticsAccountUsage?
     var warmupStatus: AnalyticsWarmupStatusInfo?
     var warmupHealth: AnalyticsWarmupHealthInfo?
+    var warmupPlacement: AnalyticsPlacement?
     var inCampaign: Bool?
+    /// Joined from the mailbox list by the store; this endpoint does not carry them.
+    var brand: MailboxBrand?
+    var avatarURL: String?
+
+    var providerLabel: String { resolvedBrand.label }
+
+    var resolvedBrand: MailboxBrand { brand ?? MailboxBrand(provider: provider, mailHost: nil) }
 
     enum CodingKeys: String, CodingKey {
         case id, email, provider, status, health, errors
@@ -407,6 +447,7 @@ struct AccountHealthRow: Codable, Sendable, Identifiable {
         case dailyUsage = "daily_usage"
         case warmupStatus = "warmup_status"
         case warmupHealth = "warmup_health"
+        case warmupPlacement = "warmup_placement"
         case inCampaign = "in_campaign"
     }
 }
@@ -475,6 +516,25 @@ struct AnalyticsWarmupStatusInfo: Codable, Sendable {
         case maxVolume = "max_volume"
         case replyRate = "reply_rate"
         case daysActive = "days_active"
+    }
+}
+
+/// Where verified warmup deliveries landed at the big three providers.
+struct AnalyticsPlacement: Codable, Sendable {
+    var windowDays: Int?
+    var minSample: Int?
+    var delivered: Int?
+    var inbox: Int?
+    var tabs: Int?
+    var spam: Int?
+    var inboxRate: Double?
+    var band: String?
+
+    enum CodingKeys: String, CodingKey {
+        case delivered, inbox, tabs, spam, band
+        case windowDays = "window_days"
+        case minSample = "min_sample"
+        case inboxRate = "inbox_rate"
     }
 }
 

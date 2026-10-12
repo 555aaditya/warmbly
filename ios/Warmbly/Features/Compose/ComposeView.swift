@@ -75,11 +75,11 @@ struct ComposeView: View {
 
     @State private var editingSelection: EditingSelection?
 
-    init(draft: ComposeDraft? = nil, onSent: @escaping (ComposeSendResponse, ComposeDraftPayload) -> Void = { _, _ in }) {
+    init(draft: ComposeDraft? = nil, prefillTo: [String] = [], onSent: @escaping (ComposeSendResponse, ComposeDraftPayload) -> Void = { _, _ in }) {
         self.draft = draft
         self.onSent = onSent
         _store = State(initialValue: ComposeStore(draft: draft))
-        _to = State(initialValue: draft?.to ?? [])
+        _to = State(initialValue: draft?.to ?? prefillTo)
         _cc = State(initialValue: draft?.cc ?? [])
         _bcc = State(initialValue: draft?.bcc ?? [])
         _subject = State(initialValue: draft?.subject ?? "")

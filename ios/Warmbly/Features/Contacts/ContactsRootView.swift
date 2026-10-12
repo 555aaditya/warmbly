@@ -17,6 +17,10 @@ struct ContactsRootView: View {
     @State private var showFilters = false
     @State private var showBulkEdit = false
     @State private var confirmBulkDelete = false
+    @State private var pendingDelete: Contact?
+    @State private var editing: Contact?
+    @State private var actionError: String?
+    @State private var rowsShown = false
     @FocusState private var searchFocused: Bool
 
     private static let sidebarWidth: CGFloat = 300
@@ -34,7 +38,7 @@ struct ContactsRootView: View {
                     mainPane
                         .scaleEffect(sidebarOpen ? 0.97 : 1, anchor: .trailing)
                     if sidebarOpen {
-                        Color.black.opacity(0.32)
+                        Color.black.opacity(0.22)
                             .ignoresSafeArea()
                             .transition(.opacity)
                             .onTapGesture { closeSidebar() }
@@ -43,7 +47,7 @@ struct ContactsRootView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
-            .toolbarVisibility(sidebarOpen || store.selectionMode ? .hidden : .automatic, for: .tabBar)
+            .tabBarHidden(sidebarOpen || store.selectionMode)
             .navigationDestination(for: Contact.self) { contact in
                 ContactDetailView(contact: contact) { updated in
                     store.apply(updated)
@@ -75,6 +79,37 @@ struct ContactsRootView: View {
                         store.exitSelection()
                     }
                 )
+            }
+            .sheet(item: $editing) { contact in
+                ContactBulkEditSheet(
+                    ids: [contact.id],
+                    categories: categoryStore.categories,
+                    campaigns: store.campaignOptions,
+                    loadCampaigns: { await store.loadCampaignOptions(env.api) },
+                    perform: { body in
+                        try await store.bulkEdit(env.api, body: body)
+                        await store.load(env.api)
+                    }
+                )
+            }
+            .confirmationDialog(
+                "Delete \(pendingDelete?.displayName ?? "contact")?",
+                isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+                titleVisibility: .visible,
+                presenting: pendingDelete
+            ) { contact in
+                Button("Delete contact", role: .destructive) {
+                    Task {
+                        do { try await store.delete(env.api, id: contact.id) } catch { actionError = error.localizedDescription }
+                    }
+                }
+            } message: { _ in
+                Text("This removes them from your workspace and every campaign. This can't be undone.")
+            }
+            .alert("Couldn't update contact", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(actionError ?? "")
             }
             .confirmationDialog(
                 "Delete \(store.selectedCount) contact\(store.selectedCount == 1 ? "" : "s")?",
@@ -127,7 +162,22 @@ struct ContactsRootView: View {
             scopeCaption
             list
         }
-        .background(Color(.systemBackground))
+        #if DEBUG
+        // Scripted debug runs can open the drawer (WARMBLY_DEBUG_DRAWER=1).
+        .onAppear {
+            let debug = ProcessInfo.processInfo.environment
+            if debug["WARMBLY_DEBUG_DRAWER"] != nil { openSidebar() }
+            if let raw = debug["WARMBLY_DEBUG_SORT"], let sort = ContactSort(rawValue: raw) { store.filters.sortBy = sort }
+        }
+        // WARMBLY_DEBUG_CONTACT opens the contact whose name or address contains it.
+        .onChange(of: store.hasLoaded) { _, loaded in
+            guard loaded, path.isEmpty, let match = ProcessInfo.processInfo.environment["WARMBLY_DEBUG_CONTACT"],
+                  let contact = store.contacts.first(where: { $0.displayName.localizedCaseInsensitiveContains(match) || ($0.email ?? "").localizedCaseInsensitiveContains(match) })
+            else { return }
+            path.append(contact)
+        }
+        #endif
+        .background(WTheme.canvas)
         .overlay(alignment: .bottom) {
             if store.selectionMode {
                 ContactSelectionBar(
@@ -150,93 +200,50 @@ struct ContactsRootView: View {
         )
     }
 
-    // MARK: Search pill
+    // MARK: Header
 
     private var searchBar: some View {
         @Bindable var store = store
-        return HStack(spacing: 10) {
-            HStack(spacing: 6) {
-                Button {
-                    openSidebar()
-                } label: {
-                    Image(systemName: "line.3.horizontal")
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .frame(width: 38, height: 38)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Open contacts menu")
-
-                TextField("Search contacts", text: $store.query)
-                    .font(.subheadline)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.search)
-                    .focused($searchFocused)
-
-                if !store.query.isEmpty {
-                    Button {
-                        store.query = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 16))
-                            .foregroundStyle(.tertiary)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Clear search")
-                }
-
-                filterButton
-                PresenceAvatars()
-                    .padding(.trailing, 8)
-            }
-            .frame(height: 44)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-
+        return GlassHeaderBar(
+            title: store.isNarrowed ? "Filtered" : store.scope.title,
+            subtitle: subtitle,
+            query: $store.query,
+            searchPrompt: "Search contacts",
+            searchFocused: $searchFocused,
+            menuLabel: "Open contacts menu",
+            onMenu: openSidebar
+        ) {
+            filterButton
             if canManage {
-                Button {
-                    showCreate = true
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .frame(width: 44, height: 44)
-                        .background(Color(.secondarySystemBackground), in: Circle())
-                }
-                .buttonStyle(TapScaleStyle())
-                .accessibilityLabel("New contact")
+                HeaderPrimaryButton(symbol: "plus", label: "New contact") { showCreate = true }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 4)
-        .padding(.bottom, 6)
+    }
+
+    private var subtitle: Text? {
+        if store.isNarrowed, store.hasLoaded, let count = store.totalCount {
+            return Text("\(WFormat.compact(count)) found")
+        }
+        guard let count = scopeCount else { return nil }
+        return Text("\(WFormat.compact(count)) contact\(count == 1 ? "" : "s")")
     }
 
     private var filterButton: some View {
-        Button {
+        GlassCircleButton(symbol: "line.3.horizontal.decrease", label: "Filters", tint: store.hasFilters ? WTheme.accent : WTheme.ink) {
             showFilters = true
-        } label: {
-            ZStack(alignment: .topTrailing) {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(store.hasFilters ? WTheme.accent : .secondary)
-                    .frame(width: 32, height: 38)
-                    .contentShape(Rectangle())
-                if store.filters.activeCount > 0 {
-                    Text("\(store.filters.activeCount)")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(minWidth: 14, minHeight: 14)
-                        .background(WTheme.accent, in: Circle())
-                        .offset(x: 4, y: 1)
-                } else if store.hasFilters {
-                    Circle().fill(WTheme.accent).frame(width: 7, height: 7).offset(x: 2, y: 3)
-                }
+        }
+        .overlay(alignment: .topTrailing) {
+            if store.filters.activeCount > 0 {
+                Text("\(store.filters.activeCount)")
+                    .font(.system(size: 10.5, weight: .bold))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                    .frame(minWidth: 17, minHeight: 17)
+                    .background(WTheme.accent, in: Circle())
+                    .offset(x: 3, y: -3)
+                    .transition(.scale.combined(with: .opacity))
             }
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Filters")
     }
 
     // MARK: Selection header
@@ -244,16 +251,18 @@ struct ContactsRootView: View {
     private var selectionHeader: some View {
         HStack(spacing: 12) {
             Button("Done") { store.exitSelection() }
-                .fontWeight(.semibold)
+                .buttonStyle(InkButtonStyle(size: .small))
             Spacer()
             Text("\(store.selectedCount) selected")
-                .font(.subheadline.weight(.semibold))
+                .font(.system(size: 15, weight: .semibold))
                 .monospacedDigit()
+                .foregroundStyle(WTheme.ink)
                 .contentTransition(.numericText())
             Spacer()
             Button(store.allLoadedSelected ? "Clear" : "Select all") { store.selectAllLoaded() }
+                .buttonStyle(OutlineButtonStyle(size: .small))
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 12)
         .frame(height: 44)
         .padding(.top, 4)
         .padding(.bottom, 6)
@@ -261,37 +270,11 @@ struct ContactsRootView: View {
 
     // MARK: Scope caption
 
+    @ViewBuilder
     private var scopeCaption: some View {
-        HStack(spacing: 6) {
-            Text(captionTitle)
-                .font(.caption.weight(.semibold))
-                .tracking(0.9)
-                .foregroundStyle(.secondary)
-            if !store.isSearching, !store.hasFilters, let count = scopeCount, count > 0 {
-                Text(WFormat.compact(count))
-                    .font(.caption.weight(.semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(.tertiary)
-                    .contentTransition(.numericText())
-            }
-            Spacer()
-            if (store.isSearching || store.hasFilters), store.hasLoaded, let count = store.totalCount {
-                Text("\(count) found")
-                    .font(.caption.weight(.semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .contentTransition(.numericText())
-            }
+        if store.isSearching, store.hasLoaded {
+            SearchResultsLine(count: store.totalCount ?? 0)
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 8)
-        .padding(.bottom, 2)
-    }
-
-    private var captionTitle: String {
-        if store.isSearching { return "SEARCH RESULTS" }
-        if store.hasFilters { return "FILTERED" }
-        return store.scope.title.uppercased()
     }
 
     /// The drawer count matching the current scope, for the caption.
@@ -310,7 +293,7 @@ struct ContactsRootView: View {
 
     @ViewBuilder
     private var list: some View {
-        if store.isLoading, !store.hasLoaded {
+        if !store.hasLoaded, store.errorMessage == nil {
             ScrollView { SkeletonRows(rows: 10) }
         } else if let error = store.errorMessage, store.contacts.isEmpty {
             ErrorStateView(title: "Couldn't load contacts", message: error) {
@@ -320,20 +303,28 @@ struct ContactsRootView: View {
             emptyState
         } else {
             List {
-                ForEach(store.contacts) { contact in
-                    row(contact)
+                ForEach(ContactSection.build(store.contacts, sort: store.filters.sortBy)) { section in
+                    Section {
+                        ForEach(Array(section.contacts.enumerated()), id: \.element.id) { offset, contact in
+                            row(contact)
+                                .reveal(rowsShown, min(section.start + offset, 8))
+                        }
+                    } header: {
+                        if let title = section.title { sectionHeader(title) }
+                    }
                 }
                 if store.hasMore {
                     HStack(spacing: 8) {
                         Spacer()
                         ProgressView().controlSize(.small)
                         Text("Loading more…")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .font(WFont.meta(11, weight: .medium))
+                            .foregroundStyle(WTheme.inkTertiary)
                         Spacer()
                     }
                     .padding(.vertical, 6)
                     .listRowSeparator(.hidden)
+                    .listRowBackground(WTheme.canvas)
                     .onAppear {
                         Task { await store.loadMore(env.api) }
                     }
@@ -342,8 +333,13 @@ struct ContactsRootView: View {
                 }
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(WTheme.canvas)
             .scrollDismissesKeyboard(.immediately)
             .refreshable { await store.load(env.api) }
+            .listSectionSpacing(0)
+            .environment(\.defaultMinListHeaderHeight, 0)
+            .onAppear { rowsShown = true }
         }
     }
 
@@ -353,13 +349,15 @@ struct ContactsRootView: View {
         return HStack {
             Spacer()
             Text("\(count) contact\(count == 1 ? "" : "s")")
-                .font(.footnote)
+                .font(.system(size: 13))
                 .monospacedDigit()
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(WTheme.inkTertiary)
             Spacer()
         }
-        .padding(.vertical, 10)
+        .padding(.top, 14)
+        .padding(.bottom, 90)
         .listRowSeparator(.hidden)
+        .listRowBackground(WTheme.canvas)
     }
 
     @ViewBuilder
@@ -397,6 +395,20 @@ struct ContactsRootView: View {
         }
     }
 
+    /// A sort heading that stays pinned while its rows scroll under it.
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 13.5, weight: .semibold))
+            .foregroundStyle(WTheme.inkSecondary)
+            .textCase(nil)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
+            .background(WTheme.canvas)
+            .listRowInsets(EdgeInsets())
+    }
+
     // MARK: Row
 
     private func row(_ contact: Contact) -> some View {
@@ -413,27 +425,58 @@ struct ContactsRootView: View {
                 selected: store.isSelected(contact.id)
             )
         }
-        .buttonStyle(.plain)
-        .listRowBackground(store.isSelected(contact.id) ? Tone.sky.background : Color(.systemBackground))
-        .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 16))
-        .simultaneousGesture(
-            LongPressGesture(minimumDuration: 0.4).onEnded { _ in
-                if !store.selectionMode, canManage { store.enterSelection(with: contact.id) }
+        .buttonStyle(TapScaleStyle())
+        .listRowBackground(store.isSelected(contact.id) ? WTheme.fill : WTheme.canvas)
+        .listRowSeparatorTint(WTheme.hairline)
+        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            if canManage, !store.selectionMode {
+                Button {
+                    editing = contact
+                } label: {
+                    Label("Labels and campaigns", systemImage: "tag")
+                }
+                .tint(WTheme.accent)
             }
-        )
+        }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             if canManage, !store.selectionMode {
-                Button(role: .destructive) {
-                    Task { try? await store.delete(env.api, id: contact.id) }
+                Button {
+                    pendingDelete = contact
                 } label: {
                     Label("Delete", systemImage: "trash")
                 }
+                .tint(WTheme.negative)
+                let subscribed = contact.subscribed != false
+                Button {
+                    Task {
+                        do { try await store.setSubscribed(env.api, id: contact.id, !subscribed) } catch { actionError = error.localizedDescription }
+                    }
+                } label: {
+                    Label(subscribed ? "Unsubscribe" : "Resubscribe", systemImage: subscribed ? "bell.slash" : "bell")
+                }
+                .tint(WTheme.warning)
                 Button {
                     store.enterSelection(with: contact.id)
                 } label: {
                     Label("Select", systemImage: "checkmark.circle")
                 }
-                .tint(WTheme.accent)
+                .tint(WTheme.paused)
+            }
+        }
+        .contextMenu {
+            if canManage, !store.selectionMode {
+                Button { editing = contact } label: { Label("Labels and campaigns", systemImage: "tag") }
+                let subscribed = contact.subscribed != false
+                Button {
+                    Task {
+                        do { try await store.setSubscribed(env.api, id: contact.id, !subscribed) } catch { actionError = error.localizedDescription }
+                    }
+                } label: {
+                    Label(subscribed ? "Unsubscribe" : "Resubscribe", systemImage: subscribed ? "bell.slash" : "bell")
+                }
+                Button { store.enterSelection(with: contact.id) } label: { Label("Select", systemImage: "checkmark.circle") }
+                Button(role: .destructive) { pendingDelete = contact } label: { Label("Delete", systemImage: "trash") }
             }
         }
     }
@@ -457,9 +500,13 @@ struct ContactsRootView: View {
         }
         .frame(width: Self.sidebarWidth)
         .frame(maxHeight: .infinity)
-        .background(Color(.systemBackground))
-        .clipShape(UnevenRoundedRectangle(bottomTrailingRadius: 26, topTrailingRadius: 26, style: .continuous))
-        .shadow(color: .black.opacity(sidebarOpen ? 0.22 : 0), radius: 30, x: 6, y: 0)
+        .background(WTheme.canvas)
+        .clipShape(UnevenRoundedRectangle(bottomTrailingRadius: 22, topTrailingRadius: 22, style: .continuous))
+        .overlay {
+            UnevenRoundedRectangle(bottomTrailingRadius: 22, topTrailingRadius: 22, style: .continuous)
+                .strokeBorder(WTheme.hairlineStrong, lineWidth: 1)
+                .opacity(sidebarOpen ? 1 : 0)
+        }
         .ignoresSafeArea()
         .offset(x: drawerOffset)
         .gesture(
@@ -494,83 +541,24 @@ struct ContactsRootView: View {
     }
 }
 
-// MARK: - Row
-
-struct ContactRow: View {
-    let contact: Contact
-    var selecting: Bool = false
-    var selected: Bool = false
+/// Round hairline check that fills ink when on (row multi-select).
+struct ContactCheckCircle: View {
+    let on: Bool
+    var size: CGFloat = 22
 
     var body: some View {
-        HStack(spacing: 12) {
-            if selecting {
-                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 22))
-                    .foregroundStyle(selected ? WTheme.accent : Color(.tertiaryLabel))
+        ZStack {
+            Circle()
+                .strokeBorder(on ? WTheme.ink : WTheme.hairlineStrong, lineWidth: 1.5)
+            if on {
+                Circle().fill(WTheme.ink)
+                Image(systemName: "checkmark")
+                    .font(.system(size: size * 0.45, weight: .semibold))
+                    .foregroundStyle(WTheme.inkInverse)
                     .transition(.scale.combined(with: .opacity))
             }
-            WAvatar(name: contact.displayName, seed: contact.id, size: 42)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(contact.displayName)
-                    .font(.body.weight(.medium))
-                    .lineLimit(1)
-                secondaryLine
-            }
-            Spacer(minLength: 8)
-            trailing
         }
-        .padding(.vertical, 6)
-        .contentShape(Rectangle())
-    }
-
-    /// One secondary fact only: the email, or the company when the row's
-    /// title already is the email. Two truncated facts read worse than one.
-    @ViewBuilder
-    private var secondaryLine: some View {
-        HStack(spacing: 6) {
-            if contact.hasName, let email = contact.email, !email.isEmpty {
-                Text(email)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            } else if let company = contact.company, !company.isEmpty {
-                Text(company)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            categoryDots
-        }
-    }
-
-    @ViewBuilder
-    private var categoryDots: some View {
-        if let categories = contact.categories, !categories.isEmpty {
-            HStack(spacing: 3) {
-                ForEach(categories.prefix(4)) { category in
-                    Circle()
-                        .fill(ContactColor.dot(category.color, seed: category.id))
-                        .frame(width: 6, height: 6)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var trailing: some View {
-        if let lead = contact.campaignLead {
-            StatusPill(
-                text: ContactLeadStatus.label(lead.status),
-                tone: ContactLeadStatus.tone(lead.status),
-                pulsing: ContactLeadStatus.isLive(lead.status)
-            )
-        } else if contact.subscribed == false {
-            StatusPill(text: "Unsubscribed", tone: .slate)
-        } else if let count = contact.campaigns?.count, count > 0 {
-            Text("\(count) campaign\(count == 1 ? "" : "s")")
-                .font(.caption)
-                .monospacedDigit()
-                .foregroundStyle(.tertiary)
-        }
+        .frame(width: size, height: size)
+        .animation(.spring(response: 0.28, dampingFraction: 0.7), value: on)
     }
 }

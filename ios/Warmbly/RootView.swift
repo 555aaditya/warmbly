@@ -29,19 +29,26 @@ struct RootView: View {
     }
 }
 
-/// Splash: the brand's airy sky with the mark, shown while the persisted
-/// session is validated. The mark breathes instead of showing a spinner;
-/// matches the auth backdrop so the handoff is seamless.
+/// Splash shown while the persisted session is validated: the breathing mark
+/// on the theme's canvas, continuing the system launch color in either theme.
 struct LaunchView: View {
+    @Environment(\.colorScheme) private var scheme
     @State private var breathe = false
 
     var body: some View {
         ZStack {
-            SkyBackdrop()
+            if scheme == .dark {
+                SkyBackdrop()
+            } else {
+                Color("LaunchBackground").ignoresSafeArea()
+            }
             WarmblyLogo()
-                .fill(.white)
+                .fill(scheme == .dark ? Color.white : WTheme.ink)
                 .frame(width: 56, height: 57)
-                .shadow(color: .white.opacity(breathe ? 0.5 : 0.12), radius: breathe ? 28 : 10)
+                .shadow(
+                    color: (scheme == .dark ? Color.white : WTheme.accent).opacity(breathe ? 0.4 : 0.08),
+                    radius: breathe ? 28 : 10
+                )
                 .scaleEffect(breathe ? 1.06 : 0.96)
                 .animation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true), value: breathe)
                 .onAppear { breathe = true }
@@ -59,23 +66,23 @@ struct UnreachableView: View {
             SkyBackdrop()
             VStack(spacing: 14) {
                 WarmblyLogo()
-                    .fill(.white)
+                    .fill(WTheme.onSky)
                     .frame(width: 56, height: 57)
                 Text("Can't reach Warmbly")
                     .font(.body.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(WTheme.onSky)
                 Text("You're still signed in. Retrying automatically.")
                     .font(.footnote)
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(WTheme.onSky.opacity(0.85))
                 Button {
                     Task { await env.session.bootstrap() }
                 } label: {
                     Text("Try again")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(WTheme.onSky)
                         .padding(.horizontal, 18)
                         .padding(.vertical, 9)
-                        .background(.white.opacity(0.18), in: Capsule())
+                        .glassEffect(.regular.interactive(), in: Capsule())
                 }
                 .buttonStyle(TapScaleStyle())
             }

@@ -60,6 +60,9 @@ func NewTurnstileFromConfig(cfg TurnstileConfig) *Turnstile {
 	return &Turnstile{cfg: cfg}
 }
 
+// Required reports whether this deployment checks for a human at all.
+func (t *Turnstile) Required() bool { return t != nil && !t.cfg.Disabled }
+
 func (t *Turnstile) Verify(ctx context.Context, token, remoteIP string) *errx.Error {
 	if t.cfg.Disabled {
 		return nil

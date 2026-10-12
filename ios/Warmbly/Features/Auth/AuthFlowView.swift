@@ -58,6 +58,22 @@ struct AuthFlowView: View {
         .sensoryFeedback(.error, trigger: errorPulse)
         .sheet(isPresented: $showServerConfig) { ServerConfigSheet() }
         .task { providers = await env.session.fetchAuthProviders() }
+        #if DEBUG
+        // Scripted runs can open a later step (WARMBLY_DEBUG_AUTH) to see it.
+        .onAppear {
+            guard let target = ProcessInfo.processInfo.environment["WARMBLY_DEBUG_AUTH"] else { return }
+            email = "dev@warmbly.com"
+            switch target {
+            case "signup": mode = .signUp
+            case "password": step = .password
+            case "verify": step = .verify(session: "debug")
+            case "twofa": step = .twoFA(pendingToken: "debug")
+            case "reset": step = .resetSent
+            case "server": showServerConfig = true
+            default: break
+            }
+        }
+        #endif
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
             if resendRemaining > 0 {
                 withAnimation(.easeOut(duration: 0.3)) { resendRemaining -= 1 }
@@ -84,42 +100,18 @@ struct AuthFlowView: View {
 
     private var stepScreen: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                if step != .email {
-                    skyIconButton("chevron.left", label: "Back") { goBackOneStep() }
-                        .transition(.opacity.combined(with: .scale(scale: 0.7)))
-                }
-                compactLockup
-                Spacer()
-                skyIconButton("gearshape", label: "Server settings") { showServerConfig = true }
+            FlowTopBar(
+                onBack: step == .email ? nil : { goBackOneStep() },
+                progress: stepProgress.map { ($0.index, 3) }
+            ) {
+                FlowSkyButton(symbol: "gearshape", label: "Server settings") { showServerConfig = true }
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 6)
-            // The top bar reflow animates here; the sheet is left alone so it
-            // tracks the keyboard's own curve with no gap.
-            .animation(.spring(response: 0.45, dampingFraction: 0.86), value: step == .email)
 
             heroArea
                 .animation(.spring(response: 0.5, dampingFraction: 0.85), value: heroExpanded)
 
             bottomSheet
         }
-    }
-
-    /// The brand lockup, permanently docked in the top-left: the sky's center
-    /// stays free for the feature showcase.
-    private var compactLockup: some View {
-        HStack(spacing: 8) {
-            WarmblyLogo()
-                .fill(.white)
-                .frame(width: 27, height: 28)
-            Text("Warmbly")
-                .font(.system(size: 20, weight: .heavy))
-                .tracking(-0.4)
-                .foregroundStyle(.white)
-                .fixedSize()
-        }
-        .shadow(color: Color(hex: 0x0C4A6E).opacity(0.25), radius: 8, y: 3)
     }
 
     /// The sky between the top bar and the sheet. On the email step it shows
@@ -135,7 +127,10 @@ struct AuthFlowView: View {
                 .contentShape(Rectangle())
                 .onTapGesture { focusedField = nil }
 
-            HeroFlightScene()
+            if step == .email {
+                HeroFlightScene()
+                    .transition(.opacity)
+            }
 
             if step == .email {
                 GeometryReader { proxy in
@@ -154,8 +149,8 @@ struct AuthFlowView: View {
                 .opacity(heroAppeared ? 1 : 0)
                 .transition(.opacity.combined(with: .scale(scale: 0.94)))
             } else if let progress = stepProgress {
-                stepIndicator(progress)
-                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                FlowSkyStage(icon: progress.icon, title: progress.label) { focusedField = nil }
+                    .transition(.opacity)
             }
         }
         .frame(maxWidth: .infinity, minHeight: 40, maxHeight: .infinity)
@@ -166,8 +161,8 @@ struct AuthFlowView: View {
         }
     }
 
-    /// Where the user is in the flow, shown in the freed-up sky on the
-    /// deeper steps: the step's icon, name, position, and segment bar.
+    /// Where the user is on the deeper steps: the step's position for the top
+    /// bar, and its icon and name for the sky.
     private var stepProgress: (index: Int, icon: String, label: String)? {
         switch step {
         case .email, .resetSent:
@@ -178,75 +173,6 @@ struct AuthFlowView: View {
             return (2, "envelope.open.fill", "Check your email")
         case .twoFA:
             return (2, "shield.lefthalf.filled", "Two-factor check")
-        }
-    }
-
-    /// Picks the tallest step badge that fits the sky left over above the
-    /// keyboard: icon bubble + name + segments, or a single compact row.
-    private func stepIndicator(_ progress: (index: Int, icon: String, label: String)) -> some View {
-        ViewThatFits(in: .vertical) {
-            VStack(spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(.white.opacity(0.16))
-                    Circle()
-                        .strokeBorder(.white.opacity(0.3), lineWidth: 1)
-                    Image(systemName: progress.icon)
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .contentTransition(.symbolEffect(.replace))
-                }
-                .frame(width: 54, height: 54)
-
-                VStack(spacing: 4) {
-                    Text(progress.label)
-                        .font(.system(size: 15.5, weight: .bold))
-                        .foregroundStyle(.white)
-                    Text("Step \(progress.index + 1) of 3")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.7))
-                }
-
-                stepSegments(progress.index)
-            }
-            .padding(.vertical, 16)
-
-            HStack(spacing: 10) {
-                ZStack {
-                    Circle().fill(.white.opacity(0.16))
-                    Circle().strokeBorder(.white.opacity(0.3), lineWidth: 1)
-                    Image(systemName: progress.icon)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .contentTransition(.symbolEffect(.replace))
-                }
-                .frame(width: 34, height: 34)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(progress.label)
-                        .font(.system(size: 13.5, weight: .semibold))
-                        .foregroundStyle(.white)
-                    HStack(spacing: 7) {
-                        stepSegments(progress.index)
-                        Text("Step \(progress.index + 1) of 3")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.white.opacity(0.7))
-                    }
-                }
-            }
-            .padding(.vertical, 8)
-        }
-        .shadow(color: Color(hex: 0x0C4A6E).opacity(0.25), radius: 6, y: 2)
-        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: progress.index)
-    }
-
-    private func stepSegments(_ active: Int) -> some View {
-        HStack(spacing: 6) {
-            ForEach(0 ..< 3, id: \.self) { index in
-                Capsule()
-                    .fill(.white.opacity(index <= active ? 0.95 : 0.3))
-                    .frame(width: index == active ? 26 : 14, height: 4)
-            }
         }
     }
 
@@ -299,25 +225,12 @@ struct AuthFlowView: View {
             // The extra tail below keeps the sheet sealed to the screen edge
             // even mid-animation, when the sheet overshoots above the rising
             // keyboard for a few frames.
-            UnevenRoundedRectangle(cornerRadii: .init(topLeading: 36, topTrailing: 36))
-                .fill(Color(.systemBackground)
-                    .shadow(.drop(color: Color(hex: 0x0F172A).opacity(0.28), radius: 34, y: -6)))
+            UnevenRoundedRectangle(cornerRadii: .init(topLeading: 32, topTrailing: 32), style: .continuous)
+                .fill(WTheme.canvas)
                 .padding(.bottom, -600)
                 .ignoresSafeArea()
         }
         .geometryGroup()
-    }
-
-    private func skyIconButton(_ systemName: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 40, height: 40)
-                .background(.white.opacity(0.16), in: Circle())
-        }
-        .buttonStyle(PressableButtonStyle())
-        .accessibilityLabel(label)
     }
 
     private func goBackOneStep() {
@@ -340,12 +253,11 @@ struct AuthFlowView: View {
     private func sheetTitle(_ title: String, _ subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             Text(title)
-                .font(.system(size: 30, weight: .bold))
-                .tracking(-0.6)
-                .foregroundStyle(.primary)
+                .displayFont(32)
+                .foregroundStyle(WTheme.ink)
             Text(subtitle)
                 .font(.system(size: 15.5))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(WTheme.inkSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -356,28 +268,20 @@ struct AuthFlowView: View {
         Button {
             Task { await action() }
         } label: {
-            Group {
+            HStack(spacing: 8) {
                 if busy {
-                    ProgressView().tint(.white)
+                    ProgressView().tint(WTheme.inkInverse)
                 } else {
                     Text(title)
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 14, weight: .medium))
                 }
             }
-            .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(.white)
+            .font(.system(size: 16.5, weight: .medium))
+            .foregroundStyle(WTheme.inkInverse)
             .frame(maxWidth: .infinity)
-            .frame(height: 56)
-            .background(
-                LinearGradient(
-                    colors: disabled && !busy
-                        ? [WTheme.accent.opacity(0.35), WTheme.accent.opacity(0.35)]
-                        : [Color(hex: 0x0EA5E9), Color(hex: 0x0284C7)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                ),
-                in: RoundedRectangle(cornerRadius: 17)
-            )
-            .shadow(color: disabled ? .clear : Color(hex: 0x0284C7).opacity(0.32), radius: 12, y: 6)
+            .frame(height: 54)
+            .background(WTheme.ink.opacity(disabled && !busy ? 0.18 : 1), in: Capsule())
         }
         .buttonStyle(PressableButtonStyle())
         .disabled(busy || disabled)
@@ -387,12 +291,11 @@ struct AuthFlowView: View {
     private func authField(_ content: some View, focused: Bool) -> some View {
         content
             .font(.system(size: 16.5))
-            .padding(.horizontal, 16)
-            .frame(height: 56)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 17))
+            .padding(.horizontal, 18)
+            .frame(height: 54)
+            .background(focused ? WTheme.raised : WTheme.surface, in: Capsule())
             .overlay(
-                RoundedRectangle(cornerRadius: 17)
-                    .strokeBorder(focused ? WTheme.accent : .clear, lineWidth: 1.8)
+                Capsule().strokeBorder(focused ? WTheme.ink.opacity(0.85) : WTheme.hairlineStrong, lineWidth: focused ? 1.4 : 1)
             )
             .animation(.easeOut(duration: 0.18), value: focused)
     }
@@ -414,10 +317,11 @@ struct AuthFlowView: View {
                     .foregroundStyle(.tertiary)
             }
             .font(.system(size: 14))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(WTheme.inkSecondary)
             .padding(.horizontal, 14)
             .padding(.vertical, 9)
-            .background(Color(.secondarySystemBackground), in: Capsule())
+            .background(WTheme.surface, in: Capsule())
+            .overlay(Capsule().strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
         }
         .buttonStyle(PressableButtonStyle())
     }
@@ -479,12 +383,13 @@ struct AuthFlowView: View {
                     )
 
                     HStack(spacing: 12) {
-                        Rectangle().fill(Color(.separator).opacity(0.45)).frame(height: 1)
-                        Text("or")
-                            .font(.system(size: 13.5))
-                            .foregroundStyle(.tertiary)
+                        Hairline()
+                        Text("OR")
+                            .font(WFont.meta(11, weight: .medium))
+                            .tracking(0.6)
+                            .foregroundStyle(WTheme.inkTertiary)
                             .fixedSize()
-                        Rectangle().fill(Color(.separator).opacity(0.45)).frame(height: 1)
+                        Hairline()
                     }
                     .padding(.vertical, 4)
                 }
@@ -519,8 +424,9 @@ struct AuthFlowView: View {
                         mode = mode == .signIn ? .signUp : .signIn
                     }
                 }
-                .foregroundStyle(WTheme.accent)
-                .fontWeight(.semibold)
+                .foregroundStyle(WTheme.ink)
+                .fontWeight(.medium)
+                .underline(true, color: WTheme.ink.opacity(0.25))
             }
             .font(.system(size: 14.5))
             .frame(maxWidth: .infinity)
@@ -892,11 +798,11 @@ struct HeroFlightScene: View {
 
                 // The faint full route, plus a brighter segment forever
                 // travelling along it like a gust carrying the plane.
-                ctx.stroke(trail, with: .color(.white.opacity(0.14)), style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [2, 9]))
+                ctx.stroke(trail, with: .color(WTheme.onSky.opacity(0.14)), style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [2, 9]))
                 let phase = (t / 6).truncatingRemainder(dividingBy: 1)
                 let window: CGFloat = 0.26
                 let segment = trail.trimmedPath(from: CGFloat(phase), to: min(CGFloat(phase) + window, 1))
-                ctx.stroke(segment, with: .color(.white.opacity(0.5)), style: StrokeStyle(lineWidth: 2.4, lineCap: .round, dash: [2, 9]))
+                ctx.stroke(segment, with: .color(WTheme.onSky.opacity(0.5)), style: StrokeStyle(lineWidth: 2.4, lineCap: .round, dash: [2, 9]))
 
                 // Envelopes rising with a gentle sway, fading at both ends.
                 for spec in Self.envelopes {
@@ -905,7 +811,7 @@ struct HeroFlightScene: View {
                     let x = size.width * spec.x + sin(t / 2.6 + spec.phase * 9) * 13
                     let fade = sin(.pi * progress)
                     var image = ctx.resolve(Image(systemName: "envelope.fill"))
-                    image.shading = .color(.white.opacity(spec.baseOpacity * fade))
+                    image.shading = .color(WTheme.onSky.opacity(spec.baseOpacity * fade))
                     let box = CGRect(x: x - spec.size / 2, y: y - spec.size / 2, width: spec.size, height: spec.size * 0.72)
                     ctx.draw(image, in: box)
                 }
@@ -978,7 +884,7 @@ struct FeatureShowcase: View {
                         }
                     } label: {
                         Capsule()
-                            .fill(.white.opacity(index == slide.id ? 0.95 : 0.35))
+                            .fill(WTheme.onSky.opacity(index == slide.id ? 0.95 : 0.35))
                             .frame(width: index == slide.id ? 22 : 7, height: 7)
                     }
                     .buttonStyle(.plain)
@@ -1009,34 +915,18 @@ struct FeatureShowcase: View {
                 .padding(.bottom, 14)
 
             Text(slide.title)
-                .font(.system(size: 18, weight: .bold))
-                .tracking(-0.3)
-                .foregroundStyle(.white)
+                .displayFont(20)
+                .foregroundStyle(WTheme.onSky)
 
             Text(slide.subtitle)
                 .font(.system(size: 13.5))
-                .foregroundStyle(.white.opacity(0.78))
+                .foregroundStyle(WTheme.onSky.opacity(0.6))
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 5)
         }
         .padding(22)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            RoundedRectangle(cornerRadius: 26)
-                .fill(.white.opacity(0.13))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 26)
-                        .strokeBorder(
-                            LinearGradient(
-                                colors: [.white.opacity(0.45), .white.opacity(0.08)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 1
-                        )
-                )
-                .shadow(color: Color(hex: 0x0C4A6E).opacity(0.2), radius: 16, y: 9)
-        }
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
     @ViewBuilder
@@ -1071,11 +961,10 @@ struct FeatureTicker: View {
                     .font(.system(size: 13.5, weight: .semibold))
                     .fixedSize()
             }
-            .foregroundStyle(.white)
+            .foregroundStyle(WTheme.onSky)
             .padding(.horizontal, 15)
             .frame(height: 36)
-            .background(.white.opacity(0.14), in: Capsule())
-            .overlay(Capsule().strokeBorder(.white.opacity(0.25), lineWidth: 1))
+            .glassEffect(.regular, in: Capsule())
             .id(index)
             .transition(.blurReplace)
         }
@@ -1099,16 +988,16 @@ struct WarmupRampVisual: View {
             ZStack(alignment: .topLeading) {
                 VStack(spacing: 0) {
                     ForEach(0 ..< 3, id: \.self) { _ in
-                        Rectangle().fill(.white.opacity(0.1)).frame(height: 1)
+                        Rectangle().fill(WTheme.onSky.opacity(0.1)).frame(height: 1)
                         Spacer()
                     }
-                    Rectangle().fill(.white.opacity(0.22)).frame(height: 1)
+                    Rectangle().fill(WTheme.onSky.opacity(0.22)).frame(height: 1)
                 }
 
                 Self.area(in: size)
                     .fill(
                         LinearGradient(
-                            colors: [.white.opacity(0.22), .white.opacity(0.02)],
+                            colors: [WTheme.onSky.opacity(0.22), WTheme.onSky.opacity(0.02)],
                             startPoint: .top,
                             endPoint: .bottom
                         )
@@ -1117,14 +1006,14 @@ struct WarmupRampVisual: View {
 
                 Self.ramp(in: size)
                     .trim(from: 0, to: progress)
-                    .stroke(.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .stroke(WTheme.onSky, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
 
                 Circle()
-                    .fill(.white)
+                    .fill(WTheme.onSky)
                     .frame(width: 7, height: 7)
                     .background(
                         Circle()
-                            .fill(.white.opacity(0.3))
+                            .fill(WTheme.onSky.opacity(0.3))
                             .frame(width: pulse ? 24 : 10, height: pulse ? 24 : 10)
                     )
                     .position(x: size.width - 2, y: size.height * 0.08)
@@ -1173,14 +1062,14 @@ struct InboxPlacementVisual: View {
         HStack(spacing: 26) {
             ZStack {
                 Circle()
-                    .stroke(.white.opacity(0.18), lineWidth: 9)
+                    .stroke(WTheme.onSky.opacity(0.18), lineWidth: 9)
                 Circle()
                     .trim(from: 0, to: progress * 0.98)
-                    .stroke(.white, style: StrokeStyle(lineWidth: 9, lineCap: .round))
+                    .stroke(WTheme.onSky, style: StrokeStyle(lineWidth: 9, lineCap: .round))
                     .rotationEffect(.degrees(-90))
                 Text("\(shownValue)%")
                     .font(.system(size: 22, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(WTheme.onSky)
                     .monospacedDigit()
                     .contentTransition(.numericText())
             }
@@ -1208,13 +1097,13 @@ struct InboxPlacementVisual: View {
                 Text(label)
                     .font(.system(size: 12.5, weight: .semibold))
             }
-            .foregroundStyle(.white.opacity(0.85))
+            .foregroundStyle(WTheme.onSky.opacity(0.85))
 
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(.white.opacity(0.18))
+                    Capsule().fill(WTheme.onSky.opacity(0.18))
                     Capsule()
-                        .fill(.white.opacity(0.9))
+                        .fill(WTheme.onSky.opacity(0.9))
                         .frame(width: max(5, proxy.size.width * fraction * progress))
                 }
             }
@@ -1247,38 +1136,38 @@ struct UnifiedInboxVisual: View {
                 let row = pair.element
                 HStack(spacing: 10) {
                     Circle()
-                        .fill(.white.opacity(0.28))
+                        .fill(WTheme.onSky.opacity(0.28))
                         .frame(width: 26, height: 26)
                         .overlay(
                             Text(row.initial)
                                 .font(.system(size: 11.5, weight: .bold))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(WTheme.onSky)
                         )
 
                     VStack(alignment: .leading, spacing: 4) {
                         GeometryReader { proxy in
                             Capsule()
-                                .fill(.white.opacity(0.75))
+                                .fill(WTheme.onSky.opacity(0.75))
                                 .frame(width: proxy.size.width * row.lineWidth, height: 5)
                         }
                         .frame(height: 5)
                         Capsule()
-                            .fill(.white.opacity(0.3))
+                            .fill(WTheme.onSky.opacity(0.3))
                             .frame(width: 52, height: 5)
                     }
 
                     if row.replied {
                         Image(systemName: "arrowshape.turn.up.left.fill")
                             .font(.system(size: 11))
-                            .foregroundStyle(.white.opacity(0.85))
+                            .foregroundStyle(WTheme.onSky.opacity(0.85))
                     }
                     if row.unread {
-                        Circle().fill(.white).frame(width: 7, height: 7)
+                        Circle().fill(WTheme.onSky).frame(width: 7, height: 7)
                     }
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-                .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 13))
+                .background(WTheme.skyTile(0.1), in: RoundedRectangle(cornerRadius: 13))
                 .offset(x: shown ? 0 : 46)
                 .opacity(shown ? 1 : 0)
                 .animation(
@@ -1308,21 +1197,21 @@ struct CampaignStatsVisual: View {
                 VStack(spacing: 7) {
                     Text("\(Int(bar.fraction * 100))%")
                         .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.9))
+                        .foregroundStyle(WTheme.onSky.opacity(0.9))
                         .monospacedDigit()
                         .opacity(grown ? 1 : 0)
 
                     VStack {
                         Spacer(minLength: 0)
                         RoundedRectangle(cornerRadius: 5)
-                            .fill(.white.opacity(0.9 - Double(pair.offset) * 0.18))
+                            .fill(WTheme.onSky.opacity(0.9 - Double(pair.offset) * 0.18))
                             .frame(height: grown ? 66 * bar.fraction + 8 : 6)
                     }
                     .frame(height: 74)
 
                     Text(bar.label)
                         .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.7))
+                        .foregroundStyle(WTheme.onSky.opacity(0.7))
                 }
                 .frame(width: 62)
                 .animation(
@@ -1395,339 +1284,91 @@ struct PasswordStrengthBar: View {
     }
 }
 
-// MARK: - The website's airy sky
+// MARK: - Brand backdrop
 
-/// The marketing site's auth backdrop, recreated from `web/src/global.css`:
-/// a radial sky, a slow "breathing" light layer, a warm sun glow top-right,
-/// and the site's painterly cloud renders gliding gently back and forth.
+/// The brand moment behind sign-in and onboarding. Light: the site's sheer
+/// sky photo, drifting slowly under a soft veil. Dark: a near-black canvas
+/// with the dot grid and a sky aurora. Content on it uses `WTheme.onSky`.
 struct SkyBackdrop: View {
     var largeCloud = false
 
-    @State private var breathe = false
-    @State private var glide = false
-
-    private static let skyStops: [Gradient.Stop] = [
-        .init(color: Color(hex: 0x7DD3FC), location: 0),
-        .init(color: Color(hex: 0x38BDF8), location: 0.20),
-        .init(color: Color(hex: 0x0EA5E9), location: 0.40),
-        .init(color: Color(hex: 0x0284C7), location: 0.62),
-        .init(color: Color(hex: 0x075985), location: 0.84),
-        .init(color: Color(hex: 0x0C4A6E), location: 1),
-    ]
+    @Environment(\.colorScheme) private var scheme
+    @State private var drift = false
 
     var body: some View {
-        GeometryReader { proxy in
-            let size = proxy.size
-            ZStack {
-                // sky-base: radial from the upper area, light to deep.
-                RadialGradient(
-                    stops: Self.skyStops,
-                    center: UnitPoint(x: 0.6, y: 0.18),
-                    startRadius: 0,
-                    endRadius: max(size.width, size.height) * 1.15
-                )
-
-                // sky-breathe: a soft light bloom that swells and fades.
-                RadialGradient(
-                    stops: [
-                        .init(color: Color(hex: 0xBAE6FD).opacity(0.8), location: 0),
-                        .init(color: Color(hex: 0x38BDF8).opacity(0.4), location: 0.20),
-                        .init(color: Color(hex: 0x0EA5E9).opacity(0.16), location: 0.40),
-                        .init(color: .clear, location: 0.62),
-                    ],
-                    center: UnitPoint(x: 0.6, y: 0.16),
-                    startRadius: 0,
-                    endRadius: max(size.width, size.height) * 1.05
-                )
-                .opacity(breathe ? 0.45 : 0.7)
-                .scaleEffect(breathe ? 1.05 : 1)
-
-                // sun-glow: warm haze off the top-right corner.
-                RadialGradient(
-                    stops: [
-                        .init(color: Color(hex: 0xFDE68A).opacity(0.34), location: 0),
-                        .init(color: Color(hex: 0xFDBA74).opacity(0.12), location: 0.32),
-                        .init(color: Color(hex: 0xBAE6FD).opacity(0.05), location: 0.55),
-                        .init(color: .clear, location: 1),
-                    ],
-                    center: .center,
-                    startRadius: 0,
-                    endRadius: 210
-                )
-                .frame(width: 420, height: 420)
-                .blur(radius: 36)
-                .position(x: size.width * 0.96, y: size.height * 0.02)
-
-                // Painterly clouds (the site's pre-rendered webp art),
-                // mirroring the web auth layout's placement and glide.
-                Image("Cloud3")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 280)
-                    .opacity(0.6)
-                    .position(x: size.width * -0.16 + 140, y: size.height * 0.04 + 73)
-                    .offset(x: glide ? 40 : 0, y: glide ? -10 : 0)
-
-                Image("Cloud4")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 240)
-                    .opacity(0.5)
-                    .position(x: size.width * 1.14 - 120, y: size.height * 0.88 - 63)
-                    .offset(x: glide ? -38 : 0, y: glide ? 8 : 0)
-
-                if largeCloud {
-                    Image("Cloud1")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 360)
-                        .opacity(0.35)
-                        .position(x: size.width * 0.85, y: size.height * 0.42)
-                        .offset(x: glide ? -24 : 0, y: glide ? 6 : 0)
-                }
-            }
+        Group {
+            if scheme == .dark { night } else { photo }
         }
         .ignoresSafeArea()
         .onAppear {
-            withAnimation(.easeInOut(duration: 15).repeatForever(autoreverses: true)) {
-                breathe = true
-            }
-            withAnimation(.easeInOut(duration: 19).repeatForever(autoreverses: true)) {
-                glide = true
+            withAnimation(.easeInOut(duration: 14).repeatForever(autoreverses: true)) {
+                drift = true
             }
         }
     }
-}
 
-/// Where the app connects, for local dev or a self-hosted deployment.
-/// Presets cover the common cases in one tap; the captcha token and realtime
-/// origin live behind Advanced so the everyday view stays simple.
-struct ServerConfigSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @State private var origin = AppConfig.serverOrigin
-    @State private var turnstile = AppConfig.turnstileToken
-    @State private var realtime = AppConfig.realtimeOriginOverride
-    @State private var showAdvanced = false
-
-    @FocusState private var focused: Field?
-    private enum Field { case origin, turnstile, realtime }
-
-    private var isDefault: Bool {
-        origin == AppConfig.defaultOrigin
-            && turnstile == AppConfig.defaultTurnstileToken
-            && realtime.isEmpty
-    }
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .center, spacing: 14) {
-                    Image(systemName: "globe")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 46, height: 46)
-                        .background(
-                            LinearGradient(colors: [Color(hex: 0x38BDF8), Color(hex: 0x0284C7)], startPoint: .topLeading, endPoint: .bottomTrailing),
-                            in: RoundedRectangle(cornerRadius: 14)
-                        )
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Connection")
-                            .font(.system(size: 24, weight: .bold))
-                            .tracking(-0.5)
-                        Text("One app, any Warmbly server.")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Spacer(minLength: 12)
-
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 32, height: 32)
-                            .background(Color(.secondarySystemBackground), in: Circle())
-                    }
-                    .buttonStyle(PressableButtonStyle())
-                    .accessibilityLabel("Close")
-                }
-                .padding(.bottom, 24)
-
-                // One-tap environments.
-                HStack(spacing: 10) {
-                    presetChip("Warmbly Cloud", icon: "cloud.fill", active: origin == "https://api.warmbly.com") {
-                        origin = "https://api.warmbly.com"
-                        turnstile = ""
-                        realtime = ""
-                    }
-                    presetChip("Local dev", icon: "laptopcomputer", active: origin == "http://localhost:8080") {
-                        origin = "http://localhost:8080"
-                        turnstile = "warmbly-local-turnstile-bypass"
-                        realtime = ""
-                    }
-                }
-                .padding(.bottom, 24)
-
-                fieldLabel("Server", icon: "server.rack")
-                configField(
-                    TextField(AppConfig.defaultOrigin, text: $origin)
-                        .keyboardType(.URL)
-                        .textContentType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .focused($focused, equals: .origin),
-                    focused: focused == .origin
-                )
-                caption("Bare origin, no path. The app calls <origin>/v1. On a physical device, localhost won't reach your Mac; use your Mac's LAN IP or a tunnel URL instead.")
-                    .padding(.bottom, 18)
-
-                // Advanced: rarely needed, one quiet toggle, fields styled
-                // exactly like the rest of the form.
-                Button {
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                        showAdvanced.toggle()
-                    }
-                } label: {
-                    HStack(spacing: 5) {
-                        Text(showAdvanced ? "Hide advanced options" : "Advanced options")
-                            .font(.system(size: 14, weight: .medium))
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 10, weight: .semibold))
-                            .rotationEffect(.degrees(showAdvanced ? 180 : 0))
-                    }
-                    .foregroundStyle(WTheme.accent)
-                }
-                .buttonStyle(PressableButtonStyle())
-                .padding(.vertical, 2)
-
-                if showAdvanced {
-                    VStack(alignment: .leading, spacing: 0) {
-                        fieldLabel("Captcha token", icon: "checkmark.shield")
-                            .padding(.top, 20)
-                        configField(
-                            TextField("Turnstile token", text: $turnstile)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                                .focused($focused, equals: .turnstile),
-                            focused: focused == .turnstile
-                        )
-                        caption("Only for self-hosted setups. Dev backends accept the bypass token; the hosted service needs nothing here.")
-                            .padding(.bottom, 18)
-
-                        fieldLabel("Realtime server", icon: "bolt.horizontal")
-                        configField(
-                            TextField("Same as server (automatic)", text: $realtime)
-                                .keyboardType(.URL)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                                .focused($focused, equals: .realtime),
-                            focused: focused == .realtime
-                        )
-                        caption("Optional. Where live updates connect when your realtime service runs on a different host. Leave empty to let the server decide.")
-                    }
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-                }
-
-                if !isDefault {
-                    Button("Reset to default") {
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            origin = AppConfig.defaultOrigin
-                            turnstile = AppConfig.defaultTurnstileToken
-                            realtime = ""
-                        }
-                    }
-                    .font(.system(size: 14.5, weight: .medium))
-                    .foregroundStyle(WTheme.accent)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 22)
-                }
-            }
-            .padding(24)
-        }
-        .scrollBounceBehavior(.basedOnSize)
-        .safeAreaInset(edge: .bottom) {
-            Button {
-                AppConfig.serverOrigin = AppConfig.normalizeOrigin(origin)
-                AppConfig.turnstileToken = turnstile.trimmingCharacters(in: .whitespaces)
-                AppConfig.realtimeOriginOverride = AppConfig.normalizeOrigin(realtime)
-                dismiss()
-            } label: {
-                Text("Save")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 56)
-                    .background(
-                        LinearGradient(colors: [Color(hex: 0x0EA5E9), Color(hex: 0x0284C7)], startPoint: .top, endPoint: .bottom),
-                        in: RoundedRectangle(cornerRadius: 17)
+    private var photo: some View {
+        GeometryReader { proxy in
+            Image("SheerSky")
+                .resizable()
+                .scaledToFill()
+                .frame(width: proxy.size.width * 1.12, height: proxy.size.height)
+                .offset(x: proxy.size.width * (drift ? -0.1 : -0.02))
+                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
+                .clipped()
+                .overlay {
+                    // A veil so ink reads on the darker folds, fading into the sheet.
+                    LinearGradient(
+                        colors: [.white.opacity(0.42), .white.opacity(0.08), .white.opacity(0.3), .white],
+                        startPoint: .top,
+                        endPoint: .bottom
                     )
-                    .shadow(color: Color(hex: 0x0284C7).opacity(0.32), radius: 12, y: 6)
+                }
+        }
+    }
+
+    private var night: some View {
+        GeometryReader { proxy in
+            let size = proxy.size
+            ZStack {
+                WTheme.night
+
+                DotGrid(spacing: 22, opacity: 0.11, color: .white)
+                    .mask(
+                        RadialGradient(
+                            colors: [.black, .black.opacity(0.4), .clear],
+                            center: UnitPoint(x: 0.5, y: 0.1),
+                            startRadius: 0,
+                            endRadius: max(size.width, size.height) * 0.75
+                        )
+                    )
+
+                // Sky aurora: two soft blooms drifting against each other.
+                Ellipse()
+                    .fill(Color(hex: 0x0EA5E9).opacity(0.42))
+                    .frame(width: size.width * 1.2, height: size.width * 0.75)
+                    .blur(radius: 80)
+                    .position(x: size.width * (drift ? 0.32 : 0.42), y: -size.width * 0.06)
+                Ellipse()
+                    .fill(Color(hex: 0x6366F1).opacity(0.26))
+                    .frame(width: size.width * 0.9, height: size.width * 0.6)
+                    .blur(radius: 90)
+                    .position(x: size.width * (drift ? 0.92 : 0.78), y: size.width * (largeCloud ? 0.2 : 0.06))
+                Ellipse()
+                    .fill(Color(hex: 0x7DD3FC).opacity(0.18))
+                    .frame(width: size.width * 0.7, height: size.width * 0.32)
+                    .blur(radius: 60)
+                    .position(x: size.width * 0.5, y: size.width * (drift ? 0.16 : 0.1))
+
+                // Faint grain of light across the top edge, like a horizon.
+                LinearGradient(
+                    colors: [.clear, .white.opacity(0.14), .clear],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(height: 1)
+                .position(x: size.width / 2, y: size.height * 0.001 + 0.5)
             }
-            .buttonStyle(PressableButtonStyle())
-            .padding(.horizontal, 24)
-            .padding(.top, 10)
-            .padding(.bottom, 6)
-            .background(Color(.systemBackground))
         }
-        .presentationBackground(Color(.systemBackground))
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
-    }
-
-    private func presetChip(_ title: String, icon: String, active: Bool, action: @escaping () -> Void) -> some View {
-        Button {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { action() }
-        } label: {
-            HStack(spacing: 7) {
-                Image(systemName: icon)
-                    .font(.system(size: 12.5))
-                Text(title)
-                    .font(.system(size: 14, weight: .semibold))
-            }
-            .foregroundStyle(active ? .white : .primary)
-            .padding(.horizontal, 15)
-            .frame(height: 38)
-            .background(
-                active ? AnyShapeStyle(WTheme.accent) : AnyShapeStyle(Color(.secondarySystemBackground)),
-                in: Capsule()
-            )
-        }
-        .buttonStyle(PressableButtonStyle())
-    }
-
-    private func fieldLabel(_ text: String, icon: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(.system(size: 11))
-            Text(text.uppercased())
-                .font(.system(size: 11, weight: .semibold))
-                .tracking(1.3)
-        }
-        .foregroundStyle(.secondary)
-        .padding(.bottom, 8)
-    }
-
-    private func configField(_ content: some View, focused: Bool) -> some View {
-        content
-            .font(.system(size: 15.5))
-            .padding(.horizontal, 15)
-            .frame(height: 52)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 15))
-            .overlay(
-                RoundedRectangle(cornerRadius: 15)
-                    .strokeBorder(focused ? WTheme.accent : .clear, lineWidth: 1.8)
-            )
-            .animation(.easeOut(duration: 0.18), value: focused)
-            .padding(.bottom, 8)
-    }
-
-    private func caption(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 12.5))
-            .foregroundStyle(.tertiary)
-            .fixedSize(horizontal: false, vertical: true)
     }
 }

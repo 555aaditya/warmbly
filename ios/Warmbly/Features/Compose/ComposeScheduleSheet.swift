@@ -21,24 +21,25 @@ struct ComposeScheduleSheet: View {
                         } label: {
                             HStack(spacing: 12) {
                                 Image(systemName: preset.symbol)
-                                    .font(.system(size: 15, weight: .medium))
-                                    .foregroundStyle(WTheme.accent)
-                                    .frame(width: 26)
+                                    .font(.system(size: 13.5, weight: .regular))
+                                    .foregroundStyle(WTheme.ink)
+                                    .frame(width: 32, height: 32)
+                                    .background(WTheme.fill, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                                 Text(preset.label)
-                                    .font(.subheadline.weight(.medium))
-                                    .foregroundStyle(.primary)
+                                    .font(.system(size: 15, weight: .medium))
+                                    .foregroundStyle(WTheme.ink)
                                 Spacer(minLength: 8)
                                 Text(preset.date.formatted(date: .abbreviated, time: .shortened))
-                                    .font(.footnote)
+                                    .font(WFont.meta(11.5))
                                     .monospacedDigit()
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(WTheme.inkSecondary)
                             }
                             .padding(.horizontal, 16)
-                            .frame(minHeight: 46)
+                            .frame(minHeight: 54)
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(TapScaleStyle())
-                        Divider().padding(.leading, 54)
+                        Hairline().padding(.leading, 60)
                     }
 
                     EyebrowLabel("Pick date and time")
@@ -52,11 +53,13 @@ struct ComposeScheduleSheet: View {
                         displayedComponents: [.date]
                     )
                     .datePickerStyle(.graphical)
+                    .tint(WTheme.accent)
                     .padding(.horizontal, 12)
-                    Divider()
+                    Hairline()
                     HStack {
                         Text("Time")
-                            .font(.subheadline.weight(.medium))
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(WTheme.ink)
                         Spacer(minLength: 8)
                         DatePicker(
                             "Time",
@@ -68,27 +71,34 @@ struct ComposeScheduleSheet: View {
                     }
                     .padding(.horizontal, 16)
                     .frame(minHeight: 52)
-                    Divider()
-                    Text("Will send \(scheduledAt.formatted(date: .complete, time: .shortened))")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
+                    Hairline()
+                    HStack(spacing: 8) {
+                        LiveDot(color: WTheme.warning, size: 6, pulsing: false)
+                        Text("Will send \(scheduledAt.formatted(date: .complete, time: .shortened))")
+                            .font(WFont.meta(11.5))
+                            .foregroundStyle(WTheme.inkSecondary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
                 }
                 .padding(.bottom, 24)
             }
+            .background(WTheme.canvas)
             .navigationTitle("Schedule send")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(WTheme.canvas, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { isPresented = false }
+                        .foregroundStyle(WTheme.ink)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Set") {
                         onConfirm()
                         isPresented = false
                     }
-                    .fontWeight(.semibold)
+                    .fontWeight(.medium)
+                    .foregroundStyle(WTheme.ink)
                 }
             }
         }

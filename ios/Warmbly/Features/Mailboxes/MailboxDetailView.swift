@@ -22,7 +22,7 @@ enum MailboxDetailTab: String, CaseIterable, Identifiable {
     }
 }
 
-/// Mailbox detail: sky hero with health/usage/warmup chips, swipeable tabs for
+/// Mailbox detail: canvas header with health/usage/warmup tiles, swipeable tabs for
 /// Overview / Warmup / Setup. Pushed onto the Accounts tab stack, so it does
 /// NOT create its own NavigationStack. Claims presence on `mailbox:<id>` and
 /// reloads on the emailAccounts/analytics pulse.
@@ -118,22 +118,21 @@ struct MailboxDetailView: View {
     // MARK: Hero
 
     private var hero: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .center, spacing: 12) {
-                WAvatar(name: account.name ?? account.email, seed: account.id, size: 46)
-                    .overlay(Circle().strokeBorder(.white.opacity(0.55), lineWidth: 1.5))
-                VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .center, spacing: 14) {
+                MailboxAvatar(email: account.email, avatarURL: account.avatarURL, brand: account.brand, seed: account.id, size: 48, ring: WTheme.canvas)
+                VStack(alignment: .leading, spacing: 7) {
                     Text(account.email)
-                        .font(.title2.bold())
-                        .foregroundStyle(.white)
+                        .displayFont(24)
+                        .foregroundStyle(WTheme.ink)
                         .lineLimit(2)
                         .minimumScaleFactor(0.7)
                         .textSelection(.enabled)
                     HStack(spacing: 8) {
                         heroStatusPill
                         Text(heroMetaLine)
-                            .font(.footnote)
-                            .foregroundStyle(.white.opacity(0.72))
+                            .font(WFont.meta(11.5))
+                            .foregroundStyle(WTheme.inkSecondary)
                             .lineLimit(1)
                     }
                     ResourceViewers(resource: store.presenceKey)
@@ -142,27 +141,29 @@ struct MailboxDetailView: View {
             heroStats
         }
         .padding(.horizontal, 20)
-        .padding(.top, 2)
+        .padding(.top, 8)
         .padding(.bottom, 18)
     }
 
-    /// Connection + warmup state in one glass capsule.
+    /// Connection + warmup state in one hairline chip.
     private var heroStatusPill: some View {
-        HStack(spacing: 5) {
-            Circle()
-                .fill(account.statusTone.color)
-                .frame(width: 7, height: 7)
-                .modifier(PingEffect(active: account.isWarmingActive, color: account.statusTone.color))
+        HStack(spacing: 6) {
+            LiveDot(
+                color: account.isWarmingActive ? Tone.orange.color : account.statusTone.color,
+                size: 6,
+                pulsing: account.isWarmingActive
+            )
             Text(account.statusLabel)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(WTheme.ink)
             Text("· \(account.warmupState.title.lowercased())")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.white.opacity(0.78))
+                .font(.system(size: 12))
+                .foregroundStyle(WTheme.inkSecondary)
         }
         .padding(.horizontal, 9)
-        .padding(.vertical, 4)
-        .background(.white.opacity(0.16), in: Capsule())
+        .frame(height: 24)
+        .background(WTheme.raised, in: Capsule())
+        .overlay(Capsule().strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
     }
 
     private var heroMetaLine: String {
@@ -217,58 +218,74 @@ struct MailboxDetailView: View {
             if let health {
                 healthSection(health)
             } else {
-                Section("Health") {
+                Section {
                     Text("Health data isn't available yet.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 14))
+                        .foregroundStyle(WTheme.inkSecondary)
+                } header: {
+                    EyebrowLabel("Health")
                 }
             }
         }
-        .listStyle(.plain)
+        .mailboxListChrome()
     }
 
     private func healthSection(_ health: MailboxHealth) -> some View {
-        Section("Health") {
+        Section {
             HStack(spacing: 14) {
-                HealthRing(score: health.score, tone: health.tone, size: 44)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(health.label)
-                        .font(.body.weight(.medium))
-                        .foregroundStyle(health.tone.color)
+                HealthRing(score: health.score, tone: health.tone, size: 46)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        LiveDot(color: health.tone.color, size: 6, pulsing: false)
+                        Text(health.label)
+                            .font(.system(size: 15.5, weight: .medium))
+                            .foregroundStyle(WTheme.ink)
+                    }
                     Text("Health score")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(WFont.meta(10, weight: .medium))
+                        .foregroundStyle(WTheme.inkTertiary)
                 }
                 Spacer()
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, 6)
             if let issues = health.issues, !issues.isEmpty {
                 ForEach(Array(issues.enumerated()), id: \.offset) { _, issue in
-                    Label(issue, systemImage: "exclamationmark.triangle")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    HStack(alignment: .firstTextBaseline, spacing: 9) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(WTheme.warning)
+                        Text(issue)
+                            .font(.system(size: 14))
+                            .foregroundStyle(WTheme.inkSecondary)
+                    }
                 }
             }
             if let errors = store.analytics?.errors, !errors.isEmpty {
                 ForEach(errors) { error in
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(error.title ?? "Issue")
-                            .font(.body.weight(.medium))
-                            .foregroundStyle(error.tone.color)
-                        if let message = error.message {
-                            Text(message)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                        if let action = error.actionRequired, !action.isEmpty {
-                            Text(action)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                    HStack(alignment: .firstTextBaseline, spacing: 9) {
+                        LiveDot(color: error.tone.color, size: 6, pulsing: false)
+                            .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(error.title ?? "Issue")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(WTheme.ink)
+                            if let message = error.message {
+                                Text(message)
+                                    .font(.system(size: 13.5))
+                                    .foregroundStyle(WTheme.inkSecondary)
+                            }
+                            if let action = error.actionRequired, !action.isEmpty {
+                                Text(action)
+                                    .font(.system(size: 13.5))
+                                    .foregroundStyle(WTheme.inkSecondary)
+                            }
                         }
                     }
                     .padding(.vertical, 2)
                 }
             }
+        } header: {
+            EyebrowLabel("Health")
         }
     }
 
@@ -280,23 +297,30 @@ struct MailboxDetailView: View {
             rampSection
             windowSection
         }
-        .listStyle(.plain)
+        .mailboxListChrome()
     }
 
     @ViewBuilder
     private var warmupSection: some View {
-        Section("Warmup") {
+        Section {
             if let ws = store.analytics?.warmupStatus {
-                HStack(spacing: 12) {
+                HStack(spacing: 0) {
                     warmupStat("\(ws.currentVolume ?? 0)/\(ws.targetVolume ?? 0)", label: "Today")
+                    Rectangle().fill(WTheme.hairline).frame(width: 1)
                     warmupStat("\(ws.maxVolume ?? account.warmupMax ?? 40)", label: "Ceiling /day")
+                        .padding(.leading, 14)
+                    Rectangle().fill(WTheme.hairline).frame(width: 1)
                     warmupStat("\(ws.daysActive ?? 0)", label: "Days warming")
+                        .padding(.leading, 14)
                 }
-                .padding(.vertical, 6)
+                .padding(.vertical, 8)
             } else {
-                Text(account.warmupState.title)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 7) {
+                    LiveDot(color: account.warmupState == .paused ? WTheme.warning : WTheme.inkTertiary, size: 6, pulsing: false)
+                    Text(account.warmupState.title)
+                        .font(.system(size: 14.5))
+                        .foregroundStyle(WTheme.inkSecondary)
+                }
             }
 
             if let wh = store.analytics?.warmupHealth, wh.isDegraded {
@@ -311,59 +335,76 @@ struct MailboxDetailView: View {
 
             if canManage {
                 warmupControls
+                    .listRowSeparator(.hidden)
             }
+        } header: {
+            EyebrowLabel("Warmup")
         }
     }
 
     private func warmupStat(_ value: String, label: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(value)
-                .font(.system(size: 22, weight: .bold, design: .rounded))
-                .monospacedDigit()
-                .contentTransition(.numericText())
+        VStack(alignment: .leading, spacing: 6) {
             Text(label)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .font(WFont.meta(10, weight: .medium))
+                .foregroundStyle(WTheme.inkTertiary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Text(value)
+                .font(.system(size: 26, weight: .regular))
+                .tracking(-0.9)
+                .monospacedDigit()
+                .foregroundStyle(WTheme.ink)
+                .contentTransition(.numericText())
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
     private var warmupControls: some View {
-        switch account.warmupState {
-        case .active:
-            Button {
-                Task { await store.warmupAction(env.api, "pause") }
-            } label: {
-                Label("Pause warmup", systemImage: "pause.fill")
+        VStack(spacing: 10) {
+            switch account.warmupState {
+            case .active:
+                Button {
+                    Task { await store.warmupAction(env.api, "pause") }
+                } label: {
+                    Label("Pause warmup", systemImage: "pause.fill")
+                }
+                .buttonStyle(OutlineButtonStyle(size: .regular, fullWidth: true))
+                stopButton
+            case .paused:
+                Button {
+                    Task { await store.warmupAction(env.api, "resume") }
+                } label: {
+                    Label("Resume warmup", systemImage: "flame.fill")
+                }
+                .buttonStyle(InkButtonStyle(size: .regular, fullWidth: true))
+                stopButton
+            case .off:
+                Button {
+                    Task { await store.warmupAction(env.api, "start") }
+                } label: {
+                    Label("Start warmup", systemImage: "flame.fill")
+                }
+                .buttonStyle(InkButtonStyle(size: .regular, fullWidth: true))
             }
-            Button(role: .destructive) {
-                Task { await store.warmupAction(env.api, "stop") }
-            } label: {
-                Label("Stop and reset", systemImage: "stop.fill")
-            }
-        case .paused:
-            Button {
-                Task { await store.warmupAction(env.api, "resume") }
-            } label: {
-                Label("Resume warmup", systemImage: "flame.fill")
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(WTheme.accent)
-            Button(role: .destructive) {
-                Task { await store.warmupAction(env.api, "stop") }
-            } label: {
-                Label("Stop and reset", systemImage: "stop.fill")
-            }
-        case .off:
-            Button {
-                Task { await store.warmupAction(env.api, "start") }
-            } label: {
-                Label("Start warmup", systemImage: "flame.fill")
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(WTheme.accent)
         }
+        .padding(.vertical, 6)
+    }
+
+    private var stopButton: some View {
+        Button(role: .destructive) {
+            Task { await store.warmupAction(env.api, "stop") }
+        } label: {
+            Label("Stop and reset", systemImage: "stop.fill")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(WTheme.negative)
+                .frame(maxWidth: .infinity)
+                .frame(height: 36)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: Warmup ramp (editable)
@@ -445,7 +486,8 @@ struct MailboxDetailView: View {
     private func timeRow(_ title: String, current: String, apply: @escaping (String) -> Void) -> some View {
         HStack(spacing: 12) {
             Text(title)
-                .font(.body.weight(.medium))
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(WTheme.ink)
             Spacer(minLength: 8)
             if canManage {
                 Menu {
@@ -461,20 +503,25 @@ struct MailboxDetailView: View {
                         }
                     }
                 } label: {
-                    HStack(spacing: 3) {
+                    HStack(spacing: 5) {
                         Text(current)
-                            .font(.subheadline)
+                            .font(WFont.meta(13, weight: .medium))
                             .monospacedDigit()
+                            .foregroundStyle(WTheme.ink)
                         Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(WTheme.inkTertiary)
                     }
-                    .foregroundStyle(WTheme.accent)
+                    .padding(.horizontal, 11)
+                    .frame(height: 30)
+                    .background(WTheme.raised, in: Capsule())
+                    .overlay(Capsule().strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
                 }
             } else {
                 Text(current)
-                    .font(.subheadline)
+                    .font(WFont.meta(13))
                     .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(WTheme.inkSecondary)
             }
         }
         .padding(.vertical, 2)
@@ -483,15 +530,16 @@ struct MailboxDetailView: View {
     private var sendingDaysRow: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Sending days")
-                .font(.body.weight(.medium))
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(WTheme.ink)
             HStack(spacing: 6) {
                 ForEach(Self.dayBits, id: \.bit) { day in
                     dayChip(day.label, bit: day.bit)
                 }
             }
             Text("Leave all off to send every day.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 13))
+                .foregroundStyle(WTheme.inkTertiary)
         }
         .padding(.vertical, 6)
     }
@@ -508,11 +556,13 @@ struct MailboxDetailView: View {
             }
         } label: {
             Text(label)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(on ? Color.white : Color.secondary)
+                .font(WFont.meta(10.5, weight: .medium))
+                .foregroundStyle(on ? WTheme.inkInverse : WTheme.inkSecondary)
                 .frame(maxWidth: .infinity)
-                .frame(height: 30)
-                .background(on ? AnyShapeStyle(WTheme.accent) : AnyShapeStyle(Tone.slate.background), in: Capsule())
+                .frame(height: 32)
+                .background(on ? WTheme.ink : WTheme.raised, in: Capsule())
+                .overlay(Capsule().strokeBorder(on ? Color.clear : WTheme.hairlineStrong, lineWidth: 1))
+                .animation(.snappy, value: on)
         }
         .buttonStyle(TapScaleStyle())
         .disabled(!canManage)
@@ -530,12 +580,13 @@ struct MailboxDetailView: View {
         mutate: @escaping (inout EmailAccount, Int) -> Void
     ) -> some View {
         HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.body.weight(.medium))
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(WTheme.ink)
                 Text(helper)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 13))
+                    .foregroundStyle(WTheme.inkSecondary)
             }
             Spacer(minLength: 8)
             if canManage {
@@ -544,8 +595,9 @@ struct MailboxDetailView: View {
                         step(to: max(range.lowerBound, value - 1), write: write, mutate: mutate)
                     }
                     Text("\(value)\(suffix)")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(WFont.meta(13.5, weight: .medium))
                         .monospacedDigit()
+                        .foregroundStyle(WTheme.ink)
                         .frame(minWidth: 46)
                         .contentTransition(.numericText())
                     stepButton("plus", enabled: value < range.upperBound) {
@@ -554,12 +606,12 @@ struct MailboxDetailView: View {
                 }
             } else {
                 Text("\(value)\(suffix)")
-                    .font(.subheadline)
+                    .font(WFont.meta(13.5))
                     .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(WTheme.inkSecondary)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
     }
 
     private func step(
@@ -579,10 +631,11 @@ struct MailboxDetailView: View {
     private func stepButton(_ symbol: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(enabled ? AnyShapeStyle(WTheme.accent) : AnyShapeStyle(Color(.tertiaryLabel)))
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(enabled ? WTheme.ink : WTheme.inkTertiary.opacity(0.6))
                 .frame(width: 30, height: 30)
-                .background(Tone.slate.background, in: Circle())
+                .background(WTheme.raised, in: Circle())
+                .overlay(Circle().strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
         }
         .buttonStyle(TapScaleStyle())
         .disabled(!enabled)
@@ -601,7 +654,7 @@ struct MailboxDetailView: View {
                 dangerSection
             }
         }
-        .listStyle(.plain)
+        .mailboxListChrome()
     }
 
     // MARK: Sender profile (editable)
@@ -627,8 +680,8 @@ struct MailboxDetailView: View {
                         .disabled(!canManage)
                 }
                 Text("Where replies land. Empty uses the mailbox address.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 13))
+                    .foregroundStyle(WTheme.inkTertiary)
             }
         } header: {
             EyebrowLabel("Sender profile")
@@ -638,10 +691,12 @@ struct MailboxDetailView: View {
     private func fieldRow<Field: View>(_ label: String, @ViewBuilder field: () -> Field) -> some View {
         HStack(spacing: 12) {
             Text(label)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(WFont.meta(10.5, weight: .medium))
+                .foregroundStyle(WTheme.inkTertiary)
                 .frame(width: 96, alignment: .leading)
             field()
+                .font(.system(size: 15))
+                .foregroundStyle(WTheme.ink)
         }
         .padding(.vertical, 4)
     }
@@ -691,8 +746,8 @@ struct MailboxDetailView: View {
                 HStack(spacing: 12) {
                     if accountTagGroups.isEmpty {
                         Text("No tags")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: 14.5))
+                            .foregroundStyle(WTheme.inkTertiary)
                     } else {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 6) {
@@ -705,8 +760,8 @@ struct MailboxDetailView: View {
                     Spacer(minLength: 8)
                     if canManage {
                         Text("Edit")
-                            .font(.subheadline)
-                            .foregroundStyle(WTheme.accent)
+                            .font(.system(size: 13.5, weight: .medium))
+                            .foregroundStyle(WTheme.ink)
                     }
                 }
                 .padding(.vertical, 4)
@@ -715,8 +770,8 @@ struct MailboxDetailView: View {
             .buttonStyle(.plain)
             .disabled(!canManage)
             Text("Campaigns can pick senders by tag.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 13))
+                .foregroundStyle(WTheme.inkTertiary)
         } header: {
             EyebrowLabel("Tags")
         }
@@ -724,16 +779,17 @@ struct MailboxDetailView: View {
 
     private func tagChip(_ tag: UserGroup) -> some View {
         let tint = Color(uniboxHex: tag.color) ?? WTheme.accent
-        return HStack(spacing: 5) {
+        return HStack(spacing: 6) {
             Circle().fill(tint).frame(width: 7, height: 7)
             Text(tag.name ?? "Tag")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(tint)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(WTheme.ink)
                 .lineLimit(1)
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
-        .background(tint.opacity(0.12), in: Capsule())
+        .padding(.horizontal, 10)
+        .frame(height: 26)
+        .background(WTheme.raised, in: Capsule())
+        .overlay(Capsule().strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
     }
 
     // MARK: Sending limits (editable)
@@ -767,12 +823,17 @@ struct MailboxDetailView: View {
             Button(role: .destructive) {
                 confirmDisconnect = true
             } label: {
-                HStack {
-                    Spacer()
-                    Text("Disconnect mailbox")
-                    Spacer()
-                }
+                Text("Disconnect mailbox")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(WTheme.negative)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                    .overlay(Capsule().strokeBorder(WTheme.negative.opacity(0.3), lineWidth: 1))
+                    .contentShape(Capsule())
             }
+            .buttonStyle(TapScaleStyle())
+            .listRowSeparator(.hidden)
+            .padding(.vertical, 4)
         } header: {
             EyebrowLabel("Danger zone")
         }
@@ -780,20 +841,20 @@ struct MailboxDetailView: View {
 
     @ViewBuilder
     private var authSection: some View {
-        Section("Domain authentication") {
+        Section {
             if let auth = store.authCheck {
                 authRow("SPF", ok: auth.spfFound == true)
                 authRow("DKIM", ok: auth.dkimFound == true)
                 authRow("DMARC", ok: auth.dmarcFound == true)
                 if let summary = auth.summary, !summary.isEmpty {
                     Text(summary)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(WTheme.inkSecondary)
                 }
             } else {
                 Text("Check \(account.senderDomain) for SPF, DKIM, and DMARC alignment.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(WTheme.inkSecondary)
             }
             Button {
                 Task { await store.runAuthCheck(env.api) }
@@ -804,33 +865,66 @@ struct MailboxDetailView: View {
                     Text(store.authCheck == nil ? "Check now" : "Re-check")
                 }
             }
+            .buttonStyle(OutlineButtonStyle(size: .small))
             .disabled(store.isCheckingAuth)
+            .listRowSeparator(.hidden)
+        } header: {
+            EyebrowLabel("Domain authentication")
         }
     }
 
     private func authRow(_ label: String, ok: Bool) -> some View {
         HStack(spacing: 12) {
-            IconTile(symbol: ok ? "checkmark.seal.fill" : "xmark.circle", tone: ok ? .emerald : .slate, size: 34)
+            IconTile(symbol: ok ? "checkmark.seal.fill" : "xmark.circle", tone: ok ? .emerald : .slate, size: 32)
             Text(label)
-                .font(.body.weight(.medium))
+                .font(WFont.meta(14, weight: .medium))
+                .foregroundStyle(WTheme.ink)
             Spacer()
-            Text(ok ? "Found" : "Missing")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                LiveDot(color: ok ? WTheme.positive : WTheme.inkTertiary, size: 6, pulsing: false)
+                Text(ok ? "Found" : "Missing")
+                    .font(WFont.meta(10.5, weight: .medium))
+                    .foregroundStyle(WTheme.inkSecondary)
+            }
         }
         .padding(.vertical, 2)
     }
 
     // Name, reply-to, cap and gap moved into the editable sections above.
     private var identitySection: some View {
-        Section("Details") {
-            LabeledContent("Provider", value: account.providerLabel)
+        Section {
+            detailRow("Provider", value: account.providerLabel)
             if let synced = account.lastSyncedAt {
-                LabeledContent("Last synced", value: WFormat.relative(synced))
+                detailRow("Last synced", value: WFormat.relative(synced))
             }
             if let created = account.createdAt {
-                LabeledContent("Connected", value: WFormat.relative(created))
+                detailRow("Connected", value: WFormat.relative(created))
             }
+        } header: {
+            EyebrowLabel("Details")
         }
+    }
+
+    private func detailRow(_ label: String, value: String) -> some View {
+        LabeledContent {
+            Text(value)
+                .font(WFont.meta(12.5))
+                .foregroundStyle(WTheme.inkSecondary)
+        } label: {
+            Text(label)
+                .font(.system(size: 15))
+                .foregroundStyle(WTheme.ink)
+        }
+    }
+}
+
+private extension View {
+    /// Plain list on the canvas with hairline separators.
+    func mailboxListChrome() -> some View {
+        listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(WTheme.canvas)
+            .listRowSeparatorTint(WTheme.hairline)
+            .listSectionSeparator(.hidden)
     }
 }

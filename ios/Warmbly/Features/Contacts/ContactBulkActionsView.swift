@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Floating bottom-center selection bar shown when contacts are multi-selected,
-/// matching the dashboard's SelectionBar convention: a count plus bulk actions
-/// (edit membership/subscription, delete).
+/// matching the dashboard's SelectionBar convention: an ink pill with a mono
+/// count plus bulk actions (edit membership/subscription, delete).
 struct ContactSelectionBar: View {
     let count: Int
     let onEdit: () -> Void
@@ -10,44 +10,53 @@ struct ContactSelectionBar: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Text("\(count)")
-                .font(.subheadline.weight(.bold))
-                .monospacedDigit()
-                .foregroundStyle(.white)
-                .frame(minWidth: 26, minHeight: 26)
-                .background(WTheme.accent, in: Circle())
-                .contentTransition(.numericText())
-            Text("selected")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Text("\(count)")
+                    .font(WFont.meta(15, weight: .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(WTheme.inkInverse)
+                    .contentTransition(.numericText())
+                Text("selected")
+                    .font(WFont.meta(10.5, weight: .medium))
+                    .foregroundStyle(WTheme.inkInverse.opacity(0.6))
+            }
+            .padding(.leading, 8)
 
             Spacer(minLength: 8)
 
             Button(action: onEdit) {
-                Label("Edit", systemImage: "slider.horizontal.3")
-                    .font(.subheadline.weight(.semibold))
+                HStack(spacing: 6) {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 12, weight: .medium))
+                    Text("Edit")
+                        .font(.system(size: 13.5, weight: .medium))
+                }
+                .foregroundStyle(WTheme.ink)
+                .padding(.horizontal, 14)
+                .frame(height: 34)
+                .background(WTheme.inkInverse, in: Capsule())
             }
-            .buttonStyle(.borderedProminent)
-            .tint(WTheme.accent)
-            .controlSize(.small)
+            .buttonStyle(TapScaleStyle())
             .disabled(count == 0)
+            .opacity(count == 0 ? 0.5 : 1)
 
             Button(role: .destructive, action: onDelete) {
                 Image(systemName: "trash")
-                    .font(.system(size: 15, weight: .semibold))
-                    .frame(width: 30, height: 30)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(WTheme.negative)
+                    .frame(width: 34, height: 34)
+                    .background(WTheme.inkInverse.opacity(0.1), in: Circle())
+                    .overlay(Circle().strokeBorder(WTheme.inkInverse.opacity(0.14), lineWidth: 1))
             }
-            .buttonStyle(.bordered)
-            .tint(WTheme.negative)
-            .controlSize(.small)
+            .buttonStyle(TapScaleStyle())
             .disabled(count == 0)
+            .opacity(count == 0 ? 0.5 : 1)
+            .accessibilityLabel("Delete selected")
         }
         .padding(.leading, 12)
-        .padding(.trailing, 10)
-        .padding(.vertical, 8)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(Color(.separator).opacity(0.35), lineWidth: 1))
-        .shadow(color: .black.opacity(0.14), radius: 14, y: 4)
+        .padding(.trailing, 6)
+        .padding(.vertical, 6)
+        .background(WTheme.ink, in: Capsule())
         .padding(.horizontal, 20)
     }
 }
@@ -107,6 +116,7 @@ struct ContactBulkEditSheet: View {
                     campaignPicker("Remove from campaign", selection: $removeCampaigns, counterpart: $addCampaigns)
                 }
             }
+            .contactFormChrome()
             .navigationTitle("Edit \(ids.count) contact\(ids.count == 1 ? "" : "s")")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -151,7 +161,7 @@ struct ContactBulkEditSheet: View {
         Section(title) {
             ForEach(campaigns) { campaign in
                 checkRow(
-                    icon: "paperplane.fill",
+                    icon: "paperplane",
                     title: campaign.name ?? "Campaign",
                     on: selection.wrappedValue.contains(campaign.id)
                 ) {
@@ -165,15 +175,13 @@ struct ContactBulkEditSheet: View {
         Button(action: action) {
             HStack(spacing: 10) {
                 if let dot {
-                    Circle().fill(dot).frame(width: 12, height: 12)
+                    Circle().fill(dot).frame(width: 9, height: 9).frame(width: 16)
                 } else if let icon {
-                    Image(systemName: icon).font(.system(size: 13)).foregroundStyle(.secondary).frame(width: 16)
+                    Image(systemName: icon).font(.system(size: 13)).foregroundStyle(WTheme.inkSecondary).frame(width: 16)
                 }
-                Text(title).foregroundStyle(.primary).lineLimit(1)
+                Text(title).foregroundStyle(WTheme.ink).lineLimit(1)
                 Spacer()
-                if on {
-                    Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(WTheme.accent)
-                }
+                ContactCheckCircle(on: on, size: 20)
             }
         }
     }

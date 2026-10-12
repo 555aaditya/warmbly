@@ -45,6 +45,11 @@ final class CampaignsStore {
     /// Sent/opened/replied per campaign id, derived from the owner-scoped
     /// compare endpoint; teammates' campaigns simply have no entry.
     private(set) var rowStats: [String: CampaignRowStats] = [:]
+    /// Per-status lead totals per campaign id, for the row's progress bar.
+    private(set) var progress: [String: CampaignLeadCounts] = [:]
+    var sort: CampaignSort = CampaignSort(rawValue: UserDefaults.standard.string(forKey: "campaigns.sort") ?? "") ?? .newest {
+        didSet { UserDefaults.standard.set(sort.rawValue, forKey: "campaigns.sort") }
+    }
     /// Count matching the current scope + search (`pagination.total`).
     private(set) var totalCount: Int?
     /// Drawer counts from `GET /campaigns-overview`.
@@ -67,6 +72,15 @@ final class CampaignsStore {
 
     var isSearching: Bool {
         !query.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// The loaded page in the chosen order.
+    var sortedCampaigns: [Campaign] {
+        switch sort {
+        case .newest: campaigns.sorted { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
+        case .oldest: campaigns.sorted { ($0.createdAt ?? .distantPast) < ($1.createdAt ?? .distantPast) }
+        case .name: campaigns.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        }
     }
 
     var allCount: Int { overview?.total ?? campaigns.count }
@@ -110,6 +124,7 @@ final class CampaignsStore {
             isLoading = false
             await loadOverview(api)
             await enrichStats(api, ids: campaigns.map(\.id), generation: gen)
+            await loadProgress(api, ids: campaigns.map(\.id), generation: gen)
         } catch {
             guard gen == generation else { return }
             errorMessage = error.localizedDescription
@@ -138,6 +153,7 @@ final class CampaignsStore {
                 hasMore = page.pagination?.hasMore ?? false
             }
             await enrichStats(api, ids: fresh.map(\.id), generation: gen)
+            await loadProgress(api, ids: fresh.map(\.id), generation: gen)
         } catch {
             // Keep the list; the sentinel row will retry on next appear.
         }
@@ -168,6 +184,37 @@ final class CampaignsStore {
                         replied: Int((Double(sent) * (item.replyRate ?? 0) / 100).rounded())
                     )
                 }
+            }
+        }
+    }
+
+    /// Lead progress per campaign from the leads search's `lead_counts`
+    /// (one campaign per call, a few at a time). Best-effort.
+    /// A campaign's lead counts by state, from a one-row contacts search.
+    nonisolated static func leadCounts(_ api: APIClient, campaignID: String) async -> CampaignLeadCounts? {
+        var body = ContactSearchBody()
+        body.campaignIDs = [campaignID]
+        let page: CampaignLeadsPage? = try? await api.post("contacts/search", body: body, query: ["limit": "1"])
+        return page?.leadCounts
+    }
+
+    private func loadProgress(_ api: APIClient, ids: [String], generation gen: Int) async {
+        var index = 0
+        while index < ids.count {
+            guard gen == generation else { return }
+            let chunk = Array(ids[index ..< min(index + 4, ids.count)])
+            index += 4
+            let results = await withTaskGroup(of: (String, CampaignLeadCounts?).self) { group in
+                for id in chunk {
+                    group.addTask { (id, await Self.leadCounts(api, campaignID: id)) }
+                }
+                var out: [(String, CampaignLeadCounts?)] = []
+                for await result in group { out.append(result) }
+                return out
+            }
+            guard gen == generation else { return }
+            withAnimation(.snappy) {
+                for (id, counts) in results { if let counts { progress[id] = counts } }
             }
         }
     }

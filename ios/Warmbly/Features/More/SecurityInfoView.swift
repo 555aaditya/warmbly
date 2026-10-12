@@ -26,11 +26,15 @@ final class MoreSecurityStore {
     }
 }
 
-/// Read-only security overview: 2FA state and enrolled passkeys as flat,
-/// tile-led status rows. Enrollment flows live on the web dashboard.
+/// How well the account is protected: a hero that says it plainly, the two
+/// second steps and their state, every passkey, and the way to set one up.
 struct SecurityInfoView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var store = MoreSecurityStore()
+
+    private var factors: Int {
+        (store.twoFAEnabled == true ? 1 : 0) + (store.passkeys.isEmpty ? 0 : 1)
+    }
 
     var body: some View {
         content
@@ -53,126 +57,105 @@ struct SecurityInfoView: View {
                 SkeletonRows(rows: 4)
             }
         } else {
-            List {
-                twoFASection
-                passkeysSection
-                handoffRow
+            SettingsPage(title: "Security") {
+                SettingsHero(
+                    symbol: factors > 0 ? "checkmark.shield.fill" : "exclamationmark.shield.fill",
+                    color: factors > 0 ? WTheme.positive : WTheme.warning,
+                    title: factors > 0 ? "Your account is protected" : "Add a second step",
+                    subtitle: factors > 0
+                        ? "Signing in takes more than your password."
+                        : "With only a password, anyone who learns it can sign in. A code or a passkey stops them."
+                )
+                protectionSection
+                if !store.passkeys.isEmpty { passkeysSection }
+                setupSection
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .background(Color(.systemBackground))
-            .environment(\.defaultMinListRowHeight, 0)
             .refreshable { await store.load(env.api) }
         }
     }
 
-    // MARK: Two-factor
-
-    @ViewBuilder
-    private var twoFASection: some View {
-        MoreFlatSectionHeader("Two-factor authentication", top: 8)
-        HStack(spacing: 12) {
-            IconTile(
-                symbol: "lock.shield.fill",
-                tone: store.twoFAEnabled == true ? .emerald : .slate,
-                size: 34
+    private var protectionSection: some View {
+        SettingsSection("Sign-in protection", footer: "\(factors) of 2 turned on.") {
+            SettingsRow(
+                icon: "lock.rotation", color: SettingsPalette.security, title: "Authenticator app",
+                subtitle: "A 6-digit code from an app like 1Password",
+                value: store.twoFAEnabled == true ? "On" : "Off",
+                valueColor: store.twoFAEnabled == true ? WTheme.positive : WTheme.inkTertiary,
+                dot: store.twoFAEnabled == true ? WTheme.positive : nil,
+                accessory: .none
             )
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Authenticator app")
-                    .font(.body.weight(.medium))
-                Text("Time-based one-time codes")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 8)
-            StatusPill(
-                text: store.twoFAEnabled == true ? "Enabled" : "Off",
-                tone: store.twoFAEnabled == true ? .emerald : .slate
+            SettingsRow(
+                icon: "person.badge.key.fill", color: SettingsPalette.templates, title: "Passkeys",
+                subtitle: "Face ID, Touch ID or a security key",
+                value: store.passkeys.isEmpty ? "None" : "\(store.passkeys.count) saved",
+                valueColor: store.passkeys.isEmpty ? WTheme.inkTertiary : WTheme.positive,
+                dot: store.passkeys.isEmpty ? nil : WTheme.positive,
+                accessory: .none
             )
         }
-        .padding(.vertical, 10)
-        .moreFlatRow(separator: .hidden, textLeading: MoreFlatMetrics.tileTextLeading)
     }
 
-    // MARK: Passkeys
-
-    @ViewBuilder
     private var passkeysSection: some View {
-        MoreFlatSectionHeader("Passkeys")
-        if store.passkeys.isEmpty {
-            HStack(spacing: 12) {
-                IconTile(symbol: "key.fill", tone: .slate, size: 34)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("No passkeys yet")
-                        .font(.body.weight(.medium))
-                    Text("Add one on the web for phishing-resistant sign-in")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 8)
-                StatusPill(text: "None", tone: .slate)
+        SettingsSection("Passkeys") {
+            ForEach(store.passkeys) { credential in
+                passkeyRow(credential)
             }
-            .padding(.vertical, 10)
-            .moreFlatRow(separator: .hidden, textLeading: MoreFlatMetrics.tileTextLeading)
-        }
-        ForEach(store.passkeys) { credential in
-            passkeyRow(credential)
-                .moreFlatRow(textLeading: MoreFlatMetrics.tileTextLeading)
         }
     }
 
     private func passkeyRow(_ credential: PasskeyCredential) -> some View {
         HStack(spacing: 12) {
-            IconTile(symbol: "key.fill", tone: .indigo, size: 34)
+            SettingsIcon(symbol: credential.backupState == true ? "key.icloud.fill" : "key.fill", color: SettingsPalette.templates)
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 5) {
-                    Text(credential.name?.isEmpty == false ? credential.name! : "Passkey")
-                        .font(.body.weight(.medium))
-                        .lineLimit(1)
-                    if credential.backupState == true {
-                        Image(systemName: "icloud.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                Text(credential.name?.isEmpty == false ? credential.name! : "Passkey")
+                    .font(.system(size: 16))
+                    .foregroundStyle(WTheme.ink)
+                    .lineLimit(1)
                 Text(passkeyDetail(credential))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 13))
+                    .foregroundStyle(WTheme.inkSecondary)
                     .lineLimit(1)
             }
-            Spacer(minLength: 0)
+            Spacer(minLength: 8)
             if let created = credential.createdAt {
-                Text(WFormat.relative(created))
-                    .font(.footnote)
+                Text(created.formatted(.dateTime.month(.abbreviated).day().year()))
+                    .font(.system(size: 13.5))
                     .monospacedDigit()
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(WTheme.inkTertiary)
             }
         }
-        .padding(.vertical, 10)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 11)
     }
 
     private func passkeyDetail(_ credential: PasskeyCredential) -> String {
         var parts: [String] = []
         if let provider = credential.provider, !provider.isEmpty {
             parts.append(provider)
-        }
-        if let transports = credential.transports, !transports.isEmpty {
-            parts.append(transports.joined(separator: ", "))
+        } else if credential.backupState == true {
+            parts.append("Synced")
         }
         if let lastUsed = credential.lastUsedAt {
-            parts.append("used \(WFormat.relative(lastUsed))")
+            parts.append("Used \(WFormat.relative(lastUsed))")
         } else {
-            parts.append("never used")
+            parts.append("Never used")
         }
         return parts.joined(separator: " · ")
     }
 
-    // MARK: Web handoff
-
-    private var handoffRow: some View {
-        WebHandoffBanner(text: "Two-factor enrollment and passkey registration are managed on the web dashboard.")
-            .padding(.top, 20)
-            .padding(.bottom, 28)
-            .moreFlatRow(separator: .hidden)
+    @ViewBuilder
+    private var setupSection: some View {
+        if let url = AppConfig.dashboardURL("/app/settings/security") {
+            SettingsSection(footer: "Setting up a second step needs a code scanned or a key registered, which happens on the web dashboard.") {
+                Link(destination: url) {
+                    SettingsRow(
+                        icon: "safari.fill", color: WTheme.accent,
+                        title: factors > 0 ? "Manage on the web" : "Set up on the web",
+                        accessory: .external
+                    )
+                }
+                .buttonStyle(MoreRowPressStyle())
+            }
+        }
     }
 }

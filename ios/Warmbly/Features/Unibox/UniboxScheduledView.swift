@@ -15,6 +15,8 @@ struct UniboxScheduledView: View {
         content
             .navigationTitle("Scheduled")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(WTheme.canvas, for: .navigationBar)
+            .background(WTheme.canvas)
             .task { await store.load(env.api) }
             .onChange(of: env.realtime.pulse(for: .unibox)) {
                 Task { await store.load(env.api) }
@@ -63,7 +65,9 @@ struct UniboxScheduledView: View {
                     ScheduledRow(item: item, showThread: true) {
                         if canCancel { cancelTarget = item }
                     }
-                    .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+                    .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
+                    .listRowBackground(WTheme.canvas)
+                    .listRowSeparatorTint(WTheme.hairline)
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         if canCancel {
                             Button(role: .destructive) {
@@ -76,6 +80,7 @@ struct UniboxScheduledView: View {
                 }
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
             .refreshable { await store.load(env.api) }
         }
     }
@@ -104,41 +109,46 @@ struct ScheduledRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            IconTile(symbol: "clock.badge", tone: .amber, size: 40)
+            IconTile(symbol: "clock", tone: .amber, size: 38)
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.subject?.isEmpty == false ? (item.subject ?? "") : "(no subject)")
-                    .font(.body.weight(.medium))
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(WTheme.ink)
                     .lineLimit(1)
                 if !recipients.isEmpty {
                     Text("to \(recipients)")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(WTheme.inkSecondary)
                         .lineLimit(1)
                 }
                 if let snippet = item.snippet, !snippet.isEmpty {
                     Text(snippet)
-                        .font(.subheadline)
-                        .foregroundStyle(.tertiary)
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(WTheme.inkTertiary)
                         .lineLimit(1)
                 }
                 HStack(spacing: 6) {
+                    LiveDot(color: WTheme.warning, size: 5, pulsing: false)
                     Text(UniboxFormat.absoluteTime(item.scheduledAt))
-                        .font(.footnote)
+                        .foregroundStyle(WTheme.ink)
                         .monospacedDigit()
                     if let account = item.accountEmail, !account.isEmpty {
                         Text("· \(account)")
-                            .font(.footnote)
+                            .foregroundStyle(WTheme.inkTertiary)
                             .lineLimit(1)
                     }
                 }
-                .foregroundStyle(WTheme.warning)
-                .padding(.top, 2)
+                .font(.system(size: 12.5, weight: .medium))
+                .padding(.top, 4)
             }
             Spacer(minLength: 6)
             Button(action: onCancel) {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 22))
-                    .foregroundStyle(.tertiary)
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(WTheme.inkSecondary)
+                    .frame(width: 30, height: 30)
+                    .background(WTheme.raised, in: Circle())
+                    .overlay(Circle().strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Cancel scheduled send")

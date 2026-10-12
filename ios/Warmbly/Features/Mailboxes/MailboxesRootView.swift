@@ -1,9 +1,9 @@
 import SwiftUI
 
 /// Mailboxes browser, presented as a full-screen cover from Home or More
-/// (like the CRM browsers): a slide-in drawer (sky hero + warmup status
-/// scopes with live counts + sliding tone capsule + edge swipe), a search
-/// pill, bare fleet stat columns that drive the same scope, multi-select with
+/// (like the CRM browsers): a slide-in drawer (ink header + warmup status
+/// scopes with live counts + sliding fill + edge swipe), a search pill, a
+/// ruled fleet stat strip that drives the same scope, multi-select with
 /// bulk warmup and remove, cursor pagination, and realtime pulse reloads.
 /// Owns its NavigationStack; dismissal goes through `onClose` (the
 /// environment DismissAction is unreliable in this app's cover contexts).
@@ -28,6 +28,7 @@ struct MailboxesRootView: View {
     @State private var bulkTagMode: BulkTagMode?
     @State private var tagApplyPulse = 0
     @FocusState private var searchFocused: Bool
+    @State private var tilesShown = false
 
     private static let sidebarWidth: CGFloat = 300
 
@@ -70,7 +71,7 @@ struct MailboxesRootView: View {
                 mainPane
                     .scaleEffect(sidebarOpen ? 0.97 : 1, anchor: .trailing)
                 if sidebarOpen {
-                    Color.black.opacity(0.32)
+                    Color.black.opacity(0.24)
                         .ignoresSafeArea()
                         .transition(.opacity)
                         .onTapGesture { closeSidebar() }
@@ -93,9 +94,17 @@ struct MailboxesRootView: View {
         .sensoryFeedback(.impact(weight: .light), trigger: sidebarOpen)
         .sensoryFeedback(.impact(weight: .medium), trigger: store.isSelecting)
         .sensoryFeedback(.impact(weight: .light), trigger: tagApplyPulse)
+        #if DEBUG
+        // Scripted runs open the connect flow (WARMBLY_DEBUG_CONNECT) to see it.
+        .onAppear {
+            if ProcessInfo.processInfo.environment["WARMBLY_DEBUG_CONNECT"] != nil { showConnect = true }
+        }
+        #endif
         .fullScreenCover(isPresented: $showConnect) {
             MailboxConnectFlow(onClose: { showConnect = false }, onConnected: { account in
                 store.insert(account)
+            }, onImported: {
+                Task { await store.load(env.api, includeStatuses: canViewAnalytics) }
             })
         }
         .sheet(item: $bulkTagMode) { mode in
@@ -151,13 +160,9 @@ struct MailboxesRootView: View {
     private var mainPane: some View {
         VStack(spacing: 0) {
             if store.isSelecting { selectionHeader } else { searchBar }
-            if store.hasLoaded, !isSearching, !store.accounts.isEmpty {
-                statsHeader
-            }
-            scopeCaption
             listArea
         }
-        .background(Color(.systemBackground))
+        .background(WTheme.groupedPage)
         .overlay(alignment: .bottom) {
             if store.isSelecting {
                 MailboxSelectionBar(
@@ -184,77 +189,23 @@ struct MailboxesRootView: View {
         )
     }
 
-    // MARK: Search pill
+    // MARK: Header
 
     private var searchBar: some View {
-        HStack(spacing: 10) {
-            HStack(spacing: 6) {
-                Button {
-                    openSidebar()
-                } label: {
-                    Image(systemName: "line.3.horizontal")
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .frame(width: 38, height: 38)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Open mailboxes menu")
-
-                TextField("Search by email", text: $searchText)
-                    .font(.subheadline)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.search)
-                    .focused($searchFocused)
-
-                if !searchText.isEmpty {
-                    Button {
-                        searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 16))
-                            .foregroundStyle(.tertiary)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Clear search")
-                }
-
-                PresenceAvatars()
-                    .padding(.trailing, 8)
-            }
-            .frame(height: 44)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-
+        GlassHeaderBar(
+            title: "Mailboxes",
+            subtitle: store.hasLoaded ? Text("\(WFormat.compact(connectedCount)) connected") : nil,
+            query: $searchText,
+            searchPrompt: "Search by email",
+            searchFocused: $searchFocused,
+            menuLabel: "Open mailboxes menu",
+            onMenu: openSidebar
+        ) {
             if canManage {
-                Button {
-                    showConnect = true
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .frame(width: 44, height: 44)
-                        .background(Color(.secondarySystemBackground), in: Circle())
-                }
-                .buttonStyle(TapScaleStyle())
-                .accessibilityLabel("Connect a mailbox")
+                HeaderPrimaryButton(symbol: "plus", label: "Connect a mailbox") { showConnect = true }
             }
-
-            Button {
-                onClose()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 44, height: 44)
-                    .background(Color(.secondarySystemBackground), in: Circle())
-            }
-            .buttonStyle(TapScaleStyle())
-            .accessibilityLabel("Close mailboxes")
+            GlassCircleButton(symbol: "xmark", label: "Close mailboxes") { onClose() }
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 4)
-        .padding(.bottom, 6)
     }
 
     // MARK: Selection header
@@ -263,16 +214,18 @@ struct MailboxesRootView: View {
         let visibleIDs = visibleAccounts.map(\.id)
         return HStack(spacing: 12) {
             Button("Done") { store.exitSelection() }
-                .fontWeight(.semibold)
+                .buttonStyle(InkButtonStyle(size: .small))
             Spacer()
             Text("\(store.selectedCount) selected")
-                .font(.subheadline.weight(.semibold))
+                .font(WFont.meta(12, weight: .medium))
                 .monospacedDigit()
+                .foregroundStyle(WTheme.ink)
                 .contentTransition(.numericText())
             Spacer()
             Button(store.allSelected(of: visibleIDs) ? "Clear" : "Select all") {
                 store.selectAll(visibleIDs)
             }
+            .buttonStyle(OutlineButtonStyle(size: .small))
         }
         .padding(.horizontal, 16)
         .frame(height: 44)
@@ -282,47 +235,53 @@ struct MailboxesRootView: View {
 
     // MARK: Fleet stats
 
-    /// Bare stat columns over a hairline; each drives the same scope state as
-    /// the drawer.
+    /// Three tiles that filter the list, the same scope the drawer sets.
     private var statsHeader: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 10) {
-                fleetStat("Connected", count: connectedCount, tone: nil, target: .all)
-                fleetStat("Warming", count: store.warmingCount, tone: store.warmingCount > 0 ? .orange : nil, target: .warming)
-                fleetStat(
-                    "Issues",
-                    count: store.issueCount,
-                    tone: store.issueCount > 0 ? .rose : nil,
-                    target: .issues,
-                    enabled: canViewAnalytics
-                )
-            }
-            Divider()
+        HStack(spacing: 10) {
+            fleetTile("Connected", symbol: "envelope.fill", count: connectedCount, color: WTheme.accent, target: .all, index: 0)
+            fleetTile("Warming", symbol: "flame.fill", count: store.warmingCount, color: Tone.orange.color, target: .warming, index: 1)
+            fleetTile(
+                "Issues",
+                symbol: "exclamationmark.triangle.fill",
+                count: store.issueCount,
+                color: store.issueCount > 0 ? WTheme.negative : WTheme.positive,
+                target: .issues,
+                index: 2,
+                enabled: canViewAnalytics
+            )
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 6)
     }
 
-    private func fleetStat(_ label: String, count: Int, tone: Tone?, target: MailboxScope, enabled: Bool = true) -> some View {
-        let selected = scope == target && target != .all
+    private func fleetTile(_ label: String, symbol: String, count: Int, color: Color, target: MailboxScope, index: Int, enabled: Bool = true) -> some View {
+        let selected = scope == target
         return Button {
-            withAnimation(.snappy) { scope = selected ? .all : target }
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) { scope = selected ? .all : target }
         } label: {
-            VStack(alignment: .leading, spacing: 3) {
-                EyebrowLabel(label)
-                Text("\(count)")
-                    .font(.system(size: 22, weight: .semibold, design: .rounded))
+            VStack(alignment: .leading, spacing: 0) {
+                SettingsIcon(symbol: symbol, color: color, size: 30)
+                    .symbolEffect(.bounce, value: selected)
+                Spacer(minLength: 12)
+                CountUpText(value: tilesShown ? Double(count) : 0, format: { "\(Int($0.rounded()))" })
+                    .font(.system(size: 26, weight: .semibold, design: .rounded))
                     .monospacedDigit()
-                    .foregroundStyle(tone?.color ?? Color.primary)
-                    .contentTransition(.numericText())
-                Capsule()
-                    .fill(selected ? (tone?.color ?? WTheme.accent) : Color.clear)
-                    .frame(width: 26, height: 3)
+                    .foregroundStyle(WTheme.ink)
+                    .animation(.easeOut(duration: 0.9).delay(Double(index) * 0.08), value: tilesShown)
+                    .animation(.snappy, value: count)
+                Text(label)
+                    .font(.system(size: 13.5, weight: .medium))
+                    .foregroundStyle(WTheme.inkSecondary)
+                    .lineLimit(1)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
+            .padding(14)
+            .frame(maxWidth: .infinity, minHeight: 108, alignment: .topLeading)
+            .background(WTheme.groupedCard, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(color, lineWidth: selected && target != .all ? 2 : 0)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TapScaleStyle())
         .disabled(!enabled)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(label), \(count)")
@@ -331,42 +290,35 @@ struct MailboxesRootView: View {
 
     // MARK: Scope caption
 
+    @ViewBuilder
     private var scopeCaption: some View {
-        HStack(spacing: 6) {
-            Text(captionTitle)
-                .font(.caption.weight(.semibold))
-                .tracking(0.9)
-                .foregroundStyle(.secondary)
-            if !isSearching, store.count(for: scope) > 0 {
-                Text(WFormat.compact(store.count(for: scope)))
-                    .font(.caption.weight(.semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(.tertiary)
-                    .contentTransition(.numericText())
+        let canSelect = canManage && store.hasLoaded && !store.isSelecting && !visibleAccounts.isEmpty
+        if store.hasLoaded {
+            HStack(spacing: 6) {
+                if isSearching {
+                    let count = store.totalCount ?? store.accounts.count
+                    Text("\(count) \(count == 1 ? "result" : "results")")
+                        .font(.system(size: 13.5, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(WTheme.inkSecondary)
+                        .contentTransition(.numericText())
+                } else {
+                    Text(scope.title)
+                        .displayFont(22, weight: .semibold)
+                        .foregroundStyle(WTheme.ink)
+                        .contentTransition(.opacity)
+                }
+                Spacer()
+                if canSelect {
+                    Button("Select") { store.enterSelection() }
+                        .font(.system(size: 14.5, weight: .medium))
+                        .foregroundStyle(WTheme.accent)
+                        .buttonStyle(.plain)
+                }
             }
-            Spacer()
-            if isSearching, store.hasLoaded {
-                Text("\(store.totalCount ?? store.accounts.count) found")
-                    .font(.caption.weight(.semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .contentTransition(.numericText())
-            }
-            if canManage, store.hasLoaded, !store.isSelecting, !visibleAccounts.isEmpty {
-                Button("Select") { store.enterSelection() }
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(WTheme.accent)
-                    .buttonStyle(.plain)
-            }
+            .padding(.horizontal, 4)
+            .padding(.top, 6)
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 8)
-        .padding(.bottom, 2)
-    }
-
-    private var captionTitle: String {
-        if isSearching { return "SEARCH RESULTS" }
-        return scope.title.uppercased()
     }
 
     // MARK: List
@@ -374,7 +326,7 @@ struct MailboxesRootView: View {
     @ViewBuilder
     private var listArea: some View {
         if !store.hasLoaded {
-            ScrollView { SkeletonRows(rows: 10) }
+            ScrollView { AnalyticsLoadingCards().padding(16) }
         } else if let error = store.loadError, store.accounts.isEmpty {
             ErrorStateView(title: "Couldn't load mailboxes", message: error) {
                 await store.load(env.api, includeStatuses: canViewAnalytics)
@@ -383,27 +335,48 @@ struct MailboxesRootView: View {
             emptyState
         } else {
             List {
-                ForEach(visibleAccounts) { account in
-                    row(account)
+                Section {
+                    VStack(spacing: 14) {
+                        if !isSearching, !store.accounts.isEmpty {
+                            statsHeader
+                        }
+                        scopeCaption
+                    }
+                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 0, trailing: 0))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                }
+                Section {
+                    ForEach(visibleAccounts) { account in
+                        row(account)
+                    }
                 }
                 if store.nextCursor != nil {
                     HStack(spacing: 8) {
                         Spacer()
                         ProgressView().controlSize(.small)
                         Text("Loading more…")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .font(WFont.meta(11.5))
+                            .foregroundStyle(WTheme.inkSecondary)
                         Spacer()
                     }
                     .padding(.vertical, 6)
                     .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
                     .task { await store.loadMore(env.api) }
                 } else {
                     endMarker
                 }
             }
-            .listStyle(.plain)
+            .listStyle(.insetGrouped)
+            .listSectionSpacing(14)
+            .contentMargins(.horizontal, 16, for: .scrollContent)
+            .contentMargins(.top, 0, for: .scrollContent)
+            .scrollContentBackground(.hidden)
+            .background(WTheme.groupedPage)
             .scrollDismissesKeyboard(.immediately)
+            .defaultScrollAnchor(SettingsDebug.anchor)
+            .onAppear { tilesShown = true }
             .refreshable { await store.load(env.api, includeStatuses: canViewAnalytics) }
         }
     }
@@ -428,8 +401,10 @@ struct MailboxesRootView: View {
                     .background(NavigationLink(value: account) { EmptyView() }.opacity(0))
             }
         }
-        .listRowBackground(store.isSelected(account.id) ? Tone.sky.background : Color(.systemBackground))
-        .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 16))
+        .listRowBackground(store.isSelected(account.id) ? WTheme.fill : WTheme.groupedCard)
+        .listRowSeparatorTint(WTheme.hairline)
+        .alignmentGuide(.listRowSeparatorLeading) { _ in 66 }
+        .listRowInsets(EdgeInsets(top: 6, leading: 14, bottom: 6, trailing: 14))
         .simultaneousGesture(
             LongPressGesture(minimumDuration: 0.4).onEnded { _ in
                 if !store.isSelecting, canManage { store.enterSelection(with: account.id) }
@@ -448,13 +423,15 @@ struct MailboxesRootView: View {
         return HStack {
             Spacer()
             Text("\(count) mailbox\(count == 1 ? "" : "es")")
-                .font(.footnote)
+                .font(.system(size: 13))
                 .monospacedDigit()
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(WTheme.inkTertiary)
             Spacer()
         }
-        .padding(.vertical, 10)
+        .padding(.top, 4)
+        .padding(.bottom, 90)
         .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
     }
 
     @ViewBuilder
@@ -493,24 +470,30 @@ struct MailboxesRootView: View {
     }
 
     private var connectEmptyState: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 0) {
             Image(systemName: "envelope.open")
-                .font(.system(size: 18))
-                .foregroundStyle(WTheme.accent)
-                .frame(width: 36, height: 36)
-                .background(Tone.sky.background, in: RoundedRectangle(cornerRadius: 8))
-            Text("No mailboxes yet")
-                .font(.system(size: 14, weight: .medium))
-            Text("Connect your first mailbox to start warming up and sending campaigns.")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 18, weight: .regular))
+                .foregroundStyle(WTheme.inkSecondary)
+                .frame(width: 46, height: 46)
+                .background(WTheme.raised, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
+                .padding(.bottom, 16)
+            TwoToneTitle(lead: "No mailboxes yet.", title: "Connect one.", size: 22)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 260)
+            Text("Connect your first mailbox to start warming up and sending campaigns.")
+                .font(.system(size: 14))
+                .foregroundStyle(WTheme.inkSecondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 270)
+                .padding(.top, 8)
             if canManage {
-                Button("Add mailbox") { showConnect = true }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .padding(.top, 6)
+                Button {
+                    showConnect = true
+                } label: {
+                    Label("Add mailbox", systemImage: "plus")
+                }
+                .buttonStyle(InkButtonStyle(size: .regular))
+                .padding(.top, 20)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -571,9 +554,10 @@ struct MailboxesRootView: View {
         }
         .frame(width: Self.sidebarWidth)
         .frame(maxHeight: .infinity)
-        .background(Color(.systemBackground))
-        .clipShape(UnevenRoundedRectangle(bottomTrailingRadius: 26, topTrailingRadius: 26, style: .continuous))
-        .shadow(color: .black.opacity(sidebarOpen ? 0.22 : 0), radius: 30, x: 6, y: 0)
+        .background(WTheme.canvas)
+        .overlay(alignment: .trailing) {
+            Rectangle().fill(WTheme.hairlineStrong).frame(width: 1)
+        }
         .ignoresSafeArea()
         .offset(x: drawerOffset)
         .gesture(
@@ -654,32 +638,30 @@ struct MailboxRowView: View {
         HStack(spacing: 12) {
             if selecting {
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 22))
-                    .foregroundStyle(selected ? WTheme.accent : Color(.tertiaryLabel))
+                    .font(.system(size: 21, weight: .light))
+                    .foregroundStyle(selected ? WTheme.ink : WTheme.inkTertiary)
                     .transition(.scale.combined(with: .opacity))
             }
-            WAvatar(name: account.email, seed: account.id, size: 42)
-                .overlay(alignment: .bottomTrailing) {
-                    if account.isWarmingActive {
-                        Image(systemName: "flame.fill")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 16, height: 16)
-                            .background(Tone.orange.color, in: Circle())
-                            .overlay(Circle().strokeBorder(Color(.systemBackground), lineWidth: 1.5))
-                            .offset(x: 3, y: 3)
-                    }
-                }
-            VStack(alignment: .leading, spacing: 3) {
+            MailboxAvatar(email: account.email, avatarURL: account.avatarURL, brand: account.brand, seed: account.id, size: 44)
+            VStack(alignment: .leading, spacing: 4) {
                 Text(account.email)
-                    .font(.body.weight(.medium))
+                    .font(.system(size: 15.5, weight: .medium))
+                    .foregroundStyle(WTheme.ink)
                     .lineLimit(1)
-                HStack(spacing: 5) {
-                    Text(account.providerLabel)
-                        .foregroundStyle(.secondary)
+                Text(account.providerLabel)
+                    .font(.system(size: 13))
+                    .foregroundStyle(WTheme.inkSecondary)
+                    .lineLimit(1)
+                HStack(spacing: 8) {
+                    if account.warmupState == .active, let ramp {
+                        WarmupBar(progress: ramp)
+                            .frame(width: 64, height: 4)
+                    }
                     warmupCaption
                 }
-                .font(.footnote)
+                .font(.system(size: 12.5, weight: .medium))
+                .lineLimit(1)
+                .padding(.top, 1)
             }
             Spacer(minLength: 8)
             if let health {
@@ -695,32 +677,38 @@ struct MailboxRowView: View {
     private var warmupCaption: some View {
         switch account.warmupState {
         case .active:
-            Text("· \(volumeText)")
+            Text(volumeText)
                 .monospacedDigit()
                 .foregroundStyle(Tone.orange.color)
         case .paused:
-            Text("· warmup paused")
+            Text("Warmup paused")
                 .foregroundStyle(WTheme.warning)
         case .off:
             if let sent = status?.dailyUsage?.campaignSent {
-                Text("· \(sent) sent today")
+                Text("\(sent) sent today")
                     .monospacedDigit()
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(WTheme.inkTertiary)
             }
         }
     }
 
     private var volumeText: String {
-        if let ws = status?.warmupStatus {
-            return "\(ws.currentVolume ?? 0)/\(ws.targetVolume ?? 0) warm"
+        if let ws = status?.warmupStatus, let target = ws.targetVolume, target > 0 {
+            return "Warming, \(target) a day"
         }
-        return "warming"
+        return "Warming"
+    }
+
+    /// Today's warmup target toward its ceiling.
+    private var ramp: Double? {
+        guard let ws = status?.warmupStatus, let target = ws.targetVolume, let ceiling = ws.maxVolume, ceiling > 0 else { return nil }
+        return min(1, Double(target) / Double(ceiling))
     }
 }
 
 // MARK: - Selection bar
 
-/// Floating bottom-center bar shown while mailboxes are multi-selected:
+/// Floating bottom-center ink bar shown while mailboxes are multi-selected:
 /// count plus bulk warmup start/pause, tag add/remove, and remove.
 struct MailboxSelectionBar: View {
     let count: Int
@@ -732,34 +720,38 @@ struct MailboxSelectionBar: View {
     let onClear: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Text("\(count)")
-                .font(.subheadline.weight(.bold))
+                .font(WFont.meta(13, weight: .semibold))
                 .monospacedDigit()
-                .foregroundStyle(.white)
+                .foregroundStyle(WTheme.ink)
                 .frame(minWidth: 26, minHeight: 26)
-                .background(WTheme.accent, in: Circle())
+                .background(WTheme.inkInverse, in: Circle())
                 .contentTransition(.numericText())
 
             Spacer(minLength: 6)
 
             Button(action: onStart) {
                 Label("Start", systemImage: "flame.fill")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.system(size: 13.5, weight: .medium))
+                    .foregroundStyle(WTheme.ink)
+                    .padding(.horizontal, 12)
+                    .frame(height: 32)
+                    .background(WTheme.inkInverse, in: Capsule())
             }
-            .buttonStyle(.borderedProminent)
-            .tint(Tone.orange.color)
-            .controlSize(.small)
+            .buttonStyle(TapScaleStyle())
             .disabled(count == 0)
             .accessibilityLabel("Start warmup for \(count) mailboxes")
 
             Button(action: onPause) {
                 Label("Pause", systemImage: "pause.fill")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.system(size: 13.5, weight: .medium))
+                    .foregroundStyle(WTheme.inkInverse)
+                    .padding(.horizontal, 12)
+                    .frame(height: 32)
+                    .overlay(Capsule().strokeBorder(WTheme.inkInverse.opacity(0.28), lineWidth: 1))
             }
-            .buttonStyle(.bordered)
-            .tint(WTheme.warning)
-            .controlSize(.small)
+            .buttonStyle(TapScaleStyle())
             .disabled(count == 0)
             .accessibilityLabel("Pause warmup for \(count) mailboxes")
 
@@ -773,9 +765,9 @@ struct MailboxSelectionBar: View {
                 }
             } label: {
                 Image(systemName: "tag")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(WTheme.accent)
-                    .frame(width: 30, height: 30)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(WTheme.inkInverse)
+                    .frame(width: 32, height: 32)
                     .contentShape(Rectangle())
             }
             .disabled(count == 0)
@@ -783,31 +775,30 @@ struct MailboxSelectionBar: View {
 
             Button(role: .destructive, action: onRemove) {
                 Image(systemName: "trash")
-                    .font(.system(size: 15, weight: .semibold))
-                    .frame(width: 30, height: 30)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Color.dynamic(light: 0xFCA5A5, dark: 0xDC2626))
+                    .frame(width: 32, height: 32)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.bordered)
-            .tint(WTheme.negative)
-            .controlSize(.small)
+            .buttonStyle(.plain)
             .disabled(count == 0)
             .accessibilityLabel("Remove \(count) mailboxes")
 
             Button(action: onClear) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(WTheme.inkInverse.opacity(0.6))
                     .frame(width: 30, height: 30)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Clear selection")
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 8)
-        .padding(.vertical, 8)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(Color(.separator).opacity(0.35), lineWidth: 1))
-        .shadow(color: .black.opacity(0.14), radius: 14, y: 4)
+        .padding(.leading, 8)
+        .padding(.trailing, 6)
+        .padding(.vertical, 7)
+        .background(WTheme.ink, in: Capsule())
+        .shadow(color: Color.black.opacity(0.12), radius: 16, y: 6)
         .padding(.horizontal, 20)
     }
 }

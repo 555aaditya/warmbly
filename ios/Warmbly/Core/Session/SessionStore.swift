@@ -29,6 +29,7 @@ enum LoginOutcome {
 @Observable
 final class SessionStore {
     let api: APIClient
+    private let appAttest: AppAttestClient
 
     private(set) var phase: SessionPhase = .launching
     /// True when the last sign-out was forced by an expired/revoked session
@@ -46,6 +47,7 @@ final class SessionStore {
 
     init(api: APIClient) {
         self.api = api
+        self.appAttest = AppAttestClient(api: api)
         // The outer task is one-shot registration (strong self is fine); the
         // stored handler captures weakly to avoid an APIClient<->store cycle.
         Task { [api, self] in
@@ -68,6 +70,27 @@ final class SessionStore {
     // MARK: - Launch
 
     func bootstrap() async {
+        #if DEBUG
+        // Scripted runs can open a signed-out or first-run screen; the stored session is left alone.
+        switch ProcessInfo.processInfo.environment["WARMBLY_DEBUG_PHASE"] {
+        case "launching":
+            return
+        case "signedout":
+            phase = .loggedOut
+            return
+        case "onboarding":
+            try? await loadIdentity()
+            phase = .onboarding
+            return
+        case "workspace":
+            try? await loadIdentity()
+            memberships = []
+            phase = .selectOrg
+            return
+        default:
+            break
+        }
+        #endif
         guard await api.hasToken else {
             phase = .loggedOut
             return
@@ -178,13 +201,86 @@ final class SessionStore {
     // MARK: - Login flow
 
     func startLogin(email: String, password: String) async throws -> LoginOutcome {
-        let body = [
-            "email": email,
-            "password": password,
-            "turnstile": AppConfig.turnstileToken,
-        ]
-        let result: AuthSession = try await api.post("auth/login", body: body, authorized: false)
+        let result: AuthSession = try await verified(.login) { check in
+            try await self.api.post("auth/login", body: PasswordAuthBody(email: email, password: password, check: check), authorized: false)
+        }
         return try await resolve(result)
+    }
+
+    // MARK: - Human check
+
+    /// What stands in for a captcha on the email paths: nothing, the dev stack's bypass token, or an App Attest proof.
+    struct HumanCheck: Sendable {
+        var turnstile: String?
+        var appAttest: AppAttestClient.Proof?
+    }
+
+    enum HumanCheckError: LocalizedError {
+        case emailSignInOff
+
+        var errorDescription: String? {
+            "This server only allows email sign-in on the web. Sign in with Apple, Google or a passkey instead."
+        }
+    }
+
+    private struct DeploymentChecks: Decodable {
+        var captcha: Bool?
+        var appAttest: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case captcha
+            case appAttest = "app_attest"
+        }
+    }
+
+    private struct PasswordAuthBody: Encodable {
+        var email: String
+        var password: String
+        var turnstile: String?
+        var appAttest: AppAttestClient.Proof?
+
+        init(email: String, password: String, check: HumanCheck) {
+            self.email = email
+            self.password = password
+            turnstile = check.turnstile
+            appAttest = check.appAttest
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case email, password, turnstile
+            case appAttest = "app_attest"
+        }
+    }
+
+    private struct ResetBody: Encodable {
+        var email: String
+        var turnstile: String?
+        var appAttest: AppAttestClient.Proof?
+
+        enum CodingKeys: String, CodingKey {
+            case email, turnstile
+            case appAttest = "app_attest"
+        }
+    }
+
+    private func humanCheck(_ action: AppAttestClient.Action) async throws -> HumanCheck {
+        let bypass = AppConfig.turnstileToken.trimmingCharacters(in: .whitespaces)
+        if !bypass.isEmpty { return HumanCheck(turnstile: bypass) }
+        let checks: DeploymentChecks? = try? await api.get("auth/config", authorized: false)
+        guard let checks, checks.captcha == true else { return HumanCheck() }
+        guard checks.appAttest == true else { throw HumanCheckError.emailSignInOff }
+        return HumanCheck(appAttest: try await appAttest.proof(for: action))
+    }
+
+    /// Runs a captcha-gated call, registering this install's key again once if the server lost it.
+    private func verified<T>(_ action: AppAttestClient.Action, _ send: (HumanCheck) async throws -> T) async throws -> T {
+        let check = try await humanCheck(action)
+        do {
+            return try await send(check)
+        } catch let error as APIError where error.code == "app_attest_key_unknown" && check.appAttest != nil {
+            await appAttest.forgetKey()
+            return try await send(try await humanCheck(action))
+        }
     }
 
     /// Maps a start-of-login response onto an outcome, completing the sign-in
@@ -207,11 +303,7 @@ final class SessionStore {
     }
 
     func confirmLogin(session: String, code: String) async throws -> LoginOutcome {
-        let body = [
-            "session": session,
-            "code": code,
-            "turnstile": AppConfig.turnstileToken,
-        ]
+        let body = ["session": session, "code": code]
         let result: LoginResult = try await api.post("auth/login/confirm", body: body, authorized: false)
         if result.twoFARequired == true, let pending = result.pendingToken {
             return .needsTwoFA(pendingToken: pending)
@@ -276,28 +368,22 @@ final class SessionStore {
     /// Returns the session to confirm, or nil when the deployment has email
     /// verification off and the account already exists.
     func startRegister(email: String, password: String) async throws -> String? {
-        let body = [
-            "email": email,
-            "password": password,
-            "turnstile": AppConfig.turnstileToken,
-        ]
-        let result: AuthSession = try await api.post("auth/register", body: body, authorized: false)
+        let result: AuthSession = try await verified(.register) { check in
+            try await self.api.post("auth/register", body: PasswordAuthBody(email: email, password: password, check: check), authorized: false)
+        }
         return result.needsCode ? result.session : nil
     }
 
     /// Registration confirm returns 204 (no tokens); chain into the login flow after.
     func confirmRegister(session: String, code: String) async throws {
-        let body = [
-            "session": session,
-            "code": code,
-            "turnstile": AppConfig.turnstileToken,
-        ]
+        let body = ["session": session, "code": code]
         let _: EmptyBody = try await api.post("auth/register/confirm", body: body, authorized: false)
     }
 
     func requestPasswordReset(email: String) async throws {
-        let body = ["email": email, "turnstile": AppConfig.turnstileToken]
-        let _: EmptyBody = try await api.post("auth/reset-password", body: body, authorized: false)
+        let _: EmptyBody = try await verified(.resetPassword) { check in
+            try await self.api.post("auth/reset-password", body: ResetBody(email: email, turnstile: check.turnstile, appAttest: check.appAttest), authorized: false)
+        }
     }
 
     // MARK: - Logout

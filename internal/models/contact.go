@@ -68,6 +68,10 @@ type Contact struct {
 	// leads are queued, in progress, replied, bounced, or unsubscribed.
 	CampaignLead *ContactCampaignProgress `json:"campaign_lead,omitempty"`
 
+	// Outreach is the contact's engagement across every campaign. Populated by
+	// Search on every row; nil elsewhere.
+	Outreach *ContactOutreach `json:"outreach,omitempty"`
+
 	// IsNew is set by the upsert write when this call inserted the row rather
 	// than matching an existing contact. Server-side only: it decides whether
 	// a contact.created event fires.
@@ -407,6 +411,23 @@ type ContactCategoryCount struct {
 // ContactEngagement summarises every email touchpoint we have for a
 // single contact. It's denormalised on read so the contact 360 view
 // can render counts and "last X" timestamps in a single round-trip.
+// ContactOutreach is where a contact stands with your outreach: the emails
+// that reached them, what they did with them, and when each last happened.
+// Opens count people only; a mail client's automatic fetch is not engagement.
+type ContactOutreach struct {
+	Sent    int `json:"sent"`
+	Opened  int `json:"opened"`
+	Clicked int `json:"clicked"`
+	Replied int `json:"replied"`
+	Bounced int `json:"bounced"`
+
+	LastSentAt    *time.Time `json:"last_sent_at,omitempty"`
+	LastOpenedAt  *time.Time `json:"last_opened_at,omitempty"`
+	LastClickedAt *time.Time `json:"last_clicked_at,omitempty"`
+	LastRepliedAt *time.Time `json:"last_replied_at,omitempty"`
+	LastBouncedAt *time.Time `json:"last_bounced_at,omitempty"`
+}
+
 type ContactEngagement struct {
 	TotalSent       int `json:"total_sent"`
 	TotalOpened     int `json:"total_opened"`

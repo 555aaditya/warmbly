@@ -71,6 +71,12 @@ type AdminUserDetail struct {
 	CreatedAt        time.Time       `json:"created_at"`
 	UpdatedAt        time.Time       `json:"updated_at"`
 
+	LoginCodeExempt       bool       `json:"login_code_exempt"`
+	LoginCodeExemptReason *string    `json:"login_code_exempt_reason,omitempty"`
+	LoginCodeExemptAt     *time.Time `json:"login_code_exempt_at,omitempty"`
+	// PasswordExpiresAt is set only on a tester whose password was handed out.
+	PasswordExpiresAt *time.Time `json:"password_expires_at,omitempty"`
+
 	// Statistics
 	OrganizationCount int `json:"organization_count"`
 	EmailAccountCount int `json:"email_account_count"`

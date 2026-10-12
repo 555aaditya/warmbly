@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"github.com/warmbly/warmbly/internal/app/appattest"
 	"github.com/warmbly/warmbly/internal/app/authrisk"
 	"time"
 
@@ -24,7 +25,7 @@ func (s *authService) LoginStart(ctx context.Context, data *AuthData, ipaddr, us
 
 	// A failed challenge is the caller's 400, not an incident: reporting it
 	// filed an issue for every bot and every reloaded sign-in page.
-	if xerr := s.captcha.Verify(ctx, data.Turnstile, ipaddr); xerr != nil {
+	if xerr := s.verifyHuman(ctx, appattest.ActionLogin, data.Turnstile, data.AppAttest, ipaddr); xerr != nil {
 		return nil, xerr
 	}
 

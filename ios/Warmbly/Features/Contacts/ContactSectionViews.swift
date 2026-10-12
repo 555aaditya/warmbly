@@ -24,12 +24,13 @@ struct ContactEmailsSection: View {
                 List {
                     ForEach(store.emails) { email in
                         ContactEmailRow(email: email)
+                            .contactRowChrome()
                     }
                     if store.emailsHasMore {
                         loadMoreRow { await store.loadEmails(env.api, reset: false) }
                     }
                 }
-                .listStyle(.plain)
+                .contactListChrome()
                 .refreshable { await store.loadEmails(env.api) }
             }
         }
@@ -47,35 +48,37 @@ struct ContactEmailRow: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(email.subject?.isEmpty == false ? email.subject! : "(no subject)")
-                    .font(.body.weight(.medium))
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(WTheme.ink)
                     .lineLimit(1)
                 Spacer(minLength: 8)
                 if let sent = email.sentAt {
                     Text(WFormat.relative(sent))
-                        .font(.footnote)
+                        .font(WFont.meta(11))
                         .monospacedDigit()
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(WTheme.inkTertiary)
                 }
             }
             HStack(spacing: 6) {
                 if let account = email.emailAccountEmail, !account.isEmpty {
                     Text(account)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(WTheme.inkSecondary)
                         .lineLimit(1)
                 }
                 if let campaign = email.campaignName, !campaign.isEmpty {
-                    Text("·").foregroundStyle(.tertiary).font(.subheadline)
+                    Text("·").foregroundStyle(WTheme.inkTertiary).font(.system(size: 13.5))
                     Text(campaign)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(WTheme.inkSecondary)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 4)
             }
             engagementChips
+                .padding(.top, 2)
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 8)
     }
 
     @ViewBuilder
@@ -101,12 +104,18 @@ struct ContactEmailRow: View {
     }
 
     private func miniChip(_ text: String, tone: Tone) -> some View {
-        Text(text)
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(tone.color)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2.5)
-            .background(tone.background, in: Capsule())
+        HStack(spacing: 5) {
+            Circle()
+                .fill(tone.color)
+                .frame(width: 5, height: 5)
+            Text(text)
+                .font(WFont.meta(10, weight: .medium))
+                .foregroundStyle(WTheme.inkSecondary)
+        }
+        .padding(.horizontal, 7)
+        .frame(height: 20)
+        .background(WTheme.raised, in: Capsule())
+        .overlay(Capsule().strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
     }
 }
 
@@ -128,14 +137,21 @@ struct ContactTimelineSection: View {
                 EmptyStateView(title: "No activity", message: "This contact's activity will appear here over time.")
             } else {
                 List {
-                    ForEach(Array(store.timeline.enumerated()), id: \.offset) { _, entry in
-                        ContactTimelineRow(entry: entry)
+                    ForEach(Array(store.timeline.enumerated()), id: \.offset) { offset, entry in
+                        ContactTimelineRow(
+                            entry: entry,
+                            isFirst: offset == 0,
+                            isLast: offset == store.timeline.count - 1 && !store.timelineHasMore
+                        )
+                        .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 16))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(WTheme.canvas)
                     }
                     if store.timelineHasMore {
                         loadMoreRow { await store.loadTimeline(env.api, reset: false) }
                     }
                 }
-                .listStyle(.plain)
+                .contactListChrome()
                 .refreshable { await store.loadTimeline(env.api) }
             }
         }
@@ -146,8 +162,12 @@ struct ContactTimelineSection: View {
     }
 }
 
+/// One beat on the activity rail: a hairline node with a tone glyph, the
+/// rail running through it, title plus mono relative time.
 struct ContactTimelineRow: View {
     let entry: ContactTimelineEntry
+    var isFirst = false
+    var isLast = false
 
     private var icon: (name: String, tone: Tone) {
         switch entry.type {
@@ -192,29 +212,49 @@ struct ContactTimelineRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            IconTile(symbol: icon.name, tone: icon.tone, size: 34)
+        HStack(alignment: .top, spacing: 14) {
+            ZStack(alignment: .top) {
+                VStack(spacing: 0) {
+                    Rectangle()
+                        .fill(isFirst ? Color.clear : WTheme.hairlineStrong)
+                        .frame(width: 1, height: 12)
+                    Rectangle()
+                        .fill(isLast ? Color.clear : WTheme.hairlineStrong)
+                        .frame(width: 1)
+                        .frame(maxHeight: .infinity)
+                }
+                Image(systemName: icon.name)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(icon.tone.color)
+                    .frame(width: 28, height: 28)
+                    .background(WTheme.raised, in: Circle())
+                    .overlay(Circle().strokeBorder(WTheme.hairlineStrong, lineWidth: 1))
+                    .padding(.top, 10)
+            }
+            .frame(width: 28)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(title)
-                        .font(.body.weight(.medium))
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(WTheme.ink)
                     Spacer(minLength: 8)
                     if let at = entry.at {
                         Text(WFormat.relative(at))
-                            .font(.footnote)
+                            .font(WFont.meta(11))
                             .monospacedDigit()
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(WTheme.inkTertiary)
                     }
                 }
                 if let detail {
                     Text(detail)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(WTheme.inkSecondary)
                         .lineLimit(2)
                 }
             }
+            .padding(.top, 14)
+            .padding(.bottom, 12)
         }
-        .padding(.vertical, 4)
     }
 }
 
@@ -237,7 +277,7 @@ struct ContactNotesSection: View {
         VStack(spacing: 0) {
             list
             if canManage {
-                Divider()
+                Hairline()
                 composer
             }
         }
@@ -286,6 +326,7 @@ struct ContactNotesSection: View {
             List {
                 ForEach(store.notes) { note in
                     ContactNoteRow(note: note)
+                        .contactRowChrome()
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             if canManage {
                                 Button(role: .destructive) {
@@ -299,7 +340,7 @@ struct ContactNotesSection: View {
                                 } label: {
                                     Label("Edit", systemImage: "pencil")
                                 }
-                                .tint(WTheme.accent)
+                                .tint(WTheme.paused)
                             }
                         }
                 }
@@ -307,7 +348,7 @@ struct ContactNotesSection: View {
                     loadMoreRow { await store.loadNotes(env.api, reset: false) }
                 }
             }
-            .listStyle(.plain)
+            .contactListChrome()
             .refreshable { await store.loadNotes(env.api) }
         }
     }
@@ -315,26 +356,38 @@ struct ContactNotesSection: View {
     private var composer: some View {
         HStack(alignment: .bottom, spacing: 8) {
             TextField("Add a note", text: $draft, axis: .vertical)
-                .font(.body)
+                .font(.system(size: 15))
+                .foregroundStyle(WTheme.ink)
                 .lineLimit(1 ... 4)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .background(Tone.slate.background, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .crmFieldChrome(radius: 20)
             Button {
                 Task { await submit() }
             } label: {
-                if submitting {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 30))
-                        .foregroundStyle(canSubmit ? WTheme.accent : Color(.tertiaryLabel))
+                ZStack {
+                    Circle()
+                        .fill(canSubmit ? WTheme.ink : WTheme.fill)
+                    if submitting {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(WTheme.inkInverse)
+                    } else {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(canSubmit ? WTheme.inkInverse : WTheme.inkTertiary)
+                    }
                 }
+                .frame(width: 40, height: 40)
+                .animation(.snappy, value: canSubmit)
             }
+            .buttonStyle(TapScaleStyle())
             .disabled(!canSubmit || submitting)
+            .accessibilityLabel("Add note")
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.vertical, 10)
+        .background(WTheme.canvas)
     }
 
     private var canSubmit: Bool {
@@ -345,13 +398,15 @@ struct ContactNotesSection: View {
         NavigationStack {
             VStack {
                 TextField("Note", text: $editText, axis: .vertical)
-                    .font(.body)
+                    .font(.system(size: 15))
+                    .foregroundStyle(WTheme.ink)
                     .lineLimit(3 ... 12)
-                    .padding(12)
-                    .background(Tone.slate.background, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .padding(14)
+                    .crmFieldChrome(radius: 16)
                     .padding(16)
                 Spacer()
             }
+            .background(WTheme.canvas)
             .navigationTitle("Edit note")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -409,16 +464,16 @@ struct ContactNoteRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(note.content ?? "")
-                .font(.body)
-                .foregroundStyle(.primary)
+                .font(.system(size: 15))
+                .foregroundStyle(WTheme.ink)
             if let date = note.updatedAt ?? note.createdAt {
                 Text(WFormat.relative(date))
-                    .font(.footnote)
+                    .font(WFont.meta(11))
                     .monospacedDigit()
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(WTheme.inkTertiary)
             }
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, 8)
     }
 }
 
@@ -442,9 +497,10 @@ struct ContactDealsSection: View {
                 List {
                     ForEach(store.deals) { deal in
                         ContactDealRow(deal: deal)
+                            .contactRowChrome()
                     }
                 }
-                .listStyle(.plain)
+                .contactListChrome()
                 .refreshable { await store.loadDeals(env.api) }
             }
         }
@@ -476,19 +532,20 @@ struct ContactDealRow: View {
             IconTile(symbol: "briefcase", tone: tone, size: 34)
             VStack(alignment: .leading, spacing: 3) {
                 Text(deal.name?.isEmpty == false ? deal.name! : "Untitled deal")
-                    .font(.body.weight(.medium))
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(WTheme.ink)
                     .lineLimit(1)
                 if let value = valueLabel {
                     Text(value)
-                        .font(.footnote)
+                        .font(WFont.meta(12.5, weight: .medium))
                         .monospacedDigit()
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(WTheme.inkSecondary)
                 }
             }
             Spacer(minLength: 8)
             StatusPill(text: (deal.status ?? "open").capitalized, tone: tone)
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, 7)
     }
 }
 
@@ -502,5 +559,23 @@ func loadMoreRow(_ action: @escaping @Sendable @MainActor () async -> Void) -> s
         Spacer()
     }
     .listRowSeparator(.hidden)
+    .listRowBackground(WTheme.canvas)
     .onAppear { Task { @MainActor in await action() } }
+}
+
+// MARK: - List chrome
+
+extension View {
+    /// Plain list on the canvas (no system grouped tint).
+    func contactListChrome() -> some View {
+        listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(WTheme.canvas)
+    }
+
+    /// Canvas row with a hairline separator.
+    func contactRowChrome() -> some View {
+        listRowBackground(WTheme.canvas)
+            .listRowSeparatorTint(WTheme.hairline)
+    }
 }

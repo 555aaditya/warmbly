@@ -1,4 +1,4 @@
-import Foundation
+import SwiftUI
 
 // Contacts wire models, mirroring the Go json tags in
 // internal/models/contact.go, crm.go, and group.go exactly.
@@ -57,6 +57,80 @@ struct ContactCampaignLead: Codable, Hashable, Sendable {
         case status, sent, opened, clicked, replied, bounced
         case lastActivityAt = "last_activity_at"
         case currentStep = "current_step"
+    }
+}
+
+/// What a contact has done with your outreach, from the search row's `outreach`.
+struct ContactOutreach: Codable, Hashable, Sendable {
+    var sent: Int?
+    var opened: Int?
+    var clicked: Int?
+    var replied: Int?
+    var bounced: Int?
+    var lastSentAt: Date?
+    var lastOpenedAt: Date?
+    var lastClickedAt: Date?
+    var lastRepliedAt: Date?
+    var lastBouncedAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case sent, opened, clicked, replied, bounced
+        case lastSentAt = "last_sent_at"
+        case lastOpenedAt = "last_opened_at"
+        case lastClickedAt = "last_clicked_at"
+        case lastRepliedAt = "last_replied_at"
+        case lastBouncedAt = "last_bounced_at"
+    }
+
+    enum Kind: Equatable {
+        case replied, clicked, opened, bounced, sent
+
+        var label: String {
+            switch self {
+            case .replied: "Replied"
+            case .clicked: "Clicked"
+            case .opened: "Opened"
+            case .bounced: "Bounced"
+            case .sent: "Emailed"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .replied: "arrowshape.turn.up.left.fill"
+            case .clicked: "cursorarrow.click.2"
+            case .opened: "envelope.open.fill"
+            case .bounced: "exclamationmark.triangle.fill"
+            case .sent: "paperplane"
+            }
+        }
+
+        var color: Color {
+            switch self {
+            case .replied: WTheme.positive
+            case .clicked: Tone.orange.color
+            case .opened: WTheme.special
+            case .bounced: WTheme.negative
+            case .sent: WTheme.inkTertiary
+            }
+        }
+
+        /// Something the contact did, as opposed to something we did.
+        var isEngagement: Bool { self == .replied || self == .clicked || self == .opened }
+    }
+
+    /// The contact's newest response (on a tie the stronger signal wins), or
+    /// our last send when they have never responded.
+    var latest: (kind: Kind, at: Date)? {
+        let responses: [(Kind, Date?)] = [
+            (.replied, lastRepliedAt), (.clicked, lastClickedAt), (.bounced, lastBouncedAt), (.opened, lastOpenedAt),
+        ]
+        var best: (kind: Kind, at: Date)?
+        for (kind, date) in responses {
+            guard let date else { continue }
+            if best == nil || date > best!.at { best = (kind, date) }
+        }
+        return best ?? lastSentAt.map { (.sent, $0) }
     }
 }
 
@@ -121,6 +195,8 @@ struct Contact: Codable, Identifiable, Sendable {
     // Present only on GET /contacts/:id.
     var engagement: ContactEngagement?
     var suppression: ContactSuppression?
+    /// Engagement across every campaign, carried on every search row.
+    var outreach: ContactOutreach?
 
     enum CodingKeys: String, CodingKey {
         case id, email, company, phone, subscribed, campaigns, categories
@@ -130,7 +206,7 @@ struct Contact: Codable, Identifiable, Sendable {
         case campaignLead = "campaign_lead"
         case updatedAt = "updated_at"
         case createdAt = "created_at"
-        case engagement, suppression
+        case engagement, suppression, outreach
     }
 
     var displayName: String {
@@ -153,7 +229,10 @@ struct Contact: Codable, Identifiable, Sendable {
 
 extension Contact: Hashable {
     static func == (lhs: Contact, rhs: Contact) -> Bool {
+        // Hydrated fields count too, or an Observable store skips the update.
         lhs.id == rhs.id && lhs.updatedAt == rhs.updatedAt
+            && lhs.engagement == rhs.engagement && lhs.outreach == rhs.outreach
+            && lhs.suppression == rhs.suppression
     }
 
     func hash(into hasher: inout Hasher) {
@@ -521,6 +600,18 @@ enum ContactSort: String, CaseIterable, Hashable, Sendable {
     case lastName = "last_name"
     case email
     case campaignCount = "campaign_count"
+
+    /// Text sorts read A to Z first; the API's default direction is descending.
+    var isAlphabetical: Bool { self == .firstName || self == .lastName || self == .email }
+
+    /// The two directions in this sort's own words, default first.
+    var orderLabels: (natural: String, reversed: String) {
+        switch self {
+        case .firstName, .lastName, .email: ("A to Z", "Z to A")
+        case .campaignCount: ("Most first", "Fewest first")
+        case .createdAt, .updatedAt: ("Newest first", "Oldest first")
+        }
+    }
 
     var label: String {
         switch self {

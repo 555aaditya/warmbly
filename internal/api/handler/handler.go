@@ -11,6 +11,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/analytics"
 	"github.com/warmbly/warmbly/internal/app/apikey"
 	"github.com/warmbly/warmbly/internal/app/apollo"
+	"github.com/warmbly/warmbly/internal/app/appattest"
 	"github.com/warmbly/warmbly/internal/app/appdirectory"
 	"github.com/warmbly/warmbly/internal/app/audit"
 	"github.com/warmbly/warmbly/internal/app/auth"
@@ -104,6 +105,8 @@ type Handler struct {
 	AuthService    auth.AuthService
 	TokenService   token.TokenService
 	PasskeyService passkey.Service
+	// AppAttestService registers native app keys. Nil when no app id is configured.
+	AppAttestService *appattest.Service
 
 	// Native-app social sign-in discovery (GET /auth/providers).
 	ExternalAuthProviders models.ExternalAuthProviders

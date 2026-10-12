@@ -361,6 +361,7 @@ final class RealtimeService {
         }
         if name == "EMAIL_UPDATED" || name == "EMAIL_DELETED" { return [.unibox, .analytics] }
         if name == "EMAIL_REPLIED" { return [.campaigns, .analytics, .unibox] }
+        if name == "AI_DRAFT_READY" { return [.unibox] }
         if name == "EMAIL_SENT" || name == "EMAIL_OPENED" || name == "EMAIL_CLICKED"
             || name == "EMAIL_FAILED" || name == "EMAIL_BOUNCED" || name.contains("TASK_PROGRESS") {
             return [.campaigns, .analytics]

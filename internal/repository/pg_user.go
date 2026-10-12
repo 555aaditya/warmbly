@@ -345,9 +345,14 @@ func (r *userRepository) IsLoginCodeExempt(ctx context.Context, id uuid.UUID) (b
 
 // SetLoginCodeExempt grants or clears the exemption. Clearing wipes the
 // reason with it, so a cleared row cannot be mistaken for a live exemption.
+// A missing account is ErrUserNotFound.
 func (r *userRepository) SetLoginCodeExempt(ctx context.Context, id uuid.UUID, exempt bool, reason string, by *uuid.UUID) error {
+	var (
+		tag pgconn.CommandTag
+		err error
+	)
 	if !exempt {
-		_, err := r.DB.Exec(ctx, `
+		tag, err = r.DB.Exec(ctx, `
 			UPDATE users
 			SET login_code_exempt = false,
 			    login_code_exempt_reason = NULL,
@@ -355,17 +360,23 @@ func (r *userRepository) SetLoginCodeExempt(ctx context.Context, id uuid.UUID, e
 			    login_code_exempt_at = NULL,
 			    updated_at = NOW()
 			WHERE id = $1`, id)
+	} else {
+		tag, err = r.DB.Exec(ctx, `
+			UPDATE users
+			SET login_code_exempt = true,
+			    login_code_exempt_reason = $2,
+			    login_code_exempt_by = $3,
+			    login_code_exempt_at = NOW(),
+			    updated_at = NOW()
+			WHERE id = $1`, id, reason, by)
+	}
+	if err != nil {
 		return err
 	}
-	_, err := r.DB.Exec(ctx, `
-		UPDATE users
-		SET login_code_exempt = true,
-		    login_code_exempt_reason = $2,
-		    login_code_exempt_by = $3,
-		    login_code_exempt_at = NOW(),
-		    updated_at = NOW()
-		WHERE id = $1`, id, reason, by)
-	return err
+	if tag.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
+	return nil
 }
 
 // ListLoginCodeExempt is ordered oldest first, because the exemption most

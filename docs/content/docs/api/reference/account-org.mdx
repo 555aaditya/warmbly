@@ -11,7 +11,7 @@ All error responses use the shared envelope (`error`, `message`, `code`, `reques
 
 ## Authentication
 
-These endpoints are public (no session required). Login and registration are two-step: the first call sends a one-time code by email and returns a short-lived signed `session` token, the second call confirms the code and mints the real token pair. Captcha (Cloudflare Turnstile) is required on the start calls.
+These endpoints are public (no session required). Login and registration are two-step: the first call sends a one-time code by email and returns a short-lived signed `session` token, the second call confirms the code and mints the real token pair. When the deployment runs a captcha, the start calls and both password reset calls require one: a Cloudflare Turnstile token from a browser, or an [App Attest proof](#app-attest-native-apps) from the native app.
 
 ### Start login
 
@@ -27,7 +27,8 @@ Auth: public (not available to API keys).
 |-------|------|----------|-------------|
 | `email` | string | yes | Account email. |
 | `password` | string | yes | Account password. |
-| `turnstile` | string | yes | Cloudflare Turnstile token. |
+| `turnstile` | string | yes, unless `app_attest` is sent | Cloudflare Turnstile token. |
+| `app_attest` | object | no | The native app's [App Attest proof](#app-attest-native-apps), sent instead of `turnstile`. |
 
 ```json
 {
@@ -101,7 +102,7 @@ Auth: public (not available to API keys).
 
 #### Request body
 
-Same shape as `/auth/login`: `email`, `password`, `turnstile`.
+Same shape as `/auth/login`: `email`, `password`, and `turnstile` or `app_attest`.
 
 ```json
 {
@@ -183,7 +184,8 @@ Auth: public (not available to API keys).
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `email` | string | yes | Account email. |
-| `turnstile` | string | yes | Cloudflare Turnstile token. |
+| `turnstile` | string | yes, unless `app_attest` is sent | Cloudflare Turnstile token. |
+| `app_attest` | object | no | The native app's [App Attest proof](#app-attest-native-apps), sent instead of `turnstile`. |
 
 #### Response
 
@@ -203,7 +205,8 @@ Auth: public (not available to API keys).
 |-------|------|----------|-------------|
 | `session` | string | yes | The reset session token tied to the email. |
 | `password` | string | yes | The new password. |
-| `turnstile` | string | yes | Cloudflare Turnstile token. |
+| `turnstile` | string | yes, unless `app_attest` is sent | Cloudflare Turnstile token. |
+| `app_attest` | object | no | The native app's [App Attest proof](#app-attest-native-apps), sent instead of `turnstile`. |
 
 #### Response
 
@@ -277,6 +280,51 @@ All three are public and unavailable to API keys. A provider-verified identity c
 | `POST /auth/google` | `id_token` (required) | Exchanges a Google Sign-In ID token, verified against Google's keys and the client ID from `/auth/providers`. |
 
 Apple and Google both return a token pair (same shape as the login confirm success response), or a two-factor challenge when the account has TOTP enrolled.
+
+### App Attest (native apps)
+
+The iOS app proves it is a genuine copy of the app with Apple App Attest, and that proof stands in for the captcha on the captcha-gated calls. Browsers keep sending a Turnstile token. Both endpoints below are public, unavailable to API keys, and share their own per-IP budget (`APP_ATTEST_IP_RATE_LIMIT`, 300 per 15 minutes by default) separate from the one on the rest of `/auth`. When the instance has App Attest off they answer `404` with code [`app_attest_unavailable`](/api/error-codes/#app-attest-refusals). `GET /auth/config` reports whether it is on in `app_attest`.
+
+| Endpoint | Body | Purpose |
+|----------|------|---------|
+| `POST /auth/app-attest/challenge` | none | Returns `{"challenge": "..."}`, a base64url string that is single-use and expires after five minutes. Every attestation and every assertion is made over a fresh one. |
+| `POST /auth/app-attest/keys` | `key_id`, `attestation`, `challenge` (all required) | Registers the install's App Attest key, once per install. `key_id` is the base64 of the 32-byte key identifier and `attestation` the base64 object from `DCAppAttestService.attestKey`, made over a client data hash of SHA-256 of the UTF-8 bytes of `challenge`. Answers `204`. |
+
+The server verifies the attestation's certificate chain against Apple's App Attest root, the nonce, the app id, a counter of 0, the environment (a development-signed build is refused unless the instance allows them) and the key id, then stores the key. A key id is registered once; a second registration of the same id is refused with `app_attest_failed`.
+
+A captcha-gated call (`POST /auth/login`, `/auth/register`, `/auth/reset-password`, `/auth/reset-password/confirm`) then carries an `app_attest` object in place of `turnstile`:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `key_id` | string | yes | The registered key identifier, base64. |
+| `assertion` | string | yes | The base64 assertion from `DCAppAttestService.generateAssertion`. |
+| `challenge` | string | yes | A fresh challenge from `POST /auth/app-attest/challenge`. |
+
+```json
+{
+  "email": "alex@acme.com",
+  "password": "correct horse battery staple",
+  "app_attest": {
+    "key_id": "q1Zf3...=",
+    "assertion": "omlzaWduYXR1cmVYRzBF...",
+    "challenge": "b3Vy1Wq0..."
+  }
+}
+```
+
+The assertion is made over a client data hash of SHA-256 of this UTF-8 string, with a newline between the parts:
+
+```text
+warmbly-app-attest/v1
+<action>
+<challenge>
+```
+
+`<action>` names the call: `login`, `register`, `reset_password` or `reset_password_confirm`. A proof made for one call does not verify on another. Each challenge is spent by the first call that presents it, and the assertion's counter must be higher than the last one the key presented. Each registered key also has its own budget of 30 protected calls per hour; past it the call answers `400` with the message `Too many attempts, please try again later.`, the same answer as the other sign-in attempt budgets.
+
+A proof that does not verify answers [`app_attest_failed`](/api/error-codes/#app-attest-refusals). A key id this server has never registered answers `app_attest_key_unknown`: register the key again with a fresh challenge, then retry the call. When the deployment runs no captcha, neither `turnstile` nor `app_attest` is checked.
+
+`GET /auth/config` carries `captcha` and `app_attest` together, and the app reads them as one decision: no captcha means nothing to send, a captcha with `app_attest` means the app sends a proof, and a captcha without `app_attest` means email and password sign-in is unavailable in the app. Sign in with Apple, Google and passkeys never need a captcha. The iOS simulator cannot use App Attest, so local development keeps using `TURNSTILE_BYPASS_TOKEN`, which is honoured only when `APP_ENV=dev`.
 
 ### Browser sign-in
 

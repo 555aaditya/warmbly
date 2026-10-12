@@ -610,6 +610,6 @@ func runUserLoginCodeExempt(ctx context.Context, args []string) error {
 	if err := c.users.SetLoginCodeExempt(ctx, u.ID, true, trimmed, &grantor.ID); err != nil {
 		return fmt.Errorf("granting the exemption: %w", err)
 	}
-	fmt.Printf("%s will not be asked for an emailed login code.\n\n  Reason  %s\n\nEvery other protection still applies: the password, the captcha, and the\nrisk assessment. Remove it when the reason no longer holds:\n  warmblyctl user login-code-exempt --email %s --clear\n", u.Email, trimmed, u.Email)
+	fmt.Printf("%s will not be asked for an emailed login code.\n\n  Reason  %s\n\nEvery other protection still applies: the password, the captcha or App Attest,\nthe attempt limit, bans and two-factor authentication. Remove it when the reason no longer holds:\n  warmblyctl user login-code-exempt --email %s --clear\n", u.Email, trimmed, u.Email)
 	return nil
 }

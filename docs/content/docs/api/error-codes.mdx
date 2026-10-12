@@ -153,6 +153,27 @@ A password must be 8 to 128 characters. There is no composition rule, but it is 
 }
 ```
 
+#### App Attest refusals
+
+The native app proves itself with [App Attest](/api/reference/account-org/#app-attest-native-apps) in place of the captcha on sign-in, registration and password reset.
+
+| `code` | Status | Meaning |
+|--------|--------|---------|
+| `app_attest_failed` | 400 | The proof did not verify: the challenge expired or was already used, the proof came from another app or from a development build the server does not accept, the assertion's counter did not advance, the key id was already registered, or the object was malformed. Fetch a fresh challenge and make a new proof; if it keeps failing, update the app |
+| `app_attest_key_unknown` | 400 | The `key_id` was never registered on this server. Register the key again with `POST /auth/app-attest/keys`, then retry the call |
+| `app_attest_unavailable` | 404 | `POST /auth/app-attest/challenge` or `/keys` on an instance with App Attest off. When `GET /auth/config` reports a captcha without `app_attest`, email and password sign-in is unavailable in the app; Sign in with Apple, Google and passkeys still work |
+
+Each registered key may make 30 protected calls per hour. Past that the call answers `400` with code `bad_request` and the message `Too many attempts, please try again later.`, the same answer as the other sign-in attempt budgets.
+
+```json
+{
+  "error": "Bad Request",
+  "message": "We couldn’t verify this copy of the app. Update it from the App Store and try again.",
+  "code": "app_attest_failed",
+  "request_id": "4bbbd1b2-8f86-47dd-8a7f-9476501ad20e"
+}
+```
+
 #### Cloud connection refusals
 
 | `code` | Status | Meaning |
@@ -632,6 +653,7 @@ Returned when the requested resource doesn't exist.
 | `code` | Meaning |
 |--------|---------|
 | `unknown_view` | `/me/views/:view` was given a view name other than `contacts`, `campaign_leads` or `unibox_rail` |
+| `app_attest_unavailable` | `POST /auth/app-attest/challenge` or `/keys` on an instance with App Attest off. See [App Attest refusals](#app-attest-refusals) |
 | `lead_cc_contact_not_found` | [Set a lead's CC](/api/reference/campaigns/#set-a-leads-cc) named a contact that is not in the workspace |
 | `slack_not_connected` | A [Slack](/guides/slack/) route was called for a workspace that has not connected Slack, or whose connection was removed. Connect it under **Integrations > Slack** |
 | `slack_link_invalid` | The Slack link code is unknown, expired or already used. Mention or message the bot in Slack for a new link button |
