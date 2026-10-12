@@ -98,6 +98,10 @@ func TestLiveArchiveSendRecoveryLocalOriginResets(t *testing.T) {
 	if exported != 4 {
 		t.Fatalf("native export lost recovery audit: rows=%d", exported)
 	}
+	// Import source-only evidence as new history, not over an existing local confirmation.
+	if _, err := pool.Exec(ctx, `DELETE FROM send_recovery_resolutions WHERE organization_id=$1`, f.org); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := svc.ImportFrom(ctx, f.org, bytes.NewReader(archive.Bytes()), ImportOptions{Groups: groups, Conflict: models.OrgImportConflictOverwrite, ActorUserID: f.owner}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +150,7 @@ func TestLiveArchiveSendRecoveryLocalOriginResets(t *testing.T) {
 			if err := pool.QueryRow(ctx, `SELECT recorded_locally_at IS NOT NULL,conflict_resolved_at IS NOT NULL,(confirmed_result->>'success')::boolean FROM send_recovery_resolutions WHERE id=$1`, audit).Scan(&local, &resolved, &success); err != nil {
 				t.Fatal(err)
 			}
-			kept := conflict == models.OrgImportConflictSkip
+			kept := true
 			if local != kept || resolved != kept || success != kept {
 				t.Fatalf("old archive inherited authority or skip changed local evidence: local=%v resolved=%v success=%v kept=%v", local, resolved, success, kept)
 			}

@@ -35,12 +35,17 @@ func assertExportJSONEqual(t *testing.T, actual, expected []byte) {
 }
 
 func TestLiveImportMailTransportWholeArchiveOmitsGeneration(t *testing.T) {
-	for _, encrypted := range []bool{false, true} {
+	for _, mode := range []struct {
+		name             string
+		encrypted, local bool
+	}{
+		{"plaintext/source_only", false, false},
+		{"plaintext/destination_local", false, true},
+		{"encrypted/source_only", true, false},
+		{"encrypted/destination_local", true, true},
+	} {
 		for _, sent := range []bool{false, true} {
-			label := "plaintext"
-			if encrypted {
-				label = "encrypted"
-			}
+			label := mode.name
 			if sent {
 				label += "/sent"
 			} else {
@@ -99,7 +104,7 @@ func TestLiveImportMailTransportWholeArchiveOmitsGeneration(t *testing.T) {
 					t.Fatal(err)
 				}
 				passphrase := ""
-				if encrypted {
+				if mode.encrypted {
 					passphrase = "whole archive export regression passphrase"
 				}
 				var archive bytes.Buffer
@@ -107,7 +112,7 @@ func TestLiveImportMailTransportWholeArchiveOmitsGeneration(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if (manifest.Secrets != nil) != encrypted {
+				if (manifest.Secrets != nil) != mode.encrypted {
 					t.Fatal("wrong export mode")
 				}
 				if len(manifest.Groups) != len(models.AllOrgDataGroups) {
@@ -212,6 +217,15 @@ func TestLiveImportMailTransportWholeArchiveOmitsGeneration(t *testing.T) {
 				if importTransportGeneration(t, pool, mailbox) != source {
 					t.Fatal("export changed source generation")
 				}
+				if !mode.local {
+					// Remove source send evidence so the import cannot reuse destination-local provenance.
+					if _, err := pool.Exec(t.Context(), `DELETE FROM send_recovery_resolutions WHERE id=$1`, audit); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := pool.Exec(t.Context(), `DELETE FROM tasks WHERE id=ANY($1::uuid[])`, []uuid.UUID{task, warmTask}); err != nil {
+						t.Fatal(err)
+					}
+				}
 				if _, err := svc.ImportFrom(t.Context(), f.org, bytes.NewReader(archive.Bytes()), ImportOptions{Passphrase: passphrase, Conflict: models.OrgImportConflictOverwrite, ActorUserID: f.owner}, nil); err != nil {
 					t.Fatal(err)
 				}
@@ -229,9 +243,31 @@ func TestLiveImportMailTransportWholeArchiveOmitsGeneration(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				assertExportJSONEqual(t, historical, portable)
-				if local || importTransportGeneration(t, pool, mailbox) == source {
-					t.Fatal("history gained authority or destination retained source proof")
+				want := portable
+				if mode.local {
+					want = raw
+				}
+				assertExportJSONEqual(t, historical, want)
+				if local != mode.local || importTransportGeneration(t, pool, mailbox) == source {
+					t.Fatal("send evidence lost its origin or mailbox retained old transport authority")
+				}
+				for _, item := range []struct {
+					query    string
+					id       uuid.UUID
+					expected []byte
+				}{
+					{`SELECT send_executor_result FROM tasks WHERE id=$1`, task, raw},
+					{`SELECT dispatch_result FROM warmup_tasks WHERE task_id=$1`, warmTask, warmRaw},
+				} {
+					var current []byte
+					if err := pool.QueryRow(t.Context(), item.query, item.id).Scan(&current); err != nil {
+						t.Fatal(err)
+					}
+					if mode.local {
+						assertExportJSONEqual(t, current, item.expected)
+					} else if len(current) != 0 {
+						t.Fatal("imported result retained source execution authority")
+					}
 				}
 			})
 		}

@@ -242,8 +242,8 @@ func TestLiveImportMailTransportWholeArchiveSendResultLockOrder(t *testing.T) {
 			if err := pool.QueryRow(ctx, `SELECT send_recovery_hold AND send_recovery_reason='authentication' AND send_recovery_task_id=$2 FROM email_accounts WHERE id=$1`, mailbox, task).Scan(&held); err != nil || !held {
 				t.Fatalf("restrictive hold changed %v %v", held, err)
 			}
-			if err := pool.QueryRow(ctx, `SELECT recorded_locally_at IS NULL AND confirmation_reference='Preserve archive lock proof' AND confirmed_result->>'message_id'='native-lock-proof' FROM send_recovery_resolutions WHERE id=$1`, audit).Scan(&historical); err != nil || !historical {
-				t.Fatalf("historical evidence/local provenance changed %v %v", historical, err)
+			if err := pool.QueryRow(ctx, `SELECT recorded_locally_at IS NOT NULL AND confirmation_reference='Preserve archive lock proof' AND confirmed_result->>'message_id'='native-lock-proof' FROM send_recovery_resolutions WHERE id=$1`, audit).Scan(&historical); err != nil || !historical {
+				t.Fatalf("existing local evidence/provenance changed %v %v", historical, err)
 			}
 			if lane != "result_first" {
 				var confirmed bool

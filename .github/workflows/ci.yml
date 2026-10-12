@@ -293,6 +293,41 @@ jobs:
 
           go test -race -v -p 1 ./internal/app/consumer -run '^TestLiveAdvancedBounceReconciliationRollbackAndReplayWithOneConnection$' -count=1
 
+      - name: Workspace archive send-preservation regressions (PostgreSQL)
+        env:
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+        run: |
+          set -o pipefail
+          go test -race -v -p 1 ./internal/app/orgtransfer -run '^TestLive(ReviewSelectiveExport|ImportLocal|ImportFresh(WarmupReservationDuringMailboxImport|LegacyWarmupHistoryRetainsPayload)|ImportLegacy|ImportRefundedWarmup|ImportExistingReceiptExcluded|ArchiveSendRecoveryLocalOriginResets|ImportMailTransportWholeArchiveSendResultLockOrder|ImportSendRecoveryHistoryCannotReconcileUnknownOutcome|ImportedHistoryDoesNotRepeatAuthoritativeWorkerResult)' -count=1 | tee archive-send-preservation.log
+          if grep -q -- '--- SKIP:' archive-send-preservation.log; then
+            echo "Workspace archive send-preservation regressions must execute without skips"
+            exit 1
+          fi
+          for test in TestLiveReviewSelectiveExportMustPreserveLocalUnknownHold \
+            TestLiveReviewSelectiveExportLateLocalResultRemainsAccepted \
+            TestLiveReviewSelectiveExportNewImportIsHistoryNotAuthority \
+            TestLiveImportLocalSendIdentityPayloadAndUnrelated \
+            TestLiveImportLocalSendRollbackForeignAndRestrictiveConflicts \
+            TestLiveImportLocalWarmupChargeReplyReceiptAndLateAccounting \
+            TestLiveImportLocalResultPreservationLockOrder \
+            TestLiveImportLegacyUnknownPreservesOtherOutcome \
+            TestLiveImportLegacyAppliedResultRemainsIdempotent \
+            TestLiveImportLegacyStampedTaskAcceptsLaterResult \
+            TestLiveImportRefundedWarmupChargeWithoutNonces \
+            TestLiveImportLegacyWarmupAppliedAccountingWithoutNonces \
+            TestLiveImportLegacyWarmupAppliedMarkers \
+            TestLiveImportLegacyUnknownLockOrder \
+            TestLiveImportLegacyRestrictivePreservation \
+            TestLiveImportExistingReceiptExcluded \
+            TestLiveImportFreshWarmupReservationDuringMailboxImport \
+            TestLiveImportFreshLegacyWarmupHistoryRetainsPayload \
+            TestLiveArchiveSendRecoveryLocalOriginResets \
+            TestLiveImportMailTransportWholeArchiveSendResultLockOrder \
+            TestLiveImportSendRecoveryHistoryCannotReconcileUnknownOutcome \
+            TestLiveImportedHistoryDoesNotRepeatAuthoritativeWorkerResult; do
+            grep -q "^--- PASS: $test " archive-send-preservation.log
+          done
+
       - name: Typed mailbox history, archive checkpoint and real-driver upgrade regressions (PostgreSQL)
         env:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable

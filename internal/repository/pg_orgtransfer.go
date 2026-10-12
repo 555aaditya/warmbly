@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
 	"github.com/warmbly/warmbly/internal/models"
@@ -151,6 +152,20 @@ type orgTransferRepository struct {
 	DB *db.DB
 }
 
+type orgImportTx struct {
+	pgx.Tx
+	indexedOrigin         bool
+	importedSendTasks     []uuid.UUID
+	importedHoldTasks     []uuid.UUID
+	importedAttemptNonces []uuid.UUID
+}
+
+const (
+	importOriginTask = iota + 1
+	importOriginHold
+	importOriginAttempt
+)
+
 func NewOrgTransferRepository(database *db.DB) OrgTransferRepository {
 	return &orgTransferRepository{DB: database}
 }
@@ -171,7 +186,45 @@ func quoteIdents(names []string) string {
 }
 
 func (r *orgTransferRepository) Begin(ctx context.Context) (pgx.Tx, error) {
-	return r.DB.Begin(ctx)
+	tx, err := r.DB.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	indexed, err := setupImportOrigin(ctx, tx)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		return nil, err
+	}
+	return &orgImportTx{Tx: tx, indexedOrigin: indexed, importedSendTasks: []uuid.UUID{}, importedHoldTasks: []uuid.UUID{}, importedAttemptNonces: []uuid.UUID{}}, nil
+}
+
+func setupImportOrigin(ctx context.Context, tx pgx.Tx) (bool, error) {
+	if _, err := tx.Exec(ctx, `SAVEPOINT org_import_origin_setup`); err != nil {
+		return false, fmt.Errorf("prepare import provenance: %w", err)
+	}
+	_, createErr := tx.Exec(ctx, `CREATE TEMP TABLE pg_temp.org_import_send_origin (
+		kind smallint NOT NULL, id uuid NOT NULL, PRIMARY KEY (kind, id)) ON COMMIT DROP`)
+	indexed := createErr == nil
+	if createErr != nil {
+		var pgErr *pgconn.PgError
+		if !errors.As(createErr, &pgErr) || pgErr.Code != "42501" {
+			return false, fmt.Errorf("create import provenance: %w", createErr)
+		}
+		if _, err := tx.Exec(ctx, `ROLLBACK TO SAVEPOINT org_import_origin_setup`); err != nil {
+			return false, fmt.Errorf("restore import after missing TEMP privilege: %w", err)
+		}
+		var allowed bool
+		if err := tx.QueryRow(ctx, `SELECT has_database_privilege(current_user,current_database(),'TEMP')`).Scan(&allowed); err != nil {
+			return false, fmt.Errorf("check import TEMP privilege after initialization failure: %w", errors.Join(createErr, err))
+		}
+		if allowed {
+			return false, fmt.Errorf("create import provenance: %w", createErr)
+		}
+	}
+	if _, err := tx.Exec(ctx, `RELEASE SAVEPOINT org_import_origin_setup`); err != nil {
+		return false, fmt.Errorf("finish import provenance setup: %w", err)
+	}
+	return indexed, nil
 }
 
 // ---------- schema introspection ----------
@@ -474,6 +527,92 @@ func matchClause(pk []string) string {
 	return strings.Join(parts, " AND ")
 }
 
+func importOriginContains(kind int, id string, indexed bool) string {
+	if indexed {
+		// Keep the lookup scalar to avoid de-correlation into a scan of the growing TEMP ledger.
+		return `COALESCE((SELECT true FROM pg_temp.org_import_send_origin origin WHERE origin.kind=` + strconv.Itoa(kind) + ` AND origin.id=` + id + ` LIMIT 1),false)`
+	}
+	switch kind {
+	case importOriginTask:
+		return id + `=ANY($import_source_send_tasks::uuid[])`
+	case importOriginHold:
+		return id + `=ANY($import_source_hold_tasks::uuid[])`
+	default:
+		return id + `=ANY($import_source_attempt_nonces::uuid[])`
+	}
+}
+
+func localImportSendTask(taskID string, indexed bool) string {
+	return `EXISTS(SELECT 1 FROM tasks local_task WHERE local_task.id=` + taskID + ` AND (` + localImportSendTaskRow("local_task", indexed) + `))`
+}
+
+func localImportSendTaskRow(alias string, indexed bool) string {
+	return strings.ReplaceAll(fmt.Sprintf(`NOT (%s) AND (
+		local_task.send_executor_nonce IS NOT NULL
+		OR local_task.send_reserved_at IS NOT NULL
+		OR local_task.send_executor_started_at IS NOT NULL
+		OR local_task.send_executor_result IS NOT NULL
+		OR local_task.send_result_state IS NOT NULL
+		OR local_task.send_result_evidence IS NOT NULL
+		OR local_task.send_result_applied_at IS NOT NULL
+		OR local_task.send_released_at IS NOT NULL
+		OR (local_task.status='completed' AND local_task.completed_at IS NOT NULL)
+		OR EXISTS(SELECT 1 FROM email_accounts local_mailbox WHERE local_mailbox.id=local_task.email_account_id
+			AND local_mailbox.send_recovery_hold AND local_mailbox.send_recovery_task_id=local_task.id
+			AND NOT (%s))
+		OR EXISTS(SELECT 1 FROM outbound_attempts local_attempt WHERE local_attempt.task_id=local_task.id
+			AND NOT (%s))
+		OR EXISTS(SELECT 1 FROM warmup_tasks local_dispatch WHERE local_dispatch.task_id=local_task.id AND (
+			local_dispatch.dispatch_nonce IS NOT NULL OR local_dispatch.dispatch_started_at IS NOT NULL
+			OR local_dispatch.dispatch_result IS NOT NULL OR local_dispatch.warmup_charged_date IS NOT NULL
+			OR local_dispatch.warmup_refunded_at IS NOT NULL))
+		OR EXISTS(SELECT 1 FROM send_recovery_resolutions local_resolution WHERE local_resolution.recovery_task_id=local_task.id AND local_resolution.recorded_locally_at IS NOT NULL))`,
+		importOriginContains(importOriginTask, "local_task.id", indexed),
+		importOriginContains(importOriginHold, "local_task.id", indexed),
+		importOriginContains(importOriginAttempt, "local_attempt.nonce", indexed)), "local_task.", alias+".")
+}
+
+func importSendOverwriteGuard(table string, indexed bool) string {
+	switch table {
+	case "tasks":
+		return localImportSendTaskRow("dest", indexed)
+	case "email_tasks", "campaign_tasks", "warmup_tasks", "warmup_tokens", "outbound_attempts", "task_failures", "task_dead_letters", "task_execution_keys":
+		return localImportSendTask("dest.task_id", indexed)
+	case "send_recovery_resolutions":
+		return `dest.recorded_locally_at IS NOT NULL`
+	default:
+		return ""
+	}
+}
+
+func importSendColumnValue(table, column string, indexed bool) string {
+	value := "EXCLUDED." + quoteIdent(column)
+	switch table {
+	case "email_accounts":
+		switch column {
+		case "send_recovery_hold", "send_recovery_task_id", "send_recovery_reason":
+			return `CASE WHEN dest.send_recovery_hold THEN dest.` + quoteIdent(column) + ` ELSE ` + value + ` END`
+		case "send_cooldown_until":
+			return `GREATEST(dest.send_cooldown_until,` + value + `)`
+		case "send_cooldown_provider":
+			return `CASE WHEN dest.send_recovery_hold OR (dest.send_cooldown_until>NOW() AND dest.send_cooldown_until>COALESCE(EXCLUDED.send_cooldown_until,'-infinity'::timestamptz)) THEN dest.send_cooldown_provider ELSE ` + value + ` END`
+		}
+	case "warmup_statistics":
+		if column == "emails_sent" || column == "emails_replied" {
+			return `CASE WHEN EXISTS(SELECT 1 FROM warmup_tasks local_charge JOIN tasks local_task ON local_task.id=local_charge.task_id
+				WHERE local_task.email_account_id=dest.email_account_id
+				AND NOT (` + importOriginContains(importOriginTask, "local_task.id", indexed) + `) AND (
+				(local_charge.warmup_charged_date=dest.date AND local_charge.warmup_reply_charged IS NOT NULL)
+				OR (local_charge.warmup_charged_date IS NULL AND local_task.completed_at IS NOT NULL
+				AND (local_task.completed_at AT TIME ZONE 'UTC')::date=dest.date
+				AND (local_task.status='completed' OR local_task.send_result_state IS NOT NULL)))) THEN dest.` + quoteIdent(column) + ` ELSE ` + value + ` END`
+		}
+	}
+	return value
+}
+
+var ErrImportSendRecoveryConflict = errors.New("archive and destination have different restrictive send-recovery holds, so nothing was imported")
+
 func (r *orgTransferRepository) InsertBatch(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -496,10 +635,16 @@ func (r *orgTransferRepository) InsertBatch(
 	}
 
 	args := []any{payload}
+	importTx, _ := tx.(*orgImportTx)
+	indexed := importTx != nil && importTx.indexedOrigin
 	quoted := quoteIdents(cols)
 	q := `INSERT INTO public.` + quoteIdent(table) + ` AS dest (` + quoted + `)
 	      SELECT ` + quoted + `
-	        FROM jsonb_populate_recordset(NULL::public.` + quoteIdent(table) + `, $1::jsonb)`
+	        FROM jsonb_populate_recordset(NULL::public.` + quoteIdent(table) + `, $1::jsonb) AS incoming`
+	if guard := importSendOverwriteGuard(table, indexed); guard != "" && table != "tasks" && table != "send_recovery_resolutions" {
+		// New child keys cannot inject archive payload or execution evidence into a retained local task.
+		q += ` WHERE NOT (` + strings.ReplaceAll(guard, "dest.", "incoming.") + `)`
+	}
 
 	switch {
 	case conflict == models.OrgImportConflictOverwrite && len(pk) > 0:
@@ -512,7 +657,7 @@ func (r *orgTransferRepository) InsertBatch(
 			if key[c] {
 				continue
 			}
-			sets = append(sets, quoteIdent(c)+" = EXCLUDED."+quoteIdent(c))
+			sets = append(sets, quoteIdent(c)+" = "+importSendColumnValue(table, c, indexed))
 		}
 		for _, c := range resetOnOverwrite {
 			sets = append(sets, quoteIdent(c)+" = DEFAULT")
@@ -522,11 +667,19 @@ func (r *orgTransferRepository) InsertBatch(
 			q += ` ON CONFLICT DO NOTHING`
 		} else {
 			q += ` ON CONFLICT (` + quoteIdents(pk) + `) DO UPDATE SET ` + strings.Join(sets, ", ")
+			var conditions []string
 			if owner != "" {
 				// The owner sits in its own FROM, since here an unqualified column is ambiguous with EXCLUDED.
-				q += ` WHERE EXISTS (SELECT 1 FROM public.` + quoteIdent(table) + ` AS owned
-				        WHERE ` + pairClause("owned", pk, "dest", pk) + ` AND (` + bindOrgParam(owner, 2) + `))`
+				conditions = append(conditions, `EXISTS (SELECT 1 FROM public.`+quoteIdent(table)+` AS owned
+				        WHERE `+pairClause("owned", pk, "dest", pk)+` AND (`+bindOrgParam(owner, 2)+`))`)
 				args = append(args, orgID)
+			}
+			// Imported history cannot rewind an existing destination-local send or its application marker.
+			if guard := importSendOverwriteGuard(table, indexed); guard != "" {
+				conditions = append(conditions, `NOT (`+guard+`)`)
+			}
+			if len(conditions) > 0 {
+				q += ` WHERE ` + strings.Join(conditions, ` AND `)
 			}
 		}
 	default:
@@ -534,6 +687,24 @@ func (r *orgTransferRepository) InsertBatch(
 		// just the primary key. An archive row that collides on a secondary
 		// unique index is skipped rather than aborting the whole import.
 		q += ` ON CONFLICT DO NOTHING`
+	}
+	if strings.Contains(q, "$import_source_") {
+		if importTx == nil {
+			return 0, errors.New("import send tracking requires an import transaction")
+		}
+		for _, binding := range []struct {
+			name string
+			ids  []uuid.UUID
+		}{
+			{"$import_source_send_tasks", importTx.importedSendTasks},
+			{"$import_source_hold_tasks", importTx.importedHoldTasks},
+			{"$import_source_attempt_nonces", importTx.importedAttemptNonces},
+		} {
+			if strings.Contains(q, binding.name) {
+				args = append(args, binding.ids)
+				q = strings.ReplaceAll(q, binding.name, fmt.Sprintf("$%d", len(args)))
+			}
+		}
 	}
 
 	if len(invalidations) > 0 {
@@ -546,6 +717,49 @@ func (r *orgTransferRepository) InsertBatch(
 				if _, err := tx.Exec(ctx, lockQuery, payload, namespace); err != nil {
 					return 0, fmt.Errorf("lock import checkpoints for %s: %w", table, err)
 				}
+			}
+		}
+		if table == "email_accounts" {
+			if importTx != nil && indexed {
+				_, err := tx.Exec(ctx, `INSERT INTO pg_temp.org_import_send_origin (kind, id)
+					SELECT DISTINCT $2::smallint, incoming.send_recovery_task_id
+					FROM jsonb_populate_recordset(NULL::public.email_accounts,$1::jsonb) incoming
+					WHERE incoming.send_recovery_hold AND incoming.send_recovery_task_id IS NOT NULL
+					AND NOT EXISTS(SELECT 1 FROM tasks local_task JOIN email_accounts local_mailbox ON local_mailbox.id=local_task.email_account_id
+						WHERE local_task.id=incoming.send_recovery_task_id AND local_mailbox.send_recovery_hold
+						AND local_mailbox.send_recovery_task_id=local_task.id)
+					ON CONFLICT DO NOTHING`, payload, importOriginHold)
+				if err != nil {
+					return 0, fmt.Errorf("classify imported holds: %w", err)
+				}
+			} else if importTx != nil {
+				holdRows, err := tx.Query(ctx, `SELECT DISTINCT incoming.send_recovery_task_id
+					FROM jsonb_populate_recordset(NULL::public.email_accounts,$1::jsonb) incoming
+					WHERE incoming.send_recovery_hold AND incoming.send_recovery_task_id IS NOT NULL
+					AND NOT EXISTS(SELECT 1 FROM tasks local_task JOIN email_accounts local_mailbox ON local_mailbox.id=local_task.email_account_id
+						WHERE local_task.id=incoming.send_recovery_task_id AND local_mailbox.send_recovery_hold
+						AND local_mailbox.send_recovery_task_id=local_task.id)`, payload)
+				if err != nil {
+					return 0, fmt.Errorf("classify imported holds: %w", err)
+				}
+				ids, err := pgx.CollectRows(holdRows, pgx.RowTo[uuid.UUID])
+				if err != nil {
+					return 0, err
+				}
+				importTx.importedHoldTasks = append(importTx.importedHoldTasks, ids...)
+			}
+		}
+		if conflict == models.OrgImportConflictOverwrite && table == "email_accounts" {
+			var incompatible bool
+			err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM jsonb_populate_recordset(NULL::public.email_accounts,$1::jsonb) incoming
+				JOIN email_accounts current ON current.id=incoming.id WHERE current.organization_id=$2
+				AND current.send_recovery_hold AND incoming.send_recovery_hold
+				AND (current.send_recovery_task_id IS DISTINCT FROM incoming.send_recovery_task_id OR current.send_recovery_reason IS DISTINCT FROM incoming.send_recovery_reason))`, payload, orgID).Scan(&incompatible)
+			if err != nil {
+				return 0, err
+			}
+			if incompatible {
+				return 0, ErrImportSendRecoveryConflict
 			}
 		}
 		keys := make([]string, 0, len(invalidations))
@@ -574,6 +788,44 @@ func (r *orgTransferRepository) InsertBatch(
 			return 0, fmt.Errorf("insert into %s and invalidate checkpoints: %w", table, err)
 		}
 		return written, nil
+	}
+	if table == "tasks" || table == "outbound_attempts" {
+		if importTx == nil {
+			return 0, errors.New("import send tracking requires an import transaction")
+		}
+		key := "id"
+		kind := importOriginTask
+		if table == "outbound_attempts" {
+			key = "nonce"
+			kind = importOriginAttempt
+		}
+		if indexed {
+			written := `WITH written AS (` + q + ` RETURNING ` + quoteIdent(key) + `), recorded AS (
+				INSERT INTO pg_temp.org_import_send_origin (kind, id)
+				SELECT ` + strconv.Itoa(kind) + `, ` + quoteIdent(key) + ` FROM written
+				ON CONFLICT DO NOTHING RETURNING 1)
+				SELECT (SELECT COUNT(*) FROM written), (SELECT COUNT(*) FROM recorded)`
+			var count, recorded int64
+			if err := tx.QueryRow(ctx, written, args...).Scan(&count, &recorded); err != nil {
+				return 0, fmt.Errorf("insert into %s and record provenance: %w", table, err)
+			}
+			return count, nil
+		}
+		writtenRows, err := tx.Query(ctx, q+" RETURNING "+quoteIdent(key), args...)
+		if err != nil {
+			return 0, fmt.Errorf("insert into %s: %w", table, err)
+		}
+		ids, err := pgx.CollectRows(writtenRows, pgx.RowTo[uuid.UUID])
+		if err != nil {
+			return 0, err
+		}
+		// Only actual source writes lose preservation provenance; concurrent local completions remain visible.
+		if table == "tasks" {
+			importTx.importedSendTasks = append(importTx.importedSendTasks, ids...)
+		} else {
+			importTx.importedAttemptNonces = append(importTx.importedAttemptNonces, ids...)
+		}
+		return int64(len(ids)), nil
 	}
 	tag, err := tx.Exec(ctx, q, args...)
 	if err != nil {
