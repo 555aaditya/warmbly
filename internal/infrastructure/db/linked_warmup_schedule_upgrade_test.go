@@ -7,7 +7,7 @@ import (
 )
 
 func TestLiveLinkedWarmupScheduleUpgradePreservesExplicitProfilesAndTasks(t *testing.T) {
-	m, c, _ := conflictUpgradeDatabaseAt(t, 291)
+	m, c, _ := conflictUpgradeDatabaseAt(t, 292)
 	user, org, instance, revoked := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	exec := func(sql string, args ...any) { t.Helper(); conflictUpgradeExec(t, c, sql, args...) }
 	exec(`INSERT INTO users(id,email,first_name,last_name) VALUES($1,$2,'Upgrade','')`, user, user.String()+"@test.local")
@@ -86,10 +86,10 @@ func TestLiveLinkedWarmupScheduleUpgradePreservesExplicitProfilesAndTasks(t *tes
 		t.Fatal(err)
 	}
 	rows.Close()
-	if err := m.Migrate(292); err != nil {
+	if err := m.Migrate(293); err != nil {
 		t.Fatal(err)
 	}
-	assertConflictMigrationVersion(t, m, 292, false)
+	assertConflictMigrationVersion(t, m, 293, false)
 	var corrected int
 	if err := c.QueryRow(t.Context(), `SELECT COUNT(*) FROM email_account_behavior WHERE NOT enabled AND created_at<>updated_at`).Scan(&corrected); err != nil || corrected != 2 {
 		t.Fatalf("corrected=%d err=%v", corrected, err)
@@ -117,10 +117,15 @@ func TestLiveLinkedWarmupScheduleUpgradePreservesExplicitProfilesAndTasks(t *tes
 	if err := m.Steps(-1); err != nil {
 		t.Fatal(err)
 	}
+	assertConflictMigrationVersion(t, m, 292, false)
+	var indexExists bool
+	if err := c.QueryRow(t.Context(), `SELECT to_regclass('public.idx_tasks_dispatch_usage') IS NOT NULL`).Scan(&indexExists); err != nil || !indexExists {
+		t.Fatalf("rollback removed the preceding dispatch index: exists=%v err=%v", indexExists, err)
+	}
 	if after != conflictUpgradeSnapshot(t, c, `SELECT jsonb_agg(to_jsonb(b) ORDER BY email_account_id)::text FROM email_account_behavior b`) {
 		t.Fatal("rollback re-enabled inherited workdays")
 	}
-	if err := m.Migrate(292); err != nil {
+	if err := m.Migrate(293); err != nil {
 		t.Fatal(err)
 	}
 	if after != conflictUpgradeSnapshot(t, c, `SELECT jsonb_agg(to_jsonb(b) ORDER BY email_account_id)::text FROM email_account_behavior b`) {
