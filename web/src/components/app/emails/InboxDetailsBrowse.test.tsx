@@ -10,11 +10,14 @@ import type { MailboxTab } from "@/lib/browse-accounts-analytics";
 import { BROWSE_STORAGE_PREFIX } from "@/lib/browseState";
 import InboxDetails from "./InboxDetails";
 
+const cloudState = vi.hoisted(() => ({ loading: false, unavailable: false, managed: false, authLoading: false, confirm: vi.fn() }));
+
 vi.mock("@/lib/api/client/Request", () => ({ default: () => new Promise(() => {}) }));
 vi.mock("@/hooks/PresenceProvider", () => ({ usePresenceResource: () => {} }));
 vi.mock("@/components/app/presence/ResourceViewers", () => ({ default: () => null }));
 vi.mock("@/components/app/advisor/AdvisorStrip", () => ({ default: () => null }));
-vi.mock("@/hooks/useCloudPool", () => ({ default: () => ({ connected: false, selfHosted: false, isEnrolled: () => false }) }));
+vi.mock("@/hooks/useCloudPool", () => ({ default: () => ({ connected: false, selfHosted: false, loading: cloudState.loading, unavailable: cloudState.unavailable, isEnrolled: () => false, rowFor: () => ({ managed: cloudState.managed }) }) }));
+vi.mock("@/lib/api/hooks/auth/useAuthConfig", () => ({ default: () => ({ isLoading: cloudState.authLoading, isError: false }) }));
 vi.mock("./SendingBehaviorTab", () => ({ default: () => <p>Sending behavior</p> }));
 
 const mailbox: Inbox = {
@@ -30,7 +33,7 @@ function Page({ id = "a", initialTab, tabIntentKey = 0, onTabIntentConsumed }: {
     return (
         <QueryClientProvider client={client}>
             <UserContext.Provider value={profile}>
-                <ConfirmContext.Provider value={{ show: vi.fn(), setLoading: vi.fn(), setShow: vi.fn() }}>
+                <ConfirmContext.Provider value={{ show: cloudState.confirm, setLoading: vi.fn(), setShow: vi.fn() }}>
                     <InboxDetails emails={[mailbox, { ...mailbox, id: "b", email: "bob@b.test" }]} view={id} setView={() => {}} initialTab={initialTab} tabIntentKey={tabIntentKey} onTabIntentConsumed={onTabIntentConsumed} />
                 </ConfirmContext.Provider>
             </UserContext.Provider>
@@ -41,6 +44,8 @@ const tab = (name: string) => screen.getByRole("button", { name });
 
 describe("mailbox drawer browse persistence", () => {
     beforeEach(() => {
+        cloudState.loading = cloudState.unavailable = cloudState.managed = cloudState.authLoading = false;
+        cloudState.confirm.mockReset();
         HTMLElement.prototype.scrollBy = vi.fn();
         sessionStorage.clear();
         client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -85,5 +90,20 @@ describe("mailbox drawer browse persistence", () => {
         page.rerender(<Page />);
         act(() => useAppStore.setState({ currentOrganization: { id: "other", name: "Other", role: "owner" } }));
         expect(tab("Sending")).toHaveAttribute("data-active", "true");
+    });
+
+    it.each(["loading", "unavailable", "authLoading"] as const)("defers disconnect terms while Cloud ownership is %s", (unknown) => {
+        cloudState[unknown] = true;
+        const page = render(<Page initialTab="settings" />);
+        expect(screen.getByRole("button", { name: "Disconnect…" })).toBeDisabled();
+        expect(screen.queryByText(/The stored SMTP and IMAP credentials are destroyed/)).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Disconnect…" }));
+        expect(cloudState.confirm).not.toHaveBeenCalled();
+        cloudState[unknown] = false;
+        cloudState.managed = true;
+        page.rerender(<Page initialTab="settings" />);
+        fireEvent.click(screen.getByRole("button", { name: "Disconnect…" }));
+        expect(cloudState.confirm).toHaveBeenCalledWith(expect.stringContaining("stop its Cloud warmup sending and receiving"), expect.any(Function));
+        expect(cloudState.confirm).toHaveBeenCalledWith(expect.stringContaining("mailbox, sign-in and history stay in your Warmbly Cloud workspace"), expect.any(Function));
     });
 });

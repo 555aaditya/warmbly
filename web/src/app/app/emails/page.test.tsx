@@ -8,7 +8,8 @@ import type * as UserModule from "@/hooks/context/user";
 import type AccountStatus from "@/lib/api/models/app/analytics/AccountStatus";
 import AddressesPage from "./page";
 
-const { tags, rows, statusState } = vi.hoisted(() => ({
+const { tags, rows, statusState, confirm } = vi.hoisted(() => ({
+    confirm: vi.fn(),
     statusState: { data: [] as AccountStatus[], observations: [] as { status: AccountStatus; observedAt: number; current: boolean }[], isLoading: false, isFetching: false, isError: false, cloudLoading: false, cloudUnavailable: false, emailsLoading: false, emailsError: false, emailsIncomplete: false },
     tags: [
         { id: "sending", title: "Sending account", color: "#0088cc", position: 0 },
@@ -27,7 +28,7 @@ vi.mock("@/hooks/context/user", async (original) => ({
     ...await original<typeof UserModule>(),
     useUserProfile: () => ({ user: { id: "tag-order-user", tags } }),
 }));
-vi.mock("@/hooks/context/confirm", () => ({ useConfirm: () => ({ show: vi.fn() }) }));
+vi.mock("@/hooks/context/confirm", () => ({ useConfirm: () => ({ show: confirm }) }));
 vi.mock("@/hooks/usePermission", () => ({ usePermission: () => true }));
 vi.mock("@/lib/api/hooks/app/emails/useEmails", () => ({
     default: ({ tag }: { tag: string }) => ({ emails: statusState.emailsLoading || statusState.emailsError ? [] : tag ? rows.filter((row) => row.tags.includes(tag)) : rows, isLoading: statusState.emailsLoading, isPending: statusState.emailsLoading, isError: statusState.emailsError || statusState.emailsIncomplete, isIncomplete: statusState.emailsIncomplete, refetch: vi.fn() }),
@@ -37,7 +38,7 @@ vi.mock("@/lib/api/hooks/app/subscription/useFeatureStatus", () => ({ default: (
 vi.mock("@/lib/api/hooks/auth/useAuthConfig", () => ({ default: () => ({ data: {}, isLoading: false }) }));
 vi.mock("@/lib/api/hooks/app/emails/useMailboxGrants", () => ({ useSigninMigration: () => ({ data: { data: [] } }) }));
 vi.mock("@/lib/api/hooks/app/advisor/useAdvisor", () => ({ useAdvisorEntityIndex: () => ({ get: () => [] }) }));
-vi.mock("@/hooks/useCloudPool", () => ({ default: () => ({ selfHosted: false, connected: false, loading: statusState.cloudLoading, unavailable: statusState.cloudUnavailable, observedAt: 0 }) }));
+vi.mock("@/hooks/useCloudPool", () => ({ default: () => ({ selfHosted: false, connected: false, loading: statusState.cloudLoading, unavailable: statusState.cloudUnavailable, observedAt: 0, rowFor: () => undefined }) }));
 vi.mock("@/lib/api/hooks/app/cloudlink/useCloudLink", () => ({
     useEnrollCloudLinkMailbox: () => ({}), useUnenrollCloudLinkMailbox: () => ({}), useCloudLinkMailboxLifecycle: () => ({}),
 }));
@@ -78,6 +79,7 @@ function measuredStatus(row: Inbox): AccountStatus {
 
 describe("mailbox ordering with a tag filter", () => {
     beforeEach(() => {
+        confirm.mockReset();
         sessionStorage.clear();
         statusState.data = [];
         statusState.observations = [];
@@ -96,6 +98,19 @@ describe("mailbox ordering with a tag filter", () => {
     it("keeps the existing All Accounts tag-set grouping and email order", async () => {
         await renderPage();
         expect(orderedEmails()).toEqual(["ananya@serveblink.example", "julie@serveblink.example", "kavya@serveblink.example", "sara@virevow.example"]);
+    });
+
+    it.each(["cloudLoading", "cloudUnavailable"] as const)("defers disconnect and bulk removal while ownership is %s", async (unknown) => {
+        statusState[unknown] = true;
+        await renderPage();
+        const row = screen.getAllByRole("row")[1];
+        fireEvent.click(within(row).getByRole("checkbox"));
+        expect(screen.getByRole("button", { name: "Remove" })).toBeDisabled();
+        fireEvent.click(within(row).getByRole("button", { name: "Mailbox actions" }));
+        const disconnect = screen.getByRole("menuitem", { name: "Disconnect mailbox" });
+        expect(disconnect).toBeDisabled();
+        fireEvent.click(disconnect);
+        expect(confirm).not.toHaveBeenCalled();
     });
 
     it("keeps that order when a specific tag returns rows in creation order", async () => {

@@ -4,16 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiagnosticParticipation } from "@/lib/api/models/app/cloudlink/CloudLink";
 import CloudWarmupCard from "./CloudWarmupCard";
 
-const fixtures = vi.hoisted(() => ({ participation: undefined as DiagnosticParticipation | undefined, workspaceConnected: true, patch: vi.fn() }));
-vi.mock("@/hooks/useCloudPool", () => ({ default: () => ({ manageable: true, connected: true, workspaceConnected: fixtures.workspaceConnected, isEnrolled: (id: string) => id === "mailbox", rowFor: () => ({ enrolled: true, managed: false, cloud: { participation: fixtures.participation, settings: { base: 10 }, sent_today: 0, sent_7d: 0 } }) }) }));
-vi.mock("@/lib/api/hooks/app/cloudlink/useCloudLink", () => ({ useEnrollCloudLinkMailbox: () => ({}), useUnenrollCloudLinkMailbox: () => ({}), useCloudLinkMailboxLifecycle: () => ({}) }));
-vi.mock("@/hooks/context/confirm", () => ({ useConfirm: () => ({ show: (_: string, confirm: () => void) => confirm() }) }));
+const fixtures = vi.hoisted(() => ({ participation: undefined as DiagnosticParticipation | undefined, workspaceConnected: true, managed: false, patch: vi.fn(), unenroll: vi.fn(), confirm: vi.fn() }));
+vi.mock("@/hooks/useCloudPool", () => ({ default: () => ({ manageable: true, connected: true, workspaceConnected: fixtures.workspaceConnected, isEnrolled: (id: string) => id === "mailbox", rowFor: () => ({ enrolled: true, managed: fixtures.managed, cloud: { participation: fixtures.participation, settings: { base: 10 }, sent_today: 0, sent_7d: 0 } }) }) }));
+vi.mock("@/lib/api/hooks/app/cloudlink/useCloudLink", () => ({ useEnrollCloudLinkMailbox: () => ({}), useUnenrollCloudLinkMailbox: () => ({ mutateAsync: fixtures.unenroll }), useCloudLinkMailboxLifecycle: () => ({}) }));
+vi.mock("@/hooks/context/confirm", () => ({ useConfirm: () => ({ show: (message: string, confirm: () => void) => { fixtures.confirm(message); confirm(); } }) }));
 vi.mock("@/lib/api/client/app/cloudlink/cloudLink", () => ({ setCloudLinkParticipation: fixtures.patch }));
 vi.mock("./WarmupPartnerDiversity", () => ({ default: () => null }));
 vi.mock("./WarmupSendFailureNote", () => ({ default: () => null }));
 
 describe.each([true, false])("Cloud diagnostic participation with workspace connection %s", (workspaceConnected) => {
-    beforeEach(() => { fixtures.participation = undefined; fixtures.workspaceConnected = workspaceConnected; fixtures.patch.mockReset().mockResolvedValue({}); });
+    beforeEach(() => { fixtures.participation = undefined; fixtures.workspaceConnected = workspaceConnected; fixtures.managed = false; fixtures.patch.mockReset().mockResolvedValue({}); fixtures.unenroll.mockReset().mockResolvedValue(undefined); fixtures.confirm.mockReset(); });
     afterEach(cleanup);
     const draw = () => render(<QueryClientProvider client={new QueryClient()}><CloudWarmupCard mailboxId="mailbox" email="fixture@example.test" provider="smtp_imap" /></QueryClientProvider>);
 
@@ -39,5 +39,14 @@ describe.each([true, false])("Cloud diagnostic participation with workspace conn
         expect(screen.getByText(/Receive-only does not authorize replies/)).toBeInTheDocument();
         expect(screen.getByText(/Receiving allows probabilistic spam rescue, reads, importance and stars or flags where supported/)).toBeInTheDocument();
         expect(screen.getByText(/not a guaranteed reputation improvement/)).toBeInTheDocument();
+    });
+
+    it("discloses that managed removal stops Cloud warmup but preserves its mailbox", async () => {
+        fixtures.managed = true;
+        draw();
+        fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+        expect(fixtures.confirm).toHaveBeenCalledWith(expect.stringContaining("stop its Cloud warmup sending and receiving"));
+        expect(fixtures.confirm).toHaveBeenCalledWith(expect.stringContaining("mailbox, sign-in and history stay in your Warmbly Cloud workspace"));
+        await waitFor(() => expect(fixtures.unenroll).toHaveBeenCalledWith("mailbox"));
     });
 });

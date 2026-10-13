@@ -27,7 +27,7 @@ The control plane checks participation before publication; capable executors rec
 
 ### Local aliases versus Cloud mailboxes
 
-Local participation and unlinking restrict local use of an alias. They do not revoke an independently Cloud-owned native mailbox, its provider OAuth grant, or accepted Cloud-native work. Pause/delete or change participation on that Cloud mailbox separately if that is the intended outcome. Enrolled SMTP mirrors also have Cloud-side participation; a newly created Cloud mailbox is off until its owner explicitly enables it. Do not treat healthy standing as participation consent. Existing lifecycle enrollment and account IDs remain unchanged.
+Local participation restricts local use of an alias. Individually removing a managed mailbox stops diagnostic sending and receiving on Cloud before releasing the link; it retains the Cloud-owned mailbox, history and provider OAuth grant. Disconnecting an entire instance only releases managed links and preserves their Cloud warmup settings. Neither operation recalls already accepted provider sends. To erase the native mailbox and its grant, delete it directly on Cloud. Enrolled SMTP mirrors also have Cloud-side participation; a newly created Cloud mailbox is off until its owner explicitly enables it. Do not treat healthy standing as participation consent. Existing lifecycle enrollment and account IDs remain unchanged.
 
 ## Shared send-time admission
 
