@@ -37,14 +37,43 @@ type adoptAccounts struct {
 
 type existingConnectionAccounts struct {
 	managedOpsEmails
-	createdOrg uuid.UUID
+	createdOrg      uuid.UUID
+	disableBehavior bool
 }
 
 func (r *existingConnectionAccounts) NewSMTPIMAPAccount(_ context.Context, _ string, req models.NewSMTPIMAPAccount) (*models.Email, *errx.Error) {
 	r.createdOrg = *req.OrganizationID
+	r.disableBehavior = req.DisableSendingBehavior
 	a := &models.Email{ID: uuid.New(), OrganizationID: req.OrganizationID, Email: req.Email, Provider: "smtp_imap", Status: "active"}
 	r.accounts[a.ID] = a
 	return a, nil
+}
+
+func (r *existingConnectionAccounts) NewOauthAccount(_ context.Context, _ string, req models.NewOauthAccount) (*models.Email, *errx.Error) {
+	r.createdOrg = *req.OrganizationID
+	r.disableBehavior = req.DisableSendingBehavior
+	a := &models.Email{ID: uuid.New(), OrganizationID: req.OrganizationID, Email: req.Email, Provider: string(req.Provider), Status: "active"}
+	r.accounts[a.ID] = a
+	return a, nil
+}
+
+func TestGatewayOAuthEnrollmentDoesNotInheritCloudWorkday(t *testing.T) {
+	for _, provider := range []models.InboxProvider{models.InboxProviderGoogle, models.InboxProviderOutlook} {
+		t.Run(string(provider), func(t *testing.T) {
+			org, owner := uuid.New(), uuid.New()
+			r := &adoptLinkRepo{}
+			accounts := &existingConnectionAccounts{managedOpsEmails: managedOpsEmails{accounts: map[uuid.UUID]*models.Email{}}}
+			s := &service{repo: r, emails: accounts, emailSvc: &adoptEmails{org: org}}
+			inst := &models.PoolLinkInstance{ID: uuid.New(), OrganizationID: org, CreatedBy: &owner}
+			req := models.PoolLinkEnrollRequest{RemoteID: uuid.New(), Email: "sender@example.test", Provider: provider, OAuth: &models.PoolLinkOAuthCredential{RefreshToken: "synthetic"}}
+			if _, xerr := s.Enroll(context.Background(), inst, req); xerr != nil {
+				t.Fatal(xerr)
+			}
+			if !accounts.disableBehavior || accounts.createdOrg != org {
+				t.Fatal("gateway OAuth enrollment inherited Cloud's weekday workday")
+			}
+		})
+	}
 }
 
 type freeConnectionGate struct{ feature.FeatureGateService }
@@ -66,6 +95,9 @@ func TestExistingServerConnectionEnrollsWithinItsCloudWorkspaceAllowance(t *test
 	got, xerr := s.Enroll(context.Background(), inst, req)
 	if xerr != nil || got == nil || r.enrolled.InstanceID != inst.ID || accounts.createdOrg != org || !emails.started {
 		t.Fatalf("enrollment on existing connection = %+v, %v", got, xerr)
+	}
+	if !accounts.disableBehavior {
+		t.Fatal("gateway warmup inherited Cloud's weekday workday")
 	}
 	for len(accounts.accounts) < models.FreeWorkspaceMailboxLimit {
 		accounts.accounts[uuid.New()] = &models.Email{}
