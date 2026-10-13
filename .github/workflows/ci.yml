@@ -200,6 +200,19 @@ jobs:
         run: |
           go test -race -coverprofile=coverage.out -covermode=atomic ./...
 
+      - name: Linked-mailbox batching regressions (PostgreSQL)
+        env:
+          PRIMARY_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+        run: |
+          set -o pipefail
+          go run ./cmd/migrate
+          go test -race -v -p 1 ./internal/repository ./internal/app/analytics -run '^TestLive(WarmupPartnerCountsMatchIndividualCandidates|WarmupSummariesMatchIndividualReads|LinkedMailboxStatusBatchPreservesDetails)$' -count=1 | tee linked-mailbox-batch.log
+          for test in TestLiveWarmupPartnerCountsMatchIndividualCandidates TestLiveWarmupSummariesMatchIndividualReads TestLiveLinkedMailboxStatusBatchPreservesDetails; do
+            grep -q -- "--- PASS: $test " linked-mailbox-batch.log
+          done
+          if grep -q -- '--- SKIP:' linked-mailbox-batch.log; then exit 1; fi
+
       - name: Campaign send admission regressions (PostgreSQL)
         env:
           PRIMARY_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable

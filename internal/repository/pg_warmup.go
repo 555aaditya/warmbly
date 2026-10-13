@@ -200,6 +200,7 @@ type WarmupRepository interface {
 	LastWarmupSendFailure(ctx context.Context, accountID uuid.UUID, since time.Time) (*models.WarmupSendFailure, error)
 	ListMailboxLoadingIncidents(ctx context.Context, now time.Time) ([]MailboxLoadingIncident, error)
 	GetWarmupStatistics(ctx context.Context, accountID uuid.UUID, from, to time.Time) ([]WarmupStatistic, error)
+	GetWarmupSummaries(ctx context.Context, accountIDs []uuid.UUID, from, to time.Time) (map[uuid.UUID]WarmupSummary, error)
 	GetOrCreateDailyStats(ctx context.Context, accountID uuid.UUID, date time.Time, targetVolume int) (*WarmupStatistic, error)
 
 	// Pool-wide placement analytics (admin overview)
@@ -245,6 +246,7 @@ type WarmupRepository interface {
 	// tier, plus proven free mailboxes when a premium tier is thin. The
 	// scheduler caps volume on the same set the selector draws from.
 	WarmupPartnerCandidates(ctx context.Context, poolType string, senderID uuid.UUID) ([]models.WarmupPartnerCandidate, error)
+	WarmupPartnerCounts(ctx context.Context, poolType string, senderIDs []uuid.UUID) (map[uuid.UUID]int, error)
 	GetRecentPartnerDomainCounts(ctx context.Context, accountID uuid.UUID, since time.Time) (map[string]int, error)
 	// GetPartnerDiversity counts confirmed partners reached in the window.
 	GetPartnerDiversity(ctx context.Context, accountID uuid.UUID, since time.Time) (WarmupPartnerDiversity, error)
