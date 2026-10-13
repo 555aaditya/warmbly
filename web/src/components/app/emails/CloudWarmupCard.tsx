@@ -118,7 +118,7 @@ export default function CloudWarmupCard({ mailboxId, email, provider }: { mailbo
                             onClick={() =>
                                 confirm.show(
                                     row.managed
-                                        ? `Remove ${email} from this instance? It stays in your Warmbly Cloud workspace, where its sign-in lives.`
+                                        ? `Remove ${email} from this instance and stop its Cloud warmup sending and receiving? Its mailbox, sign-in and history stay in your Warmbly Cloud workspace. You can restart warmup there.`
                                         : `Stop warming ${email} in the Warmbly pool? The cloud deletes its credential right away and local warmup takes over.`,
                                     async () => {
                                         await run(() => unenroll.mutateAsync(mailboxId), row.managed ? `${email} removed from this instance` : `${email} removed from the pool`);

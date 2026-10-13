@@ -2104,9 +2104,13 @@ function MailboxPowerCard({ mailbox }: { mailbox: Inbox }) {
 function DisconnectCard({ mailbox, onDisconnected }: { mailbox: Inbox; onDisconnected: () => void }) {
     const confirm = useConfirm();
     const remove = useRemoveEmail(mailbox.id);
+    const pool = useCloudPool();
+    const cloudManaged = pool.rowFor(mailbox.id)?.managed === true;
 
     const revocation =
-        mailbox.provider === "gmail"
+        cloudManaged
+            ? "Cloud warmup sending and receiving stop. Its mailbox, sign-in and history stay in your Warmbly Cloud workspace."
+            : mailbox.provider === "gmail"
             ? "Warmbly's access to your Google account is revoked, so it disappears from your third-party access list."
             : mailbox.provider === "outlook"
               ? "The stored Microsoft tokens are destroyed. Microsoft has no way for us to remove the app itself, so do that in your Microsoft account privacy settings."
@@ -2114,7 +2118,9 @@ function DisconnectCard({ mailbox, onDisconnected }: { mailbox: Inbox; onDisconn
 
     const ask = () =>
         confirm.show(
-            `Disconnect ${mailbox.email}? This deletes its imported mail, warmup history and credentials, and cannot be undone. Switch the mailbox off instead if you only want it to stop.`,
+            cloudManaged
+                ? `Disconnect ${mailbox.email} from this instance and stop its Cloud warmup sending and receiving? Imported mail and history on this instance are deleted. Its mailbox, sign-in and history stay in your Warmbly Cloud workspace.`
+                : `Disconnect ${mailbox.email}? This deletes its imported mail, warmup history and credentials, and cannot be undone. Switch the mailbox off instead if you only want it to stop.`,
             async () => {
                 try {
                     await remove.mutateAsync();
@@ -2137,7 +2143,9 @@ function DisconnectCard({ mailbox, onDisconnected }: { mailbox: Inbox; onDisconn
                         Disconnect this mailbox
                     </div>
                     <div className="text-[11.5px] text-red-700/70 leading-tight mt-0.5">
-                        Deletes its imported mail, warmup history, credentials and any scheduled send.
+                        {cloudManaged
+                            ? "Deletes its imported mail, warmup history and scheduled sends on this instance."
+                            : "Deletes its imported mail, warmup history, credentials and any scheduled send."}
                         {" "}
                         {revocation}
                         {" "}

@@ -264,10 +264,13 @@ export default function AddressesPage() {
         // Outlook mailbox would be untrue for that one, and Microsoft publishes
         // no way for us to remove a single app.
         const providers = new Set(
-            selected.map((id) => emailsData.emails?.find((e) => e.id === id)?.provider).filter(Boolean) as string[],
+            selected.filter((id) => !cloud.rowFor(id)?.managed).map((id) => emailsData.emails?.find((e) => e.id === id)?.provider).filter(Boolean) as string[],
         );
+        const managedNote = selected.some((id) => cloud.rowFor(id)?.managed)
+            ? "Cloud-managed mailboxes stop warmup sending and receiving, but their mailbox, sign-in and history stay on Cloud."
+            : "";
         confirm.show(
-            `Remove ${n} mailbox${n > 1 ? "es" : ""}? This deletes ${n > 1 ? "their" : "its"} imported mail and warmup history. ${bulkRevocationNote(providers)} It cannot be undone — switch ${n > 1 ? "them" : "it"} off instead to just stop sending.`,
+            `Remove ${n} mailbox${n > 1 ? "es" : ""}? This deletes ${n > 1 ? "their" : "its"} imported mail and warmup history on this instance. ${managedNote} ${bulkRevocationNote(providers)} It cannot be undone. Switch ${n > 1 ? "them" : "it"} off instead to just stop sending.`,
             async () => {
                 setRemoving(true);
                 const results = await Promise.allSettled(selected.map((id) => removeEmail(id)));
@@ -764,6 +767,7 @@ function revocationNote(provider?: string): string {
 // bulkRevocationNote is the same answer for a mixed selection, which must not
 // round up to the stronger claim.
 function bulkRevocationNote(providers: Set<string>): string {
+    if (providers.size === 0) return "";
     const gmail = providers.has("gmail");
     const outlook = providers.has("outlook");
     if (providers.size === 1 && (gmail || outlook)) return revocationNote(gmail ? "gmail" : "outlook");
@@ -830,7 +834,9 @@ function MailboxRow({
     // one app, so promising it for Outlook would be a promise we cannot keep.
     const askDisconnect = () =>
         confirm.show(
-            `Disconnect ${box.email}? This deletes its imported mail, warmup history and credentials. ${revocationNote(box.provider)} It cannot be undone — switch the mailbox off instead to just stop sending.`,
+            cloud?.managed
+                ? `Disconnect ${box.email} from this instance and stop its Cloud warmup sending and receiving? Imported mail and history on this instance are deleted. Its mailbox, sign-in and history stay in your Warmbly Cloud workspace.`
+                : `Disconnect ${box.email}? This deletes its imported mail, warmup history and credentials. ${revocationNote(box.provider)} It cannot be undone. Switch the mailbox off instead to just stop sending.`,
             async () => {
                 try {
                     await remove.mutateAsync();
@@ -1182,7 +1188,7 @@ function MailboxRow({
                                         onSelect={() =>
                                             confirm.show(
                                                 cloud?.managed
-                                                    ? `Remove ${box.email} from this instance? It stays in your Warmbly Cloud workspace, where its sign-in lives; campaigns here stop sending from it.`
+                                                    ? `Remove ${box.email} from this instance and stop its Cloud warmup sending and receiving? Its mailbox, sign-in and history stay in your Warmbly Cloud workspace; campaigns here stop sending from it.`
                                                     : `Stop warming ${box.email} in the Warmbly pool? The cloud deletes its credential right away.`,
                                                 async () => {
                                                     await cloudRun(() => cloudUnenroll.mutateAsync(box.id), cloud?.managed ? `${box.email} removed from this instance` : `${box.email} removed from the pool`);
