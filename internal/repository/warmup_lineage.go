@@ -294,14 +294,28 @@ func (r *taskRepository) CountWarmupDispatchReservations(ctx context.Context, id
 	return n, err
 }
 
+const warmupDispatchUsageSQL = `WITH usage AS MATERIALIZED (
+    SELECT task_type, COALESCE(completed_at,updated_at) AS sent_at
+    FROM tasks
+    WHERE email_account_id=$1 AND id<>$2 AND status IN('active','completed')
+      AND task_type IN('warmup','campaign','email','placement') AND message_id<>''
+      AND COALESCE(completed_at,updated_at)>=LEAST($3::timestamptz,$5::timestamptz)
+      AND COALESCE(completed_at,updated_at)<GREATEST($4::timestamptz,$6::timestamptz)
+)
+SELECT
+    COUNT(*) FILTER(WHERE task_type='warmup' AND sent_at>=$3 AND sent_at<$4),
+    COUNT(*) FILTER(WHERE sent_at>=$3 AND sent_at<$4),
+    COUNT(*) FILTER(WHERE sent_at>=$5 AND sent_at<$6),
+    (SELECT COALESCE(completed_at,updated_at) FROM tasks
+     WHERE email_account_id=$1 AND id<>$2 AND status IN('active','completed')
+       AND task_type IN('warmup','campaign','email','placement') AND message_id<>''
+       AND COALESCE(completed_at,updated_at) IS NOT NULL
+     ORDER BY COALESCE(completed_at,updated_at) DESC NULLS LAST LIMIT 1)
+FROM usage`
+
 func (r *taskRepository) WarmupDispatchUsage(ctx context.Context, id, excluded uuid.UUID, start, end, hourStart, hourEnd time.Time) (int, int, int, *time.Time, error) {
 	var warmup, daily, hourly int
 	var last *time.Time
-	err := r.db.QueryRow(ctx, `SELECT
-        COUNT(*) FILTER(WHERE task_type='warmup' AND COALESCE(completed_at,updated_at)>=$3 AND COALESCE(completed_at,updated_at)<$4),
-        COUNT(*) FILTER(WHERE COALESCE(completed_at,updated_at)>=$3 AND COALESCE(completed_at,updated_at)<$4),
-        COUNT(*) FILTER(WHERE COALESCE(completed_at,updated_at)>=$5 AND COALESCE(completed_at,updated_at)<$6),
-        MAX(COALESCE(completed_at,updated_at))
-        FROM tasks WHERE email_account_id=$1 AND id<>$2 AND status IN('active','completed') AND task_type IN('warmup','campaign','email','placement') AND message_id<>''`, id, excluded, start, end, hourStart, hourEnd).Scan(&warmup, &daily, &hourly, &last)
+	err := r.db.QueryRow(ctx, warmupDispatchUsageSQL, id, excluded, start, end, hourStart, hourEnd).Scan(&warmup, &daily, &hourly, &last)
 	return warmup, daily, hourly, last, err
 }
