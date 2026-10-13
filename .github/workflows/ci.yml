@@ -249,6 +249,9 @@ jobs:
             TestLiveOwnConversationIgnoresEmptyIDsWithoutLosingTaskOrThreadOwnership; do
             grep -q -- "--- PASS: $test " warmup-query-pressure.log || { echo "Missing regression: $test"; exit 1; }
           done
+          go test -race -v ./internal/infrastructure/db -run '^TestLiveWarmupDispatchUsageIndexUpgradePreservesEvidenceAndHolds$' -count=1 | tee warmup-query-upgrade.log
+          if grep -q -- '--- SKIP:' warmup-query-upgrade.log; then exit 1; fi
+          grep -q -- '--- PASS: TestLiveWarmupDispatchUsageIndexUpgradePreservesEvidenceAndHolds ' warmup-query-upgrade.log
 
       - name: Monitoring database observation regressions (PostgreSQL)
         env:
