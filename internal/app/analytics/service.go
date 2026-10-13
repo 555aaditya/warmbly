@@ -12,6 +12,7 @@ import (
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/repository"
 	"github.com/warmbly/warmbly/internal/utils/paging"
+	"golang.org/x/sync/errgroup"
 )
 
 type AnalyticsService interface {
@@ -40,6 +41,7 @@ type AnalyticsService interface {
 	// batched across the page, so its cost is bounded by the page, not by the
 	// total inventory.
 	GetAccountStatusesPage(ctx context.Context, orgID uuid.UUID, emailIDs []uuid.UUID, cursor string, limit int32) (*models.EmailAccountStatusesResult, *errx.Error)
+	GetAccountStatusDetailsPage(ctx context.Context, orgID uuid.UUID, emailIDs []uuid.UUID, cursor string, limit int32) (*models.EmailAccountStatusesResult, *errx.Error)
 
 	// Usage overview
 	GetUsageOverview(ctx context.Context, orgID, userID uuid.UUID, period string) (*models.UsageOverview, *errx.Error)
@@ -499,6 +501,10 @@ func (s *analyticsService) GetAllAccountStatuses(ctx context.Context, orgID uuid
 // is batched across the page, and the shared placement rate is read once, so
 // the page's cost is bounded by the page size, not by the total inventory.
 func (s *analyticsService) GetAccountStatusesPage(ctx context.Context, orgID uuid.UUID, emailIDs []uuid.UUID, cursor string, limit int32) (*models.EmailAccountStatusesResult, *errx.Error) {
+	return s.accountStatusesPage(ctx, orgID, emailIDs, cursor, limit, 1)
+}
+
+func (s *analyticsService) accountStatusesPage(ctx context.Context, orgID uuid.UUID, emailIDs []uuid.UUID, cursor string, limit int32, concurrency int) (*models.EmailAccountStatusesResult, *errx.Error) {
 	// The opaque cursor decodes to the keyset position; an invalid token is a
 	// 400, never a silently ignored full-inventory scan.
 	cursorID, xerr := paging.DecodeCursor(cursor)
@@ -564,19 +570,60 @@ func (s *analyticsService) GetAccountStatusesPage(ctx context.Context, orgID uui
 	}
 
 	day := now.Format("2006-01-02")
+	result.Data = make([]models.EmailAccountStatus, len(emails))
+	g, assemblyCtx := errgroup.WithContext(ctx)
+	g.SetLimit(concurrency)
 	for i := range emails {
-		email := emails[i]
-		u := usage[email.ID]
-		if u == nil {
-			// Deleted between the page read and the usage read: report an empty
-			// day rather than drop the row or fail the whole page.
-			u = &models.AccountDailyUsage{Date: day, CampaignLimit: email.CampaignLimit, WarmupLimit: email.WarmupMax}
-		}
-		warmupHealth := s.warmupHealthFromParticipant(ctx, email.ID, healthByID[email.ID])
-		status := s.assembleAccountStatus(ctx, &email, u, errsByID[email.ID], warmupHealth, campByID[email.ID] > 0, rates, false)
-		result.Data = append(result.Data, *status)
+		g.Go(func() error {
+			if err := assemblyCtx.Err(); err != nil {
+				return err
+			}
+			email := emails[i]
+			u := usage[email.ID]
+			if u == nil {
+				// Deletion between the page and usage reads leaves an empty day, not a dropped row.
+				u = &models.AccountDailyUsage{Date: day, CampaignLimit: email.CampaignLimit, WarmupLimit: email.WarmupMax}
+			}
+			warmupHealth := s.warmupHealthFromParticipant(assemblyCtx, email.ID, healthByID[email.ID])
+			status := s.assembleAccountStatus(assemblyCtx, &email, u, errsByID[email.ID], warmupHealth, campByID[email.ID] > 0, rates, false)
+			result.Data[i] = *status
+			return assemblyCtx.Err()
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, errx.InternalError()
 	}
 
+	return result, nil
+}
+
+// GetAccountStatusDetailsPage retains the detail target without scanning partner cohorts per mailbox.
+func (s *analyticsService) GetAccountStatusDetailsPage(ctx context.Context, orgID uuid.UUID, emailIDs []uuid.UUID, cursor string, limit int32) (*models.EmailAccountStatusesResult, *errx.Error) {
+	// Residual mailbox-specific reads use four slots, never a goroutine per mailbox.
+	result, xerr := s.accountStatusesPage(ctx, orgID, emailIDs, cursor, limit, 4)
+	if xerr != nil || s.warmupRepo == nil {
+		return result, xerr
+	}
+	byPool := make(map[string][]uuid.UUID)
+	for _, status := range result.Data {
+		if w, h := status.WarmupStatus, status.WarmupHealth; w != nil && !w.Paused && w.TargetVolume > 0 && h != nil && h.PoolType != "" {
+			byPool[h.PoolType] = append(byPool[h.PoolType], status.ID)
+		}
+	}
+	for pool, ids := range byPool {
+		counts, err := s.warmupRepo.WarmupPartnerCounts(ctx, pool, ids)
+		if err != nil {
+			return nil, errx.InternalError()
+		}
+		for i := range result.Data {
+			status := &result.Data[i]
+			if reachable, ok := counts[status.ID]; ok && status.WarmupStatus != nil && reachable < status.WarmupStatus.TargetVolume {
+				w := status.WarmupStatus
+				w.PartnerLimit = &models.WarmupPartnerLimit{Reachable: reachable, RampTarget: w.TargetVolume}
+				w.TargetVolume = max(reachable, status.DailyUsage.WarmupSent)
+			}
+		}
+	}
 	return result, nil
 }
 

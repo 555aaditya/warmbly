@@ -567,12 +567,55 @@ func (s *service) ListMailboxes(ctx context.Context, inst *models.PoolLinkInstan
 		return nil, errx.InternalError()
 	}
 	out := make([]models.PoolLinkMailboxState, 0, len(rows))
-	for _, m := range rows {
-		state, xerr := s.state(ctx, inst, &m)
-		if xerr != nil {
-			continue
+	for start := 0; start < len(rows); start += config.AccountStatusLimitMax {
+		batch := rows[start:min(start+config.AccountStatusLimitMax, len(rows))]
+		ids := make([]uuid.UUID, len(batch))
+		for i, m := range batch {
+			ids[i] = m.EmailAccountID
 		}
-		out = append(out, *state)
+		accounts, xerr := s.emails.Search(ctx, inst.OrganizationID.String(), "", nil, nil, config.AccountStatusLimitMax, ids)
+		if xerr != nil {
+			return nil, xerr
+		}
+		byID := make(map[uuid.UUID]models.Email, len(accounts.Data))
+		for _, acc := range accounts.Data {
+			byID[acc.ID] = acc
+		}
+		statuses := make(map[uuid.UUID]models.EmailAccountStatus)
+		if s.analytics != nil {
+			page, xerr := s.analytics.GetAccountStatusDetailsPage(ctx, inst.OrganizationID, ids, "", config.AccountStatusLimitMax)
+			if xerr != nil {
+				return nil, xerr
+			}
+			for _, status := range page.Data {
+				statuses[status.ID] = status
+			}
+		}
+		summaries := make(map[uuid.UUID]repository.WarmupSummary)
+		if s.warmup != nil {
+			now := time.Now()
+			summaries, err = s.warmup.GetWarmupSummaries(ctx, ids, now.Add(-7*24*time.Hour), now)
+			if err != nil {
+				return nil, errx.InternalError()
+			}
+		}
+		for _, m := range batch {
+			acc, ok := byID[m.EmailAccountID]
+			if !ok {
+				return nil, errx.InternalError()
+			}
+			st := mailboxState(&acc, &m)
+			if s.analytics != nil {
+				status, ok := statuses[acc.ID]
+				if !ok {
+					return nil, errx.InternalError()
+				}
+				applyMailboxStatus(st, &status)
+			}
+			summary := summaries[acc.ID]
+			st.Sent7d, st.Replied7d, st.SpamPlaced7d = summary.Sent, summary.Replied, summary.SpamPlaced
+			out = append(out, *st)
+		}
 	}
 	return out, nil
 }
@@ -601,33 +644,14 @@ func (s *service) state(ctx context.Context, inst *models.PoolLinkInstance, m *m
 	if xerr != nil {
 		return nil, xerr
 	}
-	st := &models.PoolLinkMailboxState{
-		Participation:  &models.DiagnosticParticipation{Mode: models.TestParticipationLegacy, Send: acc.TestSendingAllowed(), Receive: acc.TestReceivingAllowed(), SharedDailyLimit: acc.SharedDailyLimit, RollingRecipientLimit: acc.RollingRecipientLimit},
-		RemoteID:       m.RemoteID,
-		EmailAccountID: acc.ID,
-		Email:          acc.Email,
-		Name:           acc.Name,
-		Provider:       acc.Provider,
-		Status:         acc.Status,
-		EnrolledAt:     m.EnrolledAt,
-		Managed:        m.Managed,
-		AuthState:      acc.AuthState,
-		Settings: models.PoolLinkWarmupSettings{
-			Base: acc.WarmupBase, Max: acc.WarmupMax, Increase: acc.WarmupIncrease, ReplyRate: acc.WarmupReplyRate,
-			StartTime: acc.WarmupStartTime, EndTime: acc.WarmupEndTime, Days: acc.WarmupDays, Timezone: acc.ClockTimezone(),
-		},
+	if acc.OrganizationID == nil || *acc.OrganizationID != inst.OrganizationID {
+		return nil, ErrMailboxNotFound
 	}
-	if acc.TestMode != nil {
-		st.Participation.Mode = *acc.TestMode
-	}
+	st := mailboxState(acc, m)
 	if s.analytics != nil {
-		// Detail carries the partner cap, so a target no partner can meet is never shown as one.
 		status, xerr := s.analytics.GetAccountStatusDetail(ctx, inst.OrganizationID, acc.ID)
 		if xerr == nil && status != nil {
-			st.Warmup = status.WarmupStatus
-			st.Health = status.WarmupHealth
-			st.Errors = status.Errors
-			st.SentToday = status.DailyUsage.WarmupSent
+			applyMailboxStatus(st, status)
 		} else if xerr != nil {
 			log.Warn().Str("account_id", acc.ID.String()).Str("error", xerr.Message).Msg("pool link: account status unavailable")
 		}
@@ -647,6 +671,36 @@ func (s *service) state(ctx context.Context, inst *models.PoolLinkInstance, m *m
 		}
 	}
 	return st, nil
+}
+
+func mailboxState(acc *models.Email, m *models.PoolLinkMailbox) *models.PoolLinkMailboxState {
+	st := &models.PoolLinkMailboxState{
+		Participation:  &models.DiagnosticParticipation{Mode: models.TestParticipationLegacy, Send: acc.TestSendingAllowed(), Receive: acc.TestReceivingAllowed(), SharedDailyLimit: acc.SharedDailyLimit, RollingRecipientLimit: acc.RollingRecipientLimit},
+		RemoteID:       m.RemoteID,
+		EmailAccountID: acc.ID,
+		Email:          acc.Email,
+		Name:           acc.Name,
+		Provider:       acc.Provider,
+		Status:         acc.Status,
+		EnrolledAt:     m.EnrolledAt,
+		Managed:        m.Managed,
+		AuthState:      acc.AuthState,
+		Settings: models.PoolLinkWarmupSettings{
+			Base: acc.WarmupBase, Max: acc.WarmupMax, Increase: acc.WarmupIncrease, ReplyRate: acc.WarmupReplyRate,
+			StartTime: acc.WarmupStartTime, EndTime: acc.WarmupEndTime, Days: acc.WarmupDays, Timezone: acc.ClockTimezone(),
+		},
+	}
+	if acc.TestMode != nil {
+		st.Participation.Mode = *acc.TestMode
+	}
+	return st
+}
+
+func applyMailboxStatus(st *models.PoolLinkMailboxState, status *models.EmailAccountStatus) {
+	st.Warmup = status.WarmupStatus
+	st.Health = status.WarmupHealth
+	st.Errors = status.Errors
+	st.SentToday = status.DailyUsage.WarmupSent
 }
 
 func (s *service) PatchMailbox(ctx context.Context, inst *models.PoolLinkInstance, remoteID uuid.UUID, patch models.PoolLinkMailboxPatch) (*models.PoolLinkMailboxState, *errx.Error) {
