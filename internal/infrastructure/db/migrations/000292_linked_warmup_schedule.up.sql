@@ -7,6 +7,8 @@ WHERE b.email_account_id = ea.id
   AND ea.organization_id = i.organization_id
   AND NOT m.managed AND i.revoked_at IS NULL
   AND b.enabled AND b.created_at = b.updated_at
+  AND b.created_at <= m.enrolled_at
+  AND b.created_at <= ea.created_at
   AND (b.daily_limit_min, b.daily_limit_max) IN ((28, 32), (30, 45))
   AND b.hourly_limit_min = 5 AND b.hourly_limit_max = 9
   AND b.gap_min_seconds = 90 AND b.gap_max_seconds = 420

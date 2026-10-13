@@ -44,7 +44,36 @@ func TestLiveMailboxBehaviorCreationRespectsGatewayWarmup(t *testing.T) {
 				if err != nil || profile == nil || profile.Enabled == linked {
 					t.Fatalf("profile = %+v, err = %v, linked = %v", profile, err, linked)
 				}
+				var createdWithMailbox bool
+				if err := f.pool.QueryRow(t.Context(), `SELECT b.created_at <= ea.created_at FROM email_account_behavior b JOIN email_accounts ea ON ea.id=b.email_account_id WHERE ea.id=$1`, a.ID).Scan(&createdWithMailbox); err != nil || !createdWithMailbox {
+					t.Fatalf("creation-time profile cannot be distinguished from a customer save: %v", err)
+				}
 			})
 		}
+	}
+}
+
+func TestLiveMailboxBehaviorFirstCustomerWriteIsNotInherited(t *testing.T) {
+	f := newTransportFixture(t)
+	repo := NewBehaviorRepository(f.pool)
+	if err := repo.DeleteBehavior(t.Context(), f.account); err != nil {
+		t.Fatal(err)
+	}
+	profile := models.DefaultSendingBehavior(f.account)
+	profile.Enabled = true
+	first, err := repo.UpsertBehavior(t.Context(), &profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.Enabled || !first.UpdatedAt.After(first.CreatedAt) {
+		t.Fatal("explicit first save looks like an inherited default")
+	}
+	profile.Enabled = false
+	next, err := repo.UpsertBehavior(t.Context(), &profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Enabled || !next.CreatedAt.Equal(first.CreatedAt) || !next.UpdatedAt.After(next.CreatedAt) {
+		t.Fatal("explicit update lost its customer-configured provenance")
 	}
 }

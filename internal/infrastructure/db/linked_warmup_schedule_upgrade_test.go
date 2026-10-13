@@ -16,8 +16,9 @@ func TestLiveLinkedWarmupScheduleUpgradePreservesExplicitProfilesAndTasks(t *tes
 	exec(`INSERT INTO pool_link_instances(id,organization_id,name,token_hash,revoked_at) VALUES($1,$2,'Revoked',$3,NOW())`, revoked, org, uuid.NewString())
 	wantCorrection := map[uuid.UUID]bool{}
 	for _, tc := range []struct {
-		name                                                        string
-		linked, managed, changed, custom, disabled, legacy, revoked bool
+		afterCreation                                                                bool
+		name                                                                         string
+		linked, managed, changed, custom, disabled, legacy, revoked, afterEnrollment bool
 	}{
 		{name: "untouched", linked: true},
 		{name: "legacy_default", linked: true, legacy: true},
@@ -27,18 +28,32 @@ func TestLiveLinkedWarmupScheduleUpgradePreservesExplicitProfilesAndTasks(t *tes
 		{name: "managed", linked: true, managed: true},
 		{name: "already_disabled", linked: true, disabled: true},
 		{name: "revoked", linked: true, revoked: true},
+		{name: "legacy_first_customer_save", linked: true, afterEnrollment: true},
+		{name: "legacy_customer_save_before_enrollment", linked: true, afterCreation: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			id := uuid.New()
 			wantCorrection[id] = tc.name == "untouched" || tc.name == "legacy_default"
-			exec(`INSERT INTO email_accounts(id,user_id,organization_id,email,name,signature_plain,signature_html,provider) VALUES($1,$2,$3,$4,'Upgrade','','','smtp_imap')`, id, user, org, id.String()+"@test.local")
-			exec(`INSERT INTO email_account_behavior(email_account_id,enabled) VALUES($1,$2)`, id, !tc.disabled)
+			if tc.afterCreation || tc.afterEnrollment {
+				exec(`INSERT INTO email_accounts(id,user_id,organization_id,email,name,signature_plain,signature_html,provider) VALUES($1,$2,$3,$4,'Upgrade','','','smtp_imap')`, id, user, org, id.String()+"@test.local")
+			} else {
+				exec(`WITH mailbox AS (
+					INSERT INTO email_accounts(id,user_id,organization_id,email,name,signature_plain,signature_html,provider)
+					VALUES($1,$2,$3,$4,'Upgrade','','','smtp_imap') RETURNING id)
+					INSERT INTO email_account_behavior(email_account_id,enabled) SELECT id,$5 FROM mailbox`, id, user, org, id.String()+"@test.local", !tc.disabled)
+			}
+			if tc.afterCreation {
+				exec(`INSERT INTO email_account_behavior(email_account_id,enabled) VALUES($1,$2)`, id, !tc.disabled)
+			}
 			if tc.linked {
 				inst := instance
 				if tc.revoked {
 					inst = revoked
 				}
 				exec(`INSERT INTO pool_link_mailboxes(instance_id,remote_id,email_account_id,managed) VALUES($1,$2,$3,$4)`, inst, uuid.New(), id, tc.managed)
+			}
+			if tc.afterEnrollment {
+				exec(`INSERT INTO email_account_behavior(email_account_id,enabled) VALUES($1,true)`, id)
 			}
 			if tc.changed {
 				exec(`UPDATE email_account_behavior SET updated_at=created_at+INTERVAL '1 second' WHERE email_account_id=$1`, id)

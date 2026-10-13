@@ -279,7 +279,7 @@ jobs:
         env:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
         run: |
-          go test -race -v -p 1 ./internal/repository -run '^TestLiveMailboxBehaviorCreationRespectsGatewayWarmup$' -count=1
+          go test -race -v -p 1 ./internal/repository -run '^TestLiveMailboxBehavior(CreationRespectsGatewayWarmup|FirstCustomerWriteIsNotInherited)$' -count=1
           go test -race -v -p 1 ./internal/infrastructure/db -run '^TestLiveLinkedWarmupScheduleUpgradePreservesExplicitProfilesAndTasks$' -count=1
 
       - name: Warmup filing provider-floor regressions (PostgreSQL)
