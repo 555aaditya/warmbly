@@ -172,7 +172,8 @@ export default function AddressesPage() {
     const cloud = useCloudPool();
     const { connected: cloudConnected, rowFor: cloudRowFor, unavailable: cloudUnavailable } = cloud;
     const [cloudDialog, setCloudDialog] = React.useState(false);
-    const authConfigLoading = useAuthConfig().isLoading;
+    const authConfig = useAuthConfig();
+    const authConfigLoading = authConfig.isLoading;
 
     // One query for the whole surface; each row reads its own advice out of the
     // index rather than asking for it.
@@ -186,6 +187,7 @@ export default function AddressesPage() {
         [emailsData.emails],
     );
     const cloudChecking = authConfigLoading || cloud.loading || cloud.refreshing;
+    const cloudRemovalPending = cloudChecking || authConfig.isError || cloud.unavailable;
     const statuses = useAccountStatuses(visibleEmailIds, {
         enabled: !cloudChecking,
         sourceRevision: cloud.observedAt,
@@ -256,7 +258,7 @@ export default function AddressesPage() {
     }, [accountStatuses]);
 
     const removeSelected = () => {
-        if (selected.length === 0 || removing) return;
+        if (selected.length === 0 || removing || cloudRemovalPending) return;
         const n = selected.length;
         // Say what it does, because none of it comes back. The revocation
         // sentence is built from the providers actually selected: claiming
@@ -614,6 +616,7 @@ export default function AddressesPage() {
                                         lastReportedIssue={lastReportedIssues.get(box.id)}
                                         statusPending={statusChecking && !statusUnavailable}
                                         cloudStatusPending={cloudChecking || cloud.unavailable || cloudStandingUnavailable}
+                                        cloudRemovalPending={cloudRemovalPending}
                                         findings={advisor.get(box.id)}
                                         canWarmup={canWarmup}
                                         cloud={cloud.connected ? cloud.rowFor(box.id) : undefined}
@@ -704,7 +707,7 @@ export default function AddressesPage() {
                         <button
                             type="button"
                             onClick={removeSelected}
-                            disabled={removing}
+                            disabled={removing || cloudRemovalPending}
                             className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded text-[12px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 transition-colors"
                         >
                             <Trash2Icon className="w-3.5 h-3.5" />
@@ -793,6 +796,7 @@ function MailboxRow({
     lastReportedIssue,
     statusPending,
     cloudStatusPending,
+    cloudRemovalPending,
     findings,
     canWarmup,
     cloud,
@@ -809,6 +813,7 @@ function MailboxRow({
     lastReportedIssue?: { status: AccountStatus; observedAt: number };
     statusPending: boolean;
     cloudStatusPending: boolean;
+    cloudRemovalPending: boolean;
     findings: AdvisorFinding[];
     canWarmup: boolean;
     cloud?: CloudLinkMailboxRow;
@@ -832,7 +837,8 @@ function MailboxRow({
     // the connection differs by provider and the copy has to differ with it:
     // Google accepts a revocation, Microsoft publishes no way for us to remove
     // one app, so promising it for Outlook would be a promise we cannot keep.
-    const askDisconnect = () =>
+    const askDisconnect = () => {
+        if (cloudRemovalPending) return;
         confirm.show(
             cloud?.managed
                 ? `Disconnect ${box.email} from this instance and stop its Cloud warmup sending and receiving? Imported mail and history on this instance are deleted. Its mailbox, sign-in and history stay in your Warmbly Cloud workspace.`
@@ -846,6 +852,7 @@ function MailboxRow({
                 }
             },
         );
+    };
 
     // Resolve the row's tag ids against the user's tag registry; cap the chips
     // so long tag lists don't crowd the email out of the cell.
@@ -1273,7 +1280,7 @@ function MailboxRow({
                                 used to exist only behind the row checkboxes and the
                                 selection bar, which nobody finds when they want to
                                 delete one thing. */}
-                            <PopoverMenuItem danger onSelect={askDisconnect} icon={<Trash2Icon className="w-3 h-3" />}>
+                            <PopoverMenuItem danger disabled={cloudRemovalPending} onSelect={askDisconnect} icon={<Trash2Icon className="w-3 h-3" />}>
                                 Disconnect mailbox
                             </PopoverMenuItem>
                         </PopoverMenuContent>

@@ -100,6 +100,7 @@ import SyncStatusCard from "./SyncStatusCard";
 import CloudWarmupCard from "./CloudWarmupCard";
 import WarmupPartnerDiversity from "./WarmupPartnerDiversity";
 import useCloudPool from "@/hooks/useCloudPool";
+import useAuthConfig from "@/lib/api/hooks/auth/useAuthConfig";
 import { Toggle } from "@/components/app/campaigns/preferences/components/CampaignPreferenceBoolBox";
 import setDirectTracking from "@/lib/api/client/app/emails/setDirectTracking";
 import useSendingBehavior from "@/lib/api/hooks/app/emails/useSendingBehavior";
@@ -2105,6 +2106,8 @@ function DisconnectCard({ mailbox, onDisconnected }: { mailbox: Inbox; onDisconn
     const confirm = useConfirm();
     const remove = useRemoveEmail(mailbox.id);
     const pool = useCloudPool();
+    const authConfig = useAuthConfig();
+    const cloudUnknown = authConfig.isLoading || authConfig.isError || pool.loading || pool.refreshing || pool.unavailable;
     const cloudManaged = pool.rowFor(mailbox.id)?.managed === true;
 
     const revocation =
@@ -2116,7 +2119,8 @@ function DisconnectCard({ mailbox, onDisconnected }: { mailbox: Inbox; onDisconn
               ? "The stored Microsoft tokens are destroyed. Microsoft has no way for us to remove the app itself, so do that in your Microsoft account privacy settings."
               : "The stored SMTP and IMAP credentials are destroyed.";
 
-    const ask = () =>
+    const ask = () => {
+        if (cloudUnknown) return;
         confirm.show(
             cloudManaged
                 ? `Disconnect ${mailbox.email} from this instance and stop its Cloud warmup sending and receiving? Imported mail and history on this instance are deleted. Its mailbox, sign-in and history stay in your Warmbly Cloud workspace.`
@@ -2132,6 +2136,7 @@ function DisconnectCard({ mailbox, onDisconnected }: { mailbox: Inbox; onDisconn
                 }
             },
         );
+    };
 
     return (
         <div className="px-5 py-5 space-y-3">
@@ -2143,19 +2148,21 @@ function DisconnectCard({ mailbox, onDisconnected }: { mailbox: Inbox; onDisconn
                         Disconnect this mailbox
                     </div>
                     <div className="text-[11.5px] text-red-700/70 leading-tight mt-0.5">
-                        {cloudManaged
-                            ? "Deletes its imported mail, warmup history and scheduled sends on this instance."
-                            : "Deletes its imported mail, warmup history, credentials and any scheduled send."}
-                        {" "}
-                        {revocation}
-                        {" "}
-                        There is no recovery window, so export the workspace first if you want a copy.
+                        {cloudUnknown ? "Checking Cloud mailbox ownership. Retry when Cloud status is available." : <>
+                            {cloudManaged
+                                ? "Deletes its imported mail, warmup history and scheduled sends on this instance."
+                                : "Deletes its imported mail, warmup history, credentials and any scheduled send."}
+                            {" "}
+                            {revocation}
+                            {" "}
+                            There is no recovery window, so export the workspace first if you want a copy.
+                        </>}
                     </div>
                 </div>
                 <button
                     type="button"
                     onClick={ask}
-                    disabled={remove.isPending}
+                    disabled={remove.isPending || cloudUnknown}
                     className="self-start sm:ml-auto h-7 px-2.5 rounded-md border border-red-300 hover:border-red-400 text-red-700 hover:text-red-800 hover:bg-red-100/60 text-[12px] font-medium transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                     {remove.isPending ? "Disconnecting…" : "Disconnect…"}
