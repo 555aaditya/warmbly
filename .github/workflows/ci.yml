@@ -239,6 +239,25 @@ jobs:
           go test -race ./internal/tasks -run '^Test(LiveWarmup(SafetyHoldReschedules|Recovery|TaskDoesNotApplyResults|DispatchDefersInvalidHours)|WarmupSenderDistinguishes)' -count=1
           go test -race ./internal/app/consumer -run '^TestLiveStoredSendResult' -count=1
 
+      - name: Warmup database query-pressure regressions (PostgreSQL)
+        env:
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+        run: |
+          set -o pipefail
+          go test -race -v ./internal/repository -run '^TestLive(WarmupDispatchUsagePreservesBudgetAndLastSend|WarmupDispatchQueryPlansUseMailboxAndMessageIndexes|OwnConversationIgnoresEmptyIDsWithoutLosingTaskOrThreadOwnership|ReplyInboxOwns)' -count=1 | tee warmup-query-pressure.log
+          if grep -q -- '--- SKIP:' warmup-query-pressure.log; then
+            echo "Warmup database query-pressure regressions must execute without skips"
+            exit 1
+          fi
+          for test in TestLiveWarmupDispatchUsagePreservesBudgetAndLastSend \
+            TestLiveWarmupDispatchQueryPlansUseMailboxAndMessageIndexes \
+            TestLiveOwnConversationIgnoresEmptyIDsWithoutLosingTaskOrThreadOwnership; do
+            grep -q -- "--- PASS: $test " warmup-query-pressure.log || { echo "Missing regression: $test"; exit 1; }
+          done
+          go test -race -v ./internal/infrastructure/db -run '^TestLiveWarmupDispatchUsageIndexUpgradePreservesEvidenceAndHolds$' -count=1 | tee warmup-query-upgrade.log
+          if grep -q -- '--- SKIP:' warmup-query-upgrade.log; then exit 1; fi
+          grep -q -- '--- PASS: TestLiveWarmupDispatchUsageIndexUpgradePreservesEvidenceAndHolds ' warmup-query-upgrade.log
+
       - name: Monitoring database observation regressions (PostgreSQL)
         env:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable

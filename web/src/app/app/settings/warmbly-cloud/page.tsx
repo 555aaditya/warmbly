@@ -32,7 +32,7 @@ export default function WarmblyCloudSettingsPage() {
     if (authConfig.data && !authConfig.data.self_hosted) {
         return (
             <SectionShell title="Linked instances" description="Self-hosted Warmbly instances that warm their mailboxes in this workspace's pool.">
-                <Section eyebrow="Instances" description="Each instance enrolls its own mailboxes. Unlinking removes them from the pool.">
+                <Section eyebrow="Instances" description="Each instance enrolls its own mailboxes. Unlinking releases its links; Cloud-managed mailboxes keep their existing warmup settings.">
                     <LinkedInstances />
                 </Section>
             </SectionShell>

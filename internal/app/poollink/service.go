@@ -420,7 +420,7 @@ func (s *service) RevokeInstance(ctx context.Context, orgID, instanceID uuid.UUI
 		return errx.InternalError()
 	}
 	for _, m := range mailboxes {
-		if xerr := s.Unenroll(ctx, inst, m.RemoteID); xerr != nil {
+		if xerr := s.unenroll(ctx, inst, m.RemoteID, false); xerr != nil {
 			log.Warn().Str("account_id", m.EmailAccountID.String()).Msg("pool link: mailbox removal failed during revoke; continuing")
 		}
 	}
@@ -733,8 +733,12 @@ func (s *service) PatchMailbox(ctx context.Context, inst *models.PoolLinkInstanc
 }
 
 func (s *service) Unenroll(ctx context.Context, inst *models.PoolLinkInstance, remoteID uuid.UUID) *errx.Error {
+	return s.unenroll(ctx, inst, remoteID, true)
+}
+
+func (s *service) unenroll(ctx context.Context, inst *models.PoolLinkInstance, remoteID uuid.UUID, stopManaged bool) *errx.Error {
 	if _, ok := s.repo.(repository.PoolLinkManagedRepository); ok && !managedOperationLocked(ctx) {
-		return s.withManagedOperationLock(ctx, inst.ID, func(ctx context.Context) *errx.Error { return s.Unenroll(ctx, inst, remoteID) })
+		return s.withManagedOperationLock(ctx, inst.ID, func(ctx context.Context) *errx.Error { return s.unenroll(ctx, inst, remoteID, stopManaged) })
 	}
 	if r, ok := s.repo.(repository.PoolLinkManagedRepository); ok {
 		if err := r.RevokeManagedOperations(ctx, inst.ID, &remoteID); err != nil {
@@ -748,8 +752,12 @@ func (s *service) Unenroll(ctx context.Context, inst *models.PoolLinkInstance, r
 	if m == nil {
 		return ErrMailboxNotFound
 	}
-	// A managed mailbox belongs to the workspace; only the link goes.
-	if !m.Managed {
+	// Individual removal stops Cloud participation; an instance disconnect only releases its mirrors.
+	if m.Managed && stopManaged {
+		if _, xerr := s.emailSvc.SetWarmupLifecycle(ctx, inst.OrganizationID.String(), m.EmailAccountID.String(), "stop"); xerr != nil && xerr != errx.ErrNotFound {
+			return xerr
+		}
+	} else if !m.Managed {
 		if xerr := s.emailSvc.Delete(ctx, inst.OrganizationID.String(), m.EmailAccountID.String()); xerr != nil && xerr != errx.ErrNotFound {
 			return xerr
 		}

@@ -91,6 +91,33 @@ func TestLiveReplyInboxOwnsNothingWithoutTheHeader(t *testing.T) {
 	}
 }
 
+func TestLiveOwnConversationIgnoresEmptyIDsWithoutLosingTaskOrThreadOwnership(t *testing.T) {
+	handle, _ := liveContactDB(t)
+	f := newReplyInboxFixture(t, func(inbox string) string { return inbox })
+	repo := NewEmailSyncStateRepository(handle)
+	for _, mailbox := range []uuid.UUID{f.mailbox, f.inbox} {
+		own, err := repo.IsOwnConversation(t.Context(), f.owner, mailbox, []string{"", f.messageID}, "")
+		if err != nil || !own {
+			t.Fatalf("known send at %s: own=%v error=%v", mailbox, own, err)
+		}
+		own, err = repo.IsOwnConversation(t.Context(), f.owner, mailbox, []string{"", "missing@test.local"}, "")
+		if err != nil || own {
+			t.Fatalf("unknown send at %s: own=%v error=%v", mailbox, own, err)
+		}
+	}
+	if _, err := f.pool.Exec(t.Context(), `INSERT INTO unibox_emails(id,user_id,email_id,message_id,thread_id)
+		VALUES($1,$2,$3,'provider-message','provider-thread')`, uuid.New(), f.owner, f.inbox); err != nil {
+		t.Fatal(err)
+	}
+	own, err := repo.IsOwnConversation(t.Context(), f.owner, f.inbox, []string{""}, "provider-thread")
+	if err != nil || !own {
+		t.Fatalf("provider thread: own=%v error=%v", own, err)
+	}
+	if own, err = repo.IsOwnConversation(t.Context(), f.owner, f.mailbox, []string{""}, "provider-thread"); err != nil || own {
+		t.Fatalf("another mailbox's provider thread: own=%v error=%v", own, err)
+	}
+}
+
 func TestLiveCopiedReplyAtTheReplyInboxFindsTheLead(t *testing.T) {
 	_, pool := liveContactDB(t)
 	f := newReplyInboxFixture(t, func(inbox string) string { return inbox })

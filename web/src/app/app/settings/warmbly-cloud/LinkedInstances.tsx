@@ -57,7 +57,7 @@ export default function LinkedInstances() {
                                 <button
                                     type="button"
                                     onClick={() =>
-                                        confirm.show(`Unlink ${inst.name}? Its ${inst.mailbox_count} enrolled mailboxes stop warming and are removed.`, async () => {
+                                        confirm.show(`Unlink ${inst.name}? Its ${inst.mailbox_count} mailbox links are released. SMTP/IMAP Cloud enrollments are deleted. Cloud-managed mailboxes stay in your Cloud workspace with their existing warmup settings.`, async () => {
                                             try {
                                                 await revoke.mutateAsync(inst.id);
                                                 toast.success("Instance unlinked");

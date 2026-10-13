@@ -157,6 +157,10 @@ Once linked, the **Mailboxes** page marks every enrolled mailbox with a blue **C
 
 Pause and resume per mailbox from the same row. Warmup settings (start volume, daily increase, ceiling, reply rate, window, days) are taken from the mailbox's own settings on your instance at enrollment time.
 
+Removing one Cloud-managed mailbox, through its Cloud warmup controls or **Disconnect mailbox**, stops both warmup sending and receiving on Cloud before releasing its link. Cloud keeps the mailbox, sign-in and history; the instance removes its mirror. If the stop fails, removal fails and keeps the link for retry. If releasing the link fails after the stop, warmup remains stopped while you retry. This also applies to existing managed enrollments and older self-hosted clients once Cloud is updated, without disconnecting or re-enrolling other mailboxes. No blanket change is made to disconnected or idle instances, whose Cloud mailboxes may still be intentionally in use. On an older Cloud, removal may only release the mirror; stop participation directly on Cloud until it is updated.
+
+Disconnecting an entire instance is not an individual mailbox stop. Cloud-managed mailboxes retain their existing warmup settings and can continue independently on Cloud. SMTP/IMAP enrollments still delete their Cloud credential and history on removal. Pausing warmup only stops sending; use **Stop all diagnostic participation** to stop receiving too. Sends already accepted by a provider cannot be recalled.
+
 ### When the count stays at zero
 
 Warmbly Cloud sends the warmup mail itself, connecting to your mail server's SMTP from its own network rather than from your instance. A server that accepts only your instance's address, an SMTP host that resolves to a private or internal address, or a port your host blocks from outside will refuse it while your own sending keeps working. When that happens the warmup column turns red with a warning icon, and the mailbox's Warmup tab shows the server's own answer (for example a refused connection or a rejected login) until a send goes through again. Fix the SMTP host, port or allowlist on your mail server; nothing needs re-enrolling.
