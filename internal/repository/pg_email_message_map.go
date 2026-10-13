@@ -77,6 +77,32 @@ func (r *pgEmailMessageMapRepository) Get(ctx context.Context, userID, emailID u
 	}, nil
 }
 
+func (r *pgEmailMessageMapRepository) GetMany(ctx context.Context, userID, emailID uuid.UUID, messageIDs []string) (map[string]*EmailMessageData, error) {
+	if len(messageIDs) > EmailMessageMapBatchSize {
+		return nil, fmt.Errorf("email_message_map: batch exceeds %d messages", EmailMessageMapBatchSize)
+	}
+	result := make(map[string]*EmailMessageData)
+	if len(messageIDs) == 0 {
+		return result, nil
+	}
+	rows, err := r.db.Query(ctx, `SELECT message_id, id, thread_id FROM email_message_map
+		WHERE user_id=$1 AND email_id=$2 AND message_id=ANY($3::text[])`, userID, emailID, messageIDs)
+	if err != nil {
+		return nil, fmt.Errorf("email_message_map: get many: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		mapping := &EmailMessageData{UserID: userID.String(), EmailID: emailID.String()}
+		var id uuid.UUID
+		if err := rows.Scan(&mapping.MessageID, &id, &mapping.ThreadID); err != nil {
+			return nil, err
+		}
+		mapping.ID = id.String()
+		result[mapping.MessageID] = mapping
+	}
+	return result, rows.Err()
+}
+
 func (r *pgEmailMessageMapRepository) Del(ctx context.Context, userID, emailID uuid.UUID, messageID string, id uuid.UUID) error {
 	// Legacy publication rollback must not remove an already admitted arrival.
 	const q = `DELETE FROM email_message_map m WHERE user_id=$1 AND email_id=$2 AND message_id=$3

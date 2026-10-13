@@ -80,6 +80,40 @@ type emailMessageMapPayload struct {
 	ThreadID  string `json:"thread_id"`
 }
 
+func (h *Handler) InternalLookupEmailMessageMaps(c *gin.Context) {
+	var payload struct {
+		UserID     string   `json:"user_id"`
+		EmailID    string   `json:"email_id"`
+		MessageIDs []string `json:"message_ids"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)).Decode(&payload); err != nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	userID, userErr := uuid.Parse(payload.UserID)
+	emailID, emailErr := uuid.Parse(payload.EmailID)
+	if userErr != nil || emailErr != nil || userID == uuid.Nil || emailID == uuid.Nil || len(payload.MessageIDs) > repository.EmailMessageMapBatchSize {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	for _, id := range payload.MessageIDs {
+		if id == "" {
+			c.Status(http.StatusBadRequest)
+			return
+		}
+	}
+	mappings, err := repository.GetEmailMessageMaps(c.Request.Context(), h.EmailMessageMap, userID, emailID, payload.MessageIDs)
+	if err != nil {
+		errx.JSON(c, errx.New(errx.Internal, "message batch lookup failed"))
+		return
+	}
+	items := make([]emailMessageMapPayload, 0, len(mappings))
+	for _, mapping := range mappings {
+		items = append(items, emailMessageMapPayload(*mapping))
+	}
+	c.JSON(http.StatusOK, gin.H{"mappings": items})
+}
+
 func (h *Handler) InternalPutEmailMessageMap(c *gin.Context) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {

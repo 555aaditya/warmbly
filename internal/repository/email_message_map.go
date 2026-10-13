@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,6 +22,54 @@ type EmailMessageMapRepository interface {
 	Add(ctx context.Context, data EmailMessageData) error
 	Get(ctx context.Context, userID, emailID uuid.UUID, messageID string) (*EmailMessageData, error)
 	Del(ctx context.Context, userID, emailID uuid.UUID, messageID string, id uuid.UUID) error
+}
+
+const EmailMessageMapBatchSize = 200
+
+var ErrMessageMapBatchUnsupported = errors.New("batch message lookup unavailable")
+
+type EmailMessageMapBatchRepository interface {
+	GetMany(context.Context, uuid.UUID, uuid.UUID, []string) (map[string]*EmailMessageData, error)
+}
+
+func GetEmailMessageMaps(ctx context.Context, repo EmailMessageMapRepository, userID, emailID uuid.UUID, messageIDs []string) (map[string]*EmailMessageData, error) {
+	result := make(map[string]*EmailMessageData, len(messageIDs))
+	ids := make([]string, 0, len(messageIDs))
+	seen := make(map[string]bool, len(messageIDs))
+	for _, id := range messageIDs {
+		if id == "" {
+			return nil, fmt.Errorf("email_message_map: empty message_id")
+		}
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	for lo := 0; lo < len(ids); lo += EmailMessageMapBatchSize {
+		batch := ids[lo:min(lo+EmailMessageMapBatchSize, len(ids))]
+		if bulk, ok := repo.(EmailMessageMapBatchRepository); ok {
+			mappings, err := bulk.GetMany(ctx, userID, emailID, batch)
+			if err == nil {
+				for id, mapping := range mappings {
+					result[id] = mapping
+				}
+				continue
+			}
+			if !errors.Is(err, ErrMessageMapBatchUnsupported) {
+				return nil, err
+			}
+		}
+		for _, id := range batch {
+			mapping, err := repo.Get(ctx, userID, emailID, id)
+			if err != nil {
+				return nil, err
+			}
+			if mapping != nil {
+				result[id] = mapping
+			}
+		}
+	}
+	return result, nil
 }
 
 var ErrArrivalOutboxUnsupported = errors.New("durable arrival admission unavailable; upgrade backend and consumer first")
