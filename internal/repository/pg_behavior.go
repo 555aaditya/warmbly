@@ -109,6 +109,7 @@ func (r *behaviorRepository) GetBehaviors(ctx context.Context, accountIDs []uuid
 }
 
 func (r *behaviorRepository) UpsertBehavior(ctx context.Context, b *models.SendingBehavior) (*models.SendingBehavior, error) {
+	// A first customer save must be distinguishable from an inherited profile.
 	query := `
 		INSERT INTO email_account_behavior (
 			email_account_id, enabled,
@@ -117,8 +118,8 @@ func (r *behaviorRepository) UpsertBehavior(ctx context.Context, b *models.Sendi
 			gap_min_seconds, gap_max_seconds,
 			work_start_min, work_start_max, work_end_min, work_end_max,
 			lunch_enabled, lunch_earliest, lunch_latest, lunch_min_minutes, lunch_max_minutes,
-			weekdays
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+			weekdays, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,now(),now()+INTERVAL '1 microsecond')
 		ON CONFLICT (email_account_id) DO UPDATE SET
 			enabled = EXCLUDED.enabled,
 			daily_limit_min = EXCLUDED.daily_limit_min,
@@ -137,7 +138,7 @@ func (r *behaviorRepository) UpsertBehavior(ctx context.Context, b *models.Sendi
 			lunch_min_minutes = EXCLUDED.lunch_min_minutes,
 			lunch_max_minutes = EXCLUDED.lunch_max_minutes,
 			weekdays = EXCLUDED.weekdays,
-			updated_at = now()
+			updated_at = GREATEST(now(), email_account_behavior.created_at+INTERVAL '1 microsecond')
 		RETURNING ` + behaviorColumns
 
 	return scanBehavior(r.db.QueryRow(ctx, query,

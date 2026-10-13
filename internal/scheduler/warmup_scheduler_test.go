@@ -5,10 +5,31 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/warmbly/warmbly/internal/app/behavior"
 	"github.com/warmbly/warmbly/internal/app/warmupramp"
 	"github.com/warmbly/warmbly/internal/models"
 )
+
+func TestWarmupWindowRespectsGatewaySundayWithoutCloudWorkday(t *testing.T) {
+	loc, err := time.LoadLocation("America/Phoenix")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.October, 11, 17, 40, 0, 0, time.UTC)
+	a := &models.Email{ID: uuid.New(), Timezone: loc.String(), WarmupStartTime: "06:00", WarmupEndTime: "18:00", WarmupDays: 127}
+	profile := models.DefaultSendingBehavior(a.ID)
+	at, err := warmupDispatchWindow(a, behavior.NewStandalone(profile, loc), now)
+	if err != nil || !at.Equal(now) {
+		t.Fatalf("gateway Sunday was closed: at=%v err=%v", at, err)
+	}
+	profile.Enabled = true
+	at, err = warmupDispatchWindow(a, behavior.NewStandalone(profile, loc), now)
+	if err != nil || at.In(loc).Weekday() != time.Monday || !at.After(now) {
+		t.Fatalf("explicit Cloud workday not preserved: at=%v err=%v", at, err)
+	}
+}
 
 func TestWarmupDispatchWindowClassifiesInvalidHoursWithoutOpeningThem(t *testing.T) {
 	now := time.Date(2026, time.October, 10, 12, 0, 0, 0, time.UTC)

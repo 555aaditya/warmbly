@@ -478,13 +478,14 @@ func (s *service) Enroll(ctx context.Context, inst *models.PoolLinkInstance, req
 			return nil, ErrBadCredential
 		}
 		acc, xerr = s.emails.NewOauthAccount(ctx, userID, models.NewOauthAccount{
-			OrganizationID: &orgID,
-			Provider:       req.Provider,
-			Name:           name,
-			Email:          strings.TrimSpace(req.Email),
-			AccessToken:    req.OAuth.AccessToken,
-			RefreshToken:   req.OAuth.RefreshToken,
-			ExpiresAt:      req.OAuth.ExpiresAt,
+			OrganizationID:         &orgID,
+			DisableSendingBehavior: true,
+			Provider:               req.Provider,
+			Name:                   name,
+			Email:                  strings.TrimSpace(req.Email),
+			AccessToken:            req.OAuth.AccessToken,
+			RefreshToken:           req.OAuth.RefreshToken,
+			ExpiresAt:              req.OAuth.ExpiresAt,
 		})
 	case models.InboxProviderSMTPIMAP:
 		if req.SMTPIMAP == nil || req.SMTPIMAP.SMTP == nil || req.SMTPIMAP.IMAP == nil {
@@ -494,11 +495,12 @@ func (s *service) Enroll(ctx context.Context, inst *models.PoolLinkInstance, req
 			return nil, xerr
 		}
 		acc, xerr = s.emails.NewSMTPIMAPAccount(ctx, userID, models.NewSMTPIMAPAccount{
-			OrganizationID: &orgID,
-			Name:           name,
-			Email:          strings.TrimSpace(req.Email),
-			SMTP:           req.SMTPIMAP.SMTP,
-			IMAP:           req.SMTPIMAP.IMAP,
+			OrganizationID:         &orgID,
+			DisableSendingBehavior: true,
+			Name:                   name,
+			Email:                  strings.TrimSpace(req.Email),
+			SMTP:                   req.SMTPIMAP.SMTP,
+			IMAP:                   req.SMTPIMAP.IMAP,
 		})
 	default:
 		return nil, ErrBadCredential
