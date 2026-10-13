@@ -546,8 +546,9 @@ type Oauth2SmtpImap struct {
 }
 
 type NewOauthAccount struct {
-	ID             uuid.UUID `json:"-"`
-	OrganizationID *uuid.UUID
+	ID                     uuid.UUID `json:"-"`
+	OrganizationID         *uuid.UUID
+	DisableSendingBehavior bool `json:"-"`
 	// Allowance, when set, is enforced again inside the insert transaction
 	// under the organization's mailbox lock, so concurrent connects cannot
 	// both take the last slot.
@@ -609,7 +610,8 @@ func (r EmailRef) Movable(provider InboxProvider) bool {
 }
 
 type NewSMTPIMAPAccount struct {
-	OrganizationID *uuid.UUID
+	OrganizationID         *uuid.UUID
+	DisableSendingBehavior bool `json:"-"`
 	// Allowance: see NewOauthAccount.
 	Allowance *MailboxAllowance
 	Name      string

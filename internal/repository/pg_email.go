@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -343,9 +344,9 @@ func (r *emailRepository) FindManyInOrganization(ctx context.Context, orgID uuid
 	return out, nil
 }
 
-func withNewMailboxBehavior(query string) string {
+func withNewMailboxBehavior(query string, enabled bool) string {
 	return `WITH mailbox AS (` + query + ` RETURNING id)
-	 INSERT INTO email_account_behavior(email_account_id,enabled) SELECT id,true FROM mailbox`
+	 INSERT INTO email_account_behavior(email_account_id,enabled) SELECT id,` + strconv.FormatBool(enabled) + ` FROM mailbox`
 }
 
 func (r *emailRepository) NewDelegatedAccount(ctx context.Context, userID string, data models.NewDelegatedAccount) (*models.Email, *errx.Error) {
@@ -370,7 +371,7 @@ func (r *emailRepository) NewDelegatedAccount(ctx context.Context, userID string
 	query := withNewMailboxBehavior(`
 		INSERT INTO email_accounts (id, user_id, organization_id, email, name, provider, signature_plain, signature_html,
 		  tracking_domain, last_synced_at, created_at, updated_at, warmup_tag, mail_host, auth_method, domain_grant_id, delegated_subject)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '', $9, $9, $9, '', $10, $11, $12, $13)`)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '', $9, $9, $9, '', $10, $11, $12, $13)`, true)
 	if _, err := tx.Exec(ctx, query, id, userID, data.OrganizationID, data.Email, data.Name, data.Provider,
 		utils.GetSignaturePlain(data.Name), utils.GetSignatureHTML(data.Name), t,
 		data.MailHost, models.MailAuthDelegated, data.GrantID, data.Subject); err != nil {
@@ -897,7 +898,7 @@ func (r *emailRepository) NewOauthAccount(ctx context.Context, userID string, da
 	query := withNewMailboxBehavior(`
 		INSERT INTO email_accounts (id, user_id, organization_id, email, name, provider, signature_plain, signature_html, tracking_domain, last_synced_at, created_at, updated_at, warmup_tag, mail_host, auth_method)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $10, $11, $12, $13)
-	`)
+	`, !data.DisableSendingBehavior)
 
 	params := []any{
 		id,
@@ -1003,7 +1004,7 @@ func (r *emailRepository) NewManagedAccount(ctx context.Context, userID string, 
 	query := withNewMailboxBehavior(`
 		INSERT INTO email_accounts (id, user_id, organization_id, email, name, provider, signature_plain, signature_html, tracking_domain, last_synced_at, created_at, updated_at, warmup_tag, mail_host, auth_method)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $10, $11, $12, $13)
-	`)
+	`, true)
 	if _, err := r.DB.Exec(ctx, query, id, userID, data.OrganizationID, data.Email, data.Name, data.Provider, sigplain, sightml, "", t, "", data.MailHost, models.MailAuthOAuth); err != nil {
 		db.CaptureError(err, query, nil, "exec")
 		return nil, errx.InternalError()
@@ -1039,7 +1040,7 @@ func (r *emailRepository) NewSMTPIMAPAccount(ctx context.Context, userID string,
 	query := withNewMailboxBehavior(`
 		INSERT INTO email_accounts (id, user_id, organization_id, email, name, provider, signature_plain, signature_html, tracking_domain, last_synced_at, updated_at, created_at, warmup_tag, mail_host, auth_method)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $10, $11, $12, $13)
-	`)
+	`, !data.DisableSendingBehavior)
 	params := []any{
 		id,
 		userID,
