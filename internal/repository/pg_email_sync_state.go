@@ -173,13 +173,13 @@ func (r *pgEmailSyncStateRepository) IsOwnConversation(ctx context.Context, user
 	const q = `
 		SELECT EXISTS (
 			SELECT 1 FROM tasks
-			WHERE email_account_id = $2 AND cardinality($3::text[]) > 0 AND message_id = ANY($3)
+			WHERE email_account_id = $2 AND cardinality($3::text[]) > 0 AND message_id <> '' AND message_id = ANY($3)
 		) OR EXISTS (
 			SELECT 1
 			FROM tasks t
 			JOIN email_accounts sender ON sender.id = t.email_account_id
 			JOIN email_accounts here ON here.id = $2 AND here.organization_id = sender.organization_id
-			WHERE cardinality($3::text[]) > 0 AND t.message_id = ANY($3)
+			WHERE cardinality($3::text[]) > 0 AND t.message_id <> '' AND t.message_id = ANY($3)
 			  AND t.reply_to <> ''
 			  AND lower(t.reply_to) IN (lower(here.email), lower(COALESCE(NULLIF(here.send_as_email, ''), here.email)))
 		) OR EXISTS (

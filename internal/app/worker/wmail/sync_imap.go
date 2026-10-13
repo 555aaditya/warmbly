@@ -658,17 +658,25 @@ func (w *WMail) imapReconcileDrafts(ctx context.Context, box *models.Mailbox, to
 // message in the batch was stored.
 func (w *WMail) imapApply(ctx context.Context, fetched []*imap.Fetched, backfill bool, stats *tickStats, recovery *imapFolderRecovery) (bool, *errx.MailError) {
 	sort.Slice(fetched, func(i, j int) bool { return fetched[i].Email.UID > fetched[j].Email.UID })
+	if ctx.Err() != nil || stats.aborted {
+		return false, nil
+	}
+	messageIDs := make([]string, 0, len(fetched))
+	for _, f := range fetched {
+		w.ensureMessageKey(f.Email)
+		messageIDs = append(messageIDs, f.Email.MessageID)
+	}
+	mappings, lookupErr := repository.GetEmailMessageMaps(ctx, w.EmailMessageMapRepository, w.UserID, w.ID, messageIDs)
+	if lookupErr != nil {
+		return false, w.controlPlaneError(lookupErr, stats)
+	}
 
 	var fresh []*imap.Fetched
 	for _, f := range fetched {
 		if ctx.Err() != nil || stats.aborted {
 			return false, nil
 		}
-		w.ensureMessageKey(f.Email)
-		internal, err := w.EmailMessageMapRepository.Get(ctx, w.UserID, w.ID, f.Email.MessageID)
-		if err != nil {
-			return false, w.controlPlaneError(err, stats)
-		}
+		internal := mappings[f.Email.MessageID]
 		if internal == nil {
 			if recovery != nil && recovery.KnownOnly {
 				w.imapImportCursor(w.SmtpImapData.folderPath, f.Email.UID, false, recovery)

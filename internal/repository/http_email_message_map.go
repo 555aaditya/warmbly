@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,9 +28,10 @@ import (
 //
 // Auth: Authorization: Bearer <config.NodeAPIToken()>.
 type httpEmailMessageMapRepository struct {
-	baseURL string
-	token   string
-	client  *http.Client
+	baseURL               string
+	token                 string
+	client                *http.Client
+	batchUnsupportedUntil atomic.Int64
 }
 
 // NewHTTPEmailMessageMapRepository returns the worker-side implementation.
@@ -163,6 +165,64 @@ func (r *httpEmailMessageMapRepository) Get(ctx context.Context, userID, emailID
 	default:
 		return nil, &ControlPlaneHTTPError{Status: resp.StatusCode}
 	}
+}
+
+func (r *httpEmailMessageMapRepository) GetMany(ctx context.Context, userID, emailID uuid.UUID, messageIDs []string) (map[string]*EmailMessageData, error) {
+	if len(messageIDs) > EmailMessageMapBatchSize {
+		return nil, fmt.Errorf("email_message_map.http: batch exceeds %d messages", EmailMessageMapBatchSize)
+	}
+	if time.Now().Unix() < r.batchUnsupportedUntil.Load() {
+		return nil, ErrMessageMapBatchUnsupported
+	}
+	body, err := json.Marshal(struct {
+		UserID     string   `json:"user_id"`
+		EmailID    string   `json:"email_id"`
+		MessageIDs []string `json:"message_ids"`
+	}{userID.String(), emailID.String(), messageIDs})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.endpoint()+"/lookup", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	r.authed(req)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("email_message_map.http: get many: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+		r.batchUnsupportedUntil.Store(time.Now().Add(10 * time.Minute).Unix())
+		return nil, ErrMessageMapBatchUnsupported
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, &ControlPlaneHTTPError{Status: resp.StatusCode}
+	}
+	var payload struct {
+		Mappings []emailMessageMapPayload `json:"mappings"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("email_message_map.http: decode batch: %w", err)
+	}
+	if payload.Mappings == nil {
+		return nil, errors.New("email_message_map.http: missing batch mappings")
+	}
+	wanted := make(map[string]bool, len(messageIDs))
+	for _, id := range messageIDs {
+		wanted[id] = true
+	}
+	result := make(map[string]*EmailMessageData, len(payload.Mappings))
+	for _, p := range payload.Mappings {
+		id, err := uuid.Parse(p.ID)
+		if err != nil || id == uuid.Nil || p.UserID != userID.String() || p.EmailID != emailID.String() || !wanted[p.MessageID] || result[p.MessageID] != nil {
+			return nil, errors.New("email_message_map.http: invalid batch mapping")
+		}
+		mapping := EmailMessageData(p)
+		result[p.MessageID] = &mapping
+	}
+	return result, nil
 }
 
 func (r *httpEmailMessageMapRepository) Del(ctx context.Context, userID, emailID uuid.UUID, messageID string, id uuid.UUID) error {
