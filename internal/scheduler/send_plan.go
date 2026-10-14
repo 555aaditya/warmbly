@@ -239,7 +239,7 @@ func (s *schedulerService) planMailbox(ctx context.Context, pass *campaignPass, 
 	} else if acct.Timezone != "" && acct.Timezone != pass.campaign.ClockTimezone() {
 		// The 8am-8pm band in the mailbox's own timezone, both ends: the
 		// placer moves any send past 8pm to the next morning.
-		loc := loadLocation(acct.Timezone)
+		loc := pass.location(acct.Timezone)
 		local := now.In(loc)
 		if h := local.Hour(); h < 8 || h >= 20 {
 			open := businessHoursReopen(now, loc)

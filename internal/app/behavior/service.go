@@ -256,16 +256,23 @@ func (s *service) ResolveMany(ctx context.Context, accounts []models.Email) map[
 		stored = map[uuid.UUID]models.SendingBehavior{}
 	}
 
+	locations := make(map[string]*time.Location)
 	for _, a := range accounts {
+		zone := a.ClockTimezone()
+		loc, ok := locations[zone]
+		if !ok {
+			loc = loadLocation(zone)
+			locations[zone] = loc
+		}
 		b, ok := stored[a.ID]
 		if !ok {
 			b = models.DefaultSendingBehavior(a.ID)
 		}
-		b.Timezone = a.ClockTimezone()
+		b.Timezone = zone
 		out[a.ID] = Resolved{
 			Enabled:   b.Enabled,
 			Behavior:  b,
-			Loc:       loadLocation(a.ClockTimezone()),
+			Loc:       loc,
 			accountID: a.ID,
 			svc:       s,
 			ctx:       ctx,
