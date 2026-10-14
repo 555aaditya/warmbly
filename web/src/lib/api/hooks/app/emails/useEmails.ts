@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { infiniteQueryOptions, useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
 import type GetEmails from "@/lib/api/models/app/emails/GetEmails";
 import getEmails from "@/lib/api/client/app/emails/getEmails";
@@ -42,7 +43,7 @@ export default function useEmails({ query, tag, limit = EMAILS_PAGE_LIMIT, enabl
     });
 
     const rest = useAllPages(queryResult, enabled);
-    const emails = queryResult.data?.pages.flatMap((p) => p.data) ?? [];
+    const emails = useMemo(() => queryResult.data?.pages.flatMap((p) => p.data) ?? [], [queryResult.data]);
 
     return {
         ...queryResult,

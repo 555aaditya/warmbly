@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { infiniteQueryOptions, useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
 import type SearchDeals from "@/lib/api/models/app/crm/SearchDeals";
 import type DealsSearchResult from "@/lib/api/models/app/crm/DealsSearchResult";
@@ -35,9 +36,12 @@ export default function useSearchDeals({ filters, limit = 50, enabled = true }: 
         enabled,
     });
 
-    const deals = queryResult.data?.pages
-        .flatMap((p) => p.data ?? [])
-        .filter((d): d is NonNullable<typeof d> => d != null);
+    const deals = useMemo(
+        () => queryResult.data?.pages
+            .flatMap((p) => p.data ?? [])
+            .filter((d): d is NonNullable<typeof d> => d != null),
+        [queryResult.data],
+    );
 
     const total = queryResult.data?.pages[0]?.pagination.total ?? 0;
 
