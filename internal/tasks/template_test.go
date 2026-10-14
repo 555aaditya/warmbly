@@ -9,6 +9,45 @@ import (
 	"github.com/warmbly/warmbly/internal/models"
 )
 
+func TestCompiledTemplateCachesRawSource(t *testing.T) {
+	for _, source := range []string{
+		`{{.unique-job title}}`,
+		`{{if .unique-job title}}broken {{.FirstName}}`,
+	} {
+		first := compiledTemplate(source)
+		cached, ok := tmplCache.Load(source)
+		if !ok || cached != first || compiledTemplate(source) != first {
+			t.Fatalf("raw source was not cached: %q", source)
+		}
+		for _, value := range []string{"Founder", "Engineer"} {
+			contact := models.Contact{FirstName: "Alex", CustomFields: map[string]string{"unique-job title": value}}
+			want := value
+			if first == nil {
+				want = "{{if .unique-job title}}broken Alex"
+			}
+			if got := RenderTemplate(source, contact); got != want {
+				t.Fatalf("got %q, want %q", got, want)
+			}
+		}
+	}
+}
+
+func TestRenderTemplateCachedConcurrent(t *testing.T) {
+	source := `Hello {{.FirstName}} in {{.job title}} from {{.Sender.Name}}`
+	for _, name := range []string{"Alex", "Ana", "Sam", "Jo"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			contact := models.Contact{FirstName: name, CustomFields: map[string]string{"job title": name}}
+			context := TemplateContext{Sender: TemplateSender{Name: name}}
+			for i := 0; i < 100; i++ {
+				if got, want := RenderTemplateWith(source, contact, context), "Hello "+name+" in "+name+" from "+name; got != want {
+					t.Fatalf("got %q, want %q", got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestRenderTemplate_Sender(t *testing.T) {
 	stamp := time.Date(2026, 10, 5, 15, 0, 0, 0, time.FixedZone("local", 3600))
 	account := &models.Email{
