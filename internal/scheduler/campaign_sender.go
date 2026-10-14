@@ -68,6 +68,7 @@ const workerRecheck = 5 * time.Minute
 // availability pre-pass and the placement that follows it cost one query each
 // rather than two.
 type campaignPass struct {
+	locations       map[string]*time.Location
 	campaign        *models.Campaign
 	coldRamp        map[uuid.UUID]repository.ColdRampState
 	lifecycles      map[uuid.UUID]models.SendLifecycleState
@@ -115,6 +116,19 @@ func (s *schedulerService) newCampaignPass(ctx context.Context, campaign *models
 		health:          map[uuid.UUID]healthRead{},
 		workerLive:      map[uuid.UUID]bool{},
 	}
+}
+
+// location keeps timezone parsing local to this scheduling pass.
+func (p *campaignPass) location(zone string) *time.Location {
+	if loc, ok := p.locations[zone]; ok {
+		return loc
+	}
+	loc := loadLocation(zone)
+	if p.locations == nil {
+		p.locations = make(map[string]*time.Location)
+	}
+	p.locations[zone] = loc
+	return loc
 }
 
 // effectiveCap is the per-mailbox cold cap for THIS campaign, after the ramp,
@@ -362,7 +376,7 @@ func (s *schedulerService) windowFor(ctx context.Context, p *campaignPass, acct 
 	if acct.Timezone == "" || acct.Timezone == p.campaign.ClockTimezone() {
 		return nil, nil, remaining, mailboxGate{}
 	}
-	loc := loadLocation(acct.Timezone)
+	loc := p.location(acct.Timezone)
 	if h := at.In(loc).Hour(); h >= 8 && h < 20 {
 		return nil, nil, remaining, mailboxGate{}
 	}
