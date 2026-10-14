@@ -2,6 +2,7 @@ package wmail
 
 import (
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/warmbly/warmbly/internal/config"
@@ -30,9 +31,17 @@ func GenerateSnippet(bodyPlain, bodyHTML string) string {
 
 	// Line filtering has to run before whitespace collapsing, or there are no
 	// lines left to filter.
-	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
-	cleaned := make([]string, 0, len(lines))
-	for _, line := range lines {
+	var snippet strings.Builder
+	snippet.Grow(min(len(text), snippetMaxRunes))
+	runes := 0
+	space := false
+	truncate := func() string {
+		// Match []rune's invalid UTF-8 replacement only when truncating.
+		return strings.TrimRight(string([]rune(snippet.String())), " .,;:-") + "…"
+	}
+	for text != "" {
+		var line string
+		line, text, _ = strings.Cut(text, "\n")
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -43,17 +52,31 @@ func GenerateSnippet(bodyPlain, bodyHTML string) string {
 		if line == "--" {
 			break // RFC 3676 signature delimiter (trailing space already trimmed)
 		}
-		cleaned = append(cleaned, line)
+		for i := 0; i < len(line); {
+			r, size := utf8.DecodeRuneInString(line[i:])
+			if unicode.IsSpace(r) {
+				space = runes > 0
+				i += size
+				continue
+			}
+			if space {
+				if runes == snippetMaxRunes {
+					return truncate()
+				}
+				snippet.WriteByte(' ')
+				runes++
+				space = false
+			}
+			if runes == snippetMaxRunes {
+				return truncate()
+			}
+			snippet.WriteString(line[i : i+size])
+			i += size
+			runes++
+		}
+		space = runes > 0
 	}
-
-	text = strings.Join(cleaned, " ")
-	text = strings.Join(strings.Fields(text), " ")
-
-	if utf8.RuneCountInString(text) > snippetMaxRunes {
-		runes := []rune(text)
-		text = strings.TrimRight(string(runes[:snippetMaxRunes]), " .,;:-") + "…"
-	}
-	return text
+	return snippet.String()
 }
 
 // SearchText renders the message body down to the bounded plain text Postgres

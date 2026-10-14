@@ -131,7 +131,7 @@ func compiledTemplate(tmpl string) *template.Template {
 	if t, ok := tmplCache.Load(tmpl); ok {
 		return t // may be nil (known-bad)
 	}
-	t, err := tmplfuncs.Compile("body", tmpl)
+	t, err := tmplfuncs.Compile("body", rewriteSpacedFieldRefs(tmpl))
 	if err != nil {
 		tmplCache.Store(tmpl, nil)
 		return nil
@@ -171,9 +171,7 @@ func RenderTemplateWith(tmpl string, contact models.Contact, context TemplateCon
 	}
 
 	data := buildTemplateData(contact, context)
-	prepared := rewriteSpacedFieldRefs(tmpl)
-
-	t := compiledTemplate(prepared)
+	t := compiledTemplate(tmpl)
 	if t == nil {
 		return fallbackRenderTemplate(tmpl, data)
 	}
@@ -188,7 +186,7 @@ func RenderTemplateWith(tmpl string, contact models.Contact, context TemplateCon
 // Recover standalone actions with the same engine, leaving broken control syntax literal.
 func fallbackRenderTemplate(tmpl string, data map[string]any) string {
 	return templateAction.ReplaceAllStringFunc(tmpl, func(action string) string {
-		t := compiledTemplate(rewriteSpacedFieldRefs(action))
+		t := compiledTemplate(action)
 		if t == nil {
 			return action
 		}
