@@ -237,6 +237,17 @@ jobs:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
         run: go test -race -v -p 1 ./internal/repository -run '^TestLive(MessageMapBatch|FolderGenerationLookup|MailboxLookupIndexes)' -count=1
 
+      - name: CPU query pressure and accounting parity regressions (PostgreSQL)
+        env:
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+        run: |
+          set -o pipefail
+          go test -race -v -p 1 ./internal/repository -run '^TestLive(TaskLedgerRangesAndClocksMatchLegacy|TaskLedgerDayRangePreservesDST|TaskQueryPressureUsesBoundedHistory|WarmupHealthCountsShareScansWithoutChangingSignals|DashboardOverallBoundsHistoryAndPreservesScopedCounts)$' -count=1 | tee cpu-query-pressure.log
+          if grep -q -- '--- SKIP:' cpu-query-pressure.log; then exit 1; fi
+          for test in TestLiveTaskLedgerRangesAndClocksMatchLegacy TestLiveTaskLedgerDayRangePreservesDST TestLiveTaskQueryPressureUsesBoundedHistory TestLiveWarmupHealthCountsShareScansWithoutChangingSignals TestLiveDashboardOverallBoundsHistoryAndPreservesScopedCounts; do
+            grep -q "^--- PASS: $test " cpu-query-pressure.log
+          done
+
       - name: Scheduled-job retirement regressions (PostgreSQL)
         env:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
