@@ -44,6 +44,12 @@ pub enum Resolution {
     Unavailable,
 }
 
+#[derive(Debug)]
+enum LookupError {
+    NotFound,
+    Unavailable,
+}
+
 /// Consecutive backend failures before the breaker opens.
 const BREAKER_TRIP: u32 = 5;
 /// How long the breaker stays open once tripped.
@@ -114,6 +120,31 @@ impl LinkResolver {
             return Resolution::Unavailable;
         }
 
+        // Coalesce immutable-ticket cache fills, but charge every caller's own misses.
+        match self
+            .found
+            .try_get_with(link_id.to_string(), self.fetch(link_id))
+            .await
+        {
+            Ok(link) => Resolution::Found(link),
+            Err(error) => match error.as_ref() {
+                LookupError::NotFound => {
+                    self.count_miss(source).await;
+                    Resolution::NotFound
+                }
+                LookupError::Unavailable => Resolution::Unavailable,
+            },
+        }
+    }
+
+    async fn fetch(&self, link_id: &str) -> Result<ResolvedLink, LookupError> {
+        if self.not_found.contains_key(link_id) {
+            return Err(LookupError::NotFound);
+        }
+        if self.breaker_is_open() {
+            return Err(LookupError::Unavailable);
+        }
+
         let url = format!(
             "{}/api/v1/internal/tracked-links/{}",
             self.backend_url, link_id
@@ -129,35 +160,32 @@ impl LinkResolver {
             Ok(resp) if resp.status().is_success() => match resp.json::<LinkResponse>().await {
                 Ok(body) => {
                     self.breaker_failures.store(0, Ordering::Relaxed);
-                    let link = ResolvedLink {
+                    Ok(ResolvedLink {
                         destination: body.destination,
                         task_id: body.task_id,
                         identify: body.identify,
-                    };
-                    self.found.insert(link_id.to_string(), link.clone()).await;
-                    Resolution::Found(link)
+                    })
                 }
                 Err(e) => {
                     warn!("tracked-link decode failed: {}", e);
                     self.record_failure();
-                    Resolution::Unavailable
+                    Err(LookupError::Unavailable)
                 }
             },
             Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => {
                 self.breaker_failures.store(0, Ordering::Relaxed);
                 self.not_found.insert(link_id.to_string(), ()).await;
-                self.count_miss(source).await;
-                Resolution::NotFound
+                Err(LookupError::NotFound)
             }
             Ok(resp) => {
                 warn!("tracked-link lookup unexpected status: {}", resp.status());
                 self.record_failure();
-                Resolution::Unavailable
+                Err(LookupError::Unavailable)
             }
             Err(e) => {
                 warn!("tracked-link lookup failed: {}", e);
                 self.record_failure();
-                Resolution::Unavailable
+                Err(LookupError::Unavailable)
             }
         }
     }
@@ -198,3 +226,7 @@ impl LinkResolver {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "link_tests.rs"]
+mod tests;
