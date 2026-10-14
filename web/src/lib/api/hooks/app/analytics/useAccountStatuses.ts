@@ -1,4 +1,5 @@
-import { useQueries } from "@tanstack/react-query";
+import { useMemo } from "react";
+import { useQueries, type UseQueryResult } from "@tanstack/react-query";
 import getAccountStatuses from "@/lib/api/client/app/analytics/getAccountStatuses";
 import type AccountStatus from "@/lib/api/models/app/analytics/AccountStatus";
 
@@ -22,22 +23,27 @@ export default function useAccountStatuses(emailIds: string[], options?: { enabl
     // Sort so a chunk's id set (and its query key) is stable regardless of the
     // order the mailbox list arrived in; adding a mailbox only refetches the
     // chunk it lands in.
-    const chunks = chunk([...emailIds].sort());
-
-    return useQueries({
-        queries: chunks.map((ids) => ({
-            queryKey: ["analytics", "accounts", "list", ids, options?.sourceRevision ?? 0],
+    const enabled = options?.enabled ?? true;
+    const sourceRevision = options?.sourceRevision ?? 0;
+    const queries = useMemo(
+        () => chunk([...emailIds].sort()).map((ids) => ({
+            queryKey: ["analytics", "accounts", "list", ids, sourceRevision],
             queryFn: ({ signal }: { signal: AbortSignal }) => getAccountStatuses(ids, signal),
-            enabled: ids.length > 0 && (options?.enabled ?? true),
+            enabled: ids.length > 0 && enabled,
         })),
-        // react-query memoizes this by result reference, so the merged array is
-        // stable across renders until a chunk actually updates.
-        combine: (results) => ({
-            data: results.flatMap((r) => (r.data ?? []) as AccountStatus[]),
-            observations: results.flatMap((r) => (r.data ?? []).map((status) => ({ status, observedAt: r.dataUpdatedAt, current: r.isSuccess && !r.isFetching }))),
-            isLoading: results.some((r) => r.isLoading),
-            isFetching: results.some((r) => r.isFetching),
-            isError: results.some((r) => r.isError),
-        }),
-    });
+        [emailIds, enabled, sourceRevision],
+    );
+
+    return useQueries({ queries, combine: combineAccountStatuses });
+}
+
+// TanStack reuses the aggregation only while both results and this callback are stable.
+function combineAccountStatuses(results: UseQueryResult<AccountStatus[], Error>[]) {
+    return {
+        data: results.flatMap((r) => r.data ?? []),
+        observations: results.flatMap((r) => (r.data ?? []).map((status) => ({ status, observedAt: r.dataUpdatedAt, current: r.isSuccess && !r.isFetching }))),
+        isLoading: results.some((r) => r.isLoading),
+        isFetching: results.some((r) => r.isFetching),
+        isError: results.some((r) => r.isError),
+    };
 }
