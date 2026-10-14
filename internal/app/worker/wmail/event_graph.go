@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/repository"
 )
 
 // onGraphMessageRemove emits REMOVE_EMAIL for a message deleted or moved out of a
@@ -41,6 +42,10 @@ func (w *WMail) onGraphFlagsChange(ctx context.Context, providerID string, seen 
 	if err != nil {
 		return err
 	}
+	return w.emitGraphFlagsChange(internalMessage, seen)
+}
+
+func (w *WMail) emitGraphFlagsChange(internalMessage *repository.EmailMessageData, seen bool) error {
 	if internalMessage == nil {
 		return nil
 	}
