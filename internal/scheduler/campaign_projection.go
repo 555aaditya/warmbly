@@ -326,7 +326,7 @@ func (s *schedulerService) ProjectCampaign(ctx context.Context, in CampaignProje
 	senders := make([]*projectedSender, 0, len(in.Accounts))
 	otherPerDay := 0.0
 	for _, acct := range in.Accounts {
-		p := &projectedSender{acct: acct, loc: loadLocation(acct.ClockTimezone()), bhv: pass.behaviors[acct.ID], other: otherAvg[acct.ID]}
+		p := &projectedSender{acct: acct, loc: pass.location(acct.ClockTimezone()), bhv: pass.behaviors[acct.ID], other: otherAvg[acct.ID]}
 		otherPerDay += p.other
 		p.cap = acct.CampaignLimit
 		if campaign.DailyLimit > 0 && campaign.DailyLimit < p.cap {
@@ -380,7 +380,7 @@ func (s *schedulerService) ProjectCampaign(ctx context.Context, in CampaignProje
 	out.OtherCampaignsPerDay = int(math.Round(otherPerDay))
 
 	// The calendar, in the campaign's clock.
-	loc := loadLocation(campaign.ClockTimezone())
+	loc := pass.location(campaign.ClockTimezone())
 	windows := effectiveWindows(campaign)
 	start := now
 	if campaign.StartDate != nil && campaign.StartDate.After(now) {
