@@ -1062,3 +1062,69 @@ func TestAFailedUnmapIsRetriedBeforeThePassRuns(t *testing.T) {
 		t.Errorf("mod-sequence = %d, want 300", got)
 	}
 }
+
+// someKnownMessageMap answers Get for the Message-IDs it holds.
+type someKnownMessageMap struct {
+	fakeMessageMap
+	known map[string]string
+}
+
+func (m someKnownMessageMap) Get(_ context.Context, _, _ uuid.UUID, messageID string) (*repository.EmailMessageData, error) {
+	if id, ok := m.known[messageID]; ok {
+		return &repository.EmailMessageData{MessageID: messageID, ID: id}, nil
+	}
+	return nil, nil
+}
+
+// A folder-wide mod-sequence bump reports every message in the folder as
+// changed. Only UIDs at or above the held UIDNEXT can be arrivals; the rest is
+// history the backfill window left out, so it is not admitted on the live
+// lane, known messages still relay their flags, and the cursor moves past the
+// bump instead of holding it on a budget the old mail spent (#959).
+func TestImapSyncLeavesHistoryBelowUIDNextOnAModSeqBump(t *testing.T) {
+	changed := append(uidRange(300), 5000, 5001, 5002)
+	conn := &fakeImapConn{
+		folders: []models.Mailbox{{Name: "INBOX", UIDValidity: 7, UIDNext: 5003, HighestModSeq: 90_000}},
+		changed: changed,
+	}
+	budget := &fixedBudget{allow: 10}
+	w, events := newIMAPTestMail(conn, budget,
+		&models.Mailbox{Name: "INBOX", UIDValidity: 7, UIDNext: 5000, HighestModSeq: 100})
+	knownID := uuid.New()
+	w.EmailMessageMapRepository = someKnownMessageMap{known: map[string]string{"<42@fake.test>": knownID.String()}}
+
+	if err := w.Sync(t.Context()); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	got := newEmails(*events)
+	if len(got) != 3 {
+		t.Fatalf("admitted %d messages, want the 3 at or above UIDNEXT", len(got))
+	}
+	for _, e := range got {
+		if e.Message.UID < 5000 {
+			t.Errorf("admitted UID %d from below the held UIDNEXT", e.Message.UID)
+		}
+	}
+	if budget.admitted != 3 {
+		t.Errorf("spent %d of the live budget, want 3", budget.admitted)
+	}
+	relayed := false
+	for _, e := range *events {
+		if u, ok := e.body.(*models.JobEventEmailUpdate); ok && u.ID == knownID {
+			relayed = true
+		}
+	}
+	if !relayed {
+		t.Error("the known message below UIDNEXT did not relay its flags")
+	}
+	if got := w.SmtpImapData.Mailboxes[0].HighestModSeq; got != 90_000 {
+		t.Errorf("mod-sequence = %d, want it advanced past the bump to 90000", got)
+	}
+	if got := w.SmtpImapData.Mailboxes[0].UIDNext; got != 5003 {
+		t.Errorf("UIDNEXT cursor = %d, want 5003", got)
+	}
+	if hasEvent(*events, models.JobEventTypeEmailRateLimited) {
+		t.Error("mailbox was deactivated by re-reported history")
+	}
+}

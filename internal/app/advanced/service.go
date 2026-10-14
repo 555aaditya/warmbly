@@ -1190,6 +1190,34 @@ func classifyReply(text string, cfg models.ReplyIntentSettings) (models.ReplyInt
 	return best, conf
 }
 
+// predatesContact reports a message received before its sender's contact
+// existed, which cannot be a reply to anything sent to that contact.
+func predatesContact(msg *models.EmailMessageStoreData, contact *models.Contact) bool {
+	if msg == nil || contact == nil {
+		return false
+	}
+	return receivedBefore(msg.InternalDate, contact.CreatedAt)
+}
+
+func receivedBefore(received, since time.Time) bool {
+	return !received.IsZero() && !since.IsZero() && received.Before(since)
+}
+
+// settleHistoricalReply claims and completes a message without acting on it.
+func (s *service) settleHistoricalReply(ctx context.Context, emailAccountID uuid.UUID, msg *models.EmailMessageStoreData) *errx.Error {
+	claimToken, err := s.campaignProgressRepo.ClaimIncomingReply(ctx, emailAccountID, msg.ID)
+	if err != nil {
+		return toErrx(err)
+	}
+	if claimToken == uuid.Nil {
+		return nil
+	}
+	if err := s.campaignProgressRepo.CompleteIncomingReply(ctx, emailAccountID, msg.ID, claimToken); err != nil {
+		return toErrx(err)
+	}
+	return nil
+}
+
 func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.UUID, msg *models.EmailMessageStoreData) *errx.Error {
 	if !msg.MayBeInbound() {
 		return nil
@@ -1345,6 +1373,11 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 			return xerr
 		}
 		if contact != nil {
+			// Mail from before the address became a contact answers nothing we
+			// sent it: settle it so the sweep stops offering it, and act on none of it.
+			if !referencesCampaignThread && predatesContact(msg, contact) {
+				return s.settleHistoricalReply(ctx, emailAccountID, msg)
+			}
 			contactID = &contact.ID
 			contactEmail = strings.TrimSpace(contact.Email)
 		}
@@ -2236,9 +2269,10 @@ func (s *service) CompleteTaskExecution(ctx context.Context, taskID uuid.UUID, e
 func (s *service) CaptureTaskDeadLetter(ctx context.Context, taskID uuid.UUID, taskType string, payload map[string]interface{}, lastError string, attempts int) *errx.Error {
 	maxAttempts := 5
 
-	// Compute next retry time using exponential backoff: 30s * 2^attempts
+	// Compute next retry time using exponential backoff: 30s * 2^attempts.
+	// Only a campaign pass is ever retried; any other send is kept as evidence.
 	var nextRetryAt *time.Time
-	if attempts < maxAttempts {
+	if taskType == "campaign" && attempts < maxAttempts {
 		backoff := time.Duration(30*(1<<uint(attempts))) * time.Second
 		t := time.Now().UTC().Add(backoff)
 		nextRetryAt = &t

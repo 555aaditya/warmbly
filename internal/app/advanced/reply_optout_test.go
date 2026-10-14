@@ -186,6 +186,61 @@ func TestReplyOptOutOnlyForPeopleAnsweringUs(t *testing.T) {
 	}
 }
 
+// Mail received before its sender became a contact answers nothing we sent:
+// a list import or API upload must not turn a lead's stored newsletters into
+// opt-outs and follow-up tasks (#960). It is claimed and completed once, so
+// the repair sweep stops offering it, and nothing else happens.
+func TestMailFromBeforeTheContactIsNotAReply(t *testing.T) {
+	created := time.Date(2026, 10, 12, 10, 30, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name     string
+		received time.Time
+		act      bool
+	}{
+		{name: "received months before the contact", received: time.Date(2026, 5, 24, 9, 0, 0, 0, time.UTC)},
+		{name: "received after the contact", received: created.Add(time.Hour), act: true},
+		{name: "no internal date", act: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			contact := &models.Contact{ID: uuid.New(), Email: "lead@example.org", CreatedAt: created}
+			svc, repo, _, accountID := newOptOutService(contact)
+			progress := svc.campaignProgressRepo.(*incomingReplyProgressRepo)
+			msg := inbound(accountID, "Lead <lead@example.org>", "Your emails", "Please stop emailing me.", nil)
+			msg.InternalDate = tc.received
+			if xerr := svc.ProcessIncomingReply(context.Background(), accountID, msg); xerr != nil {
+				t.Fatal(xerr)
+			}
+			if got := len(repo.suppressed) > 0; got != tc.act {
+				t.Errorf("suppressed = %v (%v), want %v", got, repo.suppressed, tc.act)
+			}
+			if got := repo.intents > 0; got != tc.act {
+				t.Errorf("recorded intents = %d, want any = %v", repo.intents, tc.act)
+			}
+			if progress.claims != 1 || progress.completed != 1 {
+				t.Errorf("claims = %d, completed = %d, want 1 and 1", progress.claims, progress.completed)
+			}
+			if !tc.act && progress.replied != 0 {
+				t.Errorf("stamped replied %d times for mail from before the contact", progress.replied)
+			}
+		})
+	}
+}
+
+// A reply in one of our campaign threads counts however old the contact row
+// is: the thread is the evidence, not the contact.
+func TestThreadedReplyFromBeforeTheContactStillCounts(t *testing.T) {
+	contact := &models.Contact{ID: uuid.New(), Email: "lead@example.org", CreatedAt: time.Now()}
+	svc, repo, _, accountID := newOptOutService(contact)
+	msg := inbound(accountID, "Lead <lead@example.org>", "Re: Quick question", "Please remove me from your list.", []string{"<opener@example.test>"})
+	msg.InternalDate = time.Now().Add(-48 * time.Hour)
+	if xerr := svc.ProcessIncomingReply(context.Background(), accountID, msg); xerr != nil {
+		t.Fatal(xerr)
+	}
+	if len(repo.suppressed) == 0 {
+		t.Fatal("a threaded reply asking to stop was not honoured")
+	}
+}
+
 func TestReplyOptOutEligible(t *testing.T) {
 	human := replyclassify.Result{Class: replyclassify.ClassNeutral}
 	bounce := replyclassify.Result{Class: replyclassify.ClassAutoReply}
@@ -291,6 +346,42 @@ func TestRecheckReplyOptOuts(t *testing.T) {
 		if got := repo.checked[id]; got != want {
 			t.Errorf("entry %v outcome = %q, want %q", id, got, want)
 		}
+	}
+}
+
+// An entry whose only support is mail from before the address became a
+// contact is lifted; mail after it, or mail we sent the address, keeps it.
+func TestRecheckLiftsOptOutsOnlyMailFromBeforeTheContactSupports(t *testing.T) {
+	now := time.Now()
+	created := now.Add(-24 * time.Hour)
+	svc, repo, _, accountID := newOptOutService(&models.Contact{ID: uuid.New(), Email: "lead@example.org", CreatedAt: created})
+	orgID := *svc.campaignRepo.(incomingReplyCampaignRepo).campaign.OrganizationID
+	entry := func(email string) models.SuppressedRecipient {
+		return models.SuppressedRecipient{ID: uuid.New(), OrganizationID: orgID, Email: email, Kind: models.SuppressionKindEmail,
+			Source: models.DeliverabilityEventUnsubscribe, CreatedAt: now, UpdatedAt: now,
+			Metadata: map[string]interface{}{"via": "reply"}}
+	}
+	msg := func(from string, received time.Time) repository.InboundMessage {
+		m := repository.InboundMessage{EmailMessageStoreData: *inbound(accountID, from, "Big sale", "Please stop emailing me.", nil), ProcessedAt: now.Add(-time.Second)}
+		m.InternalDate = received
+		return m
+	}
+	historical, recent, mailed := entry("old@example.org"), entry("new@example.org"), entry("mailed@example.org")
+	repo.entries = []models.SuppressedRecipient{historical, recent, mailed}
+	svc.uniboxRepo = optOutUnibox{byAddress: map[string][]repository.InboundMessage{
+		"old@example.org":    {msg("Old <old@example.org>", created.Add(-90*24*time.Hour))},
+		"new@example.org":    {msg("New <new@example.org>", created.Add(time.Hour))},
+		"mailed@example.org": {msg("Mailed <mailed@example.org>", created.Add(-90*24*time.Hour))},
+	}, written: map[string]bool{"mailed@example.org": true}}
+
+	if _, _, err := svc.RecheckReplyOptOuts(context.Background(), uuid.Nil, 100); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.deleted) != 1 || repo.deleted[0] != historical.ID {
+		t.Fatalf("lifted %v, want only %v", repo.deleted, historical.ID)
+	}
+	if repo.checked[recent.ID] != replyOptOutKept || repo.checked[mailed.ID] != replyOptOutKept {
+		t.Errorf("outcomes = %q / %q, want both kept", repo.checked[recent.ID], repo.checked[mailed.ID])
 	}
 }
 

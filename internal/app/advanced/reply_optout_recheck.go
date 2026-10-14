@@ -93,23 +93,48 @@ func (s *service) recheckReplyOptOut(ctx context.Context, entry *models.Suppress
 	// outlives one: a campaign the entry was attributed to, or mail we sent
 	// the address. Either makes it someone we were writing to.
 	fromContact := entry.CampaignID != nil
+	var contactSince time.Time
 	if !fromContact {
 		c, cerr := s.contactRepo.GetByEmailAndOrganization(ctx, entry.OrganizationID, sender)
 		if cerr != nil {
 			return "", cerr
 		}
-		fromContact = c != nil
+		if c != nil {
+			fromContact, contactSince = true, c.CreatedAt
+		}
+	}
+	var written *bool
+	writtenTo := func() (bool, error) {
+		if written == nil {
+			w, werr := s.uniboxRepo.HasWrittenTo(ctx, entry.OrganizationID, sender)
+			if werr != nil {
+				return false, werr
+			}
+			written = &w
+		}
+		return *written, nil
 	}
 	if !fromContact {
-		written, werr := s.uniboxRepo.HasWrittenTo(ctx, entry.OrganizationID, sender)
+		w, werr := writtenTo()
 		if werr != nil {
 			return "", werr
 		}
-		fromContact = written
+		fromContact = w
 	}
 	threads := map[string]bool{}
 	for i := range msgs {
-		stands, err := s.replyOptOutStands(ctx, &msgs[i].EmailMessageStoreData, fromContact, threads)
+		msg := &msgs[i].EmailMessageStoreData
+		msgFromContact := fromContact
+		// A contact created after the message is not who it was written to;
+		// only mail we sent the address still makes the sender one of ours.
+		if fromContact && receivedBefore(msg.InternalDate, contactSince) {
+			w, werr := writtenTo()
+			if werr != nil {
+				return "", werr
+			}
+			msgFromContact = w
+		}
+		stands, err := s.replyOptOutStands(ctx, msg, msgFromContact, threads)
 		if err != nil {
 			return "", err
 		}
@@ -134,7 +159,7 @@ func (s *service) recheckReplyOptOut(ctx context.Context, entry *models.Suppress
 				"value":  entry.Email,
 				"kind":   string(entry.Kind),
 				"source": string(entry.Source),
-				"reason": "no message from the sender asks to stop: it was a bounce, an automatic reply, list mail or quoted history",
+				"reason": "no message from the sender asks to stop: it was a bounce, an automatic reply, list mail, quoted history or mail from before the address was a contact",
 			})
 	}
 	log.Info().

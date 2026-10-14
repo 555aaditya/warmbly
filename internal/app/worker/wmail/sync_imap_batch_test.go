@@ -45,7 +45,7 @@ func TestImapApplyBatchUsesOneLookupAndHoldsOnControlPlaneFailure(t *testing.T) 
 				t.Fatal(err)
 			}
 			stats := &tickStats{}
-			done, mailErr := w.imapApply(t.Context(), fetched, false, stats, nil)
+			done, mailErr := w.imapApply(t.Context(), fetched, false, stats, nil, 0)
 			if mailErr != nil || done == fail || repo.batches != 1 || repo.gets != 0 || stats.aborted != fail {
 				t.Fatalf("done=%t err=%v batch=%d gets=%d aborted=%t", done, mailErr, repo.batches, repo.gets, stats.aborted)
 			}

@@ -91,7 +91,7 @@ func TestCompletedArrivalLostResponseReofferUsesKnownMapAcrossProviders(t *testi
 				var captured *[]captured
 				w, captured = newIMAPTestMail(&fakeImapConn{}, &fixedBudget{allow: 10}, &models.Mailbox{Name: "INBOX", UIDValidity: 1})
 				offer = func() (bool, error) {
-					ok, err := w.imapApply(t.Context(), []*imap.Fetched{{Email: &models.EmailMessageData{MessageID: key, UID: 1}}}, false, &tickStats{}, nil)
+					ok, err := w.imapApply(t.Context(), []*imap.Fetched{{Email: &models.EmailMessageData{MessageID: key, UID: 1}}}, false, &tickStats{}, nil, 0)
 					events = *captured
 					if err != nil {
 						return ok, err
@@ -136,7 +136,7 @@ func TestIMAPBatchDuplicateCompletedArrivalUsesCanonicalMap(t *testing.T) {
 				ok, err := w.imapApply(t.Context(), []*imap.Fetched{
 					{Email: &models.EmailMessageData{MessageID: key, UID: 1, ModSeq: 3, Flags: []string{"\\Seen"}}},
 					{Email: &models.EmailMessageData{MessageID: key, UID: 2}},
-				}, backfill, stats, nil)
+				}, backfill, stats, nil, 0)
 				if !ok || err != nil {
 					t.Fatalf("same-batch duplicate retried completed admission: ok=%t err=%v calls=%d", ok, err, m.admissions)
 				}
@@ -179,7 +179,7 @@ func TestIMAPBatchDuplicateCanonicalLookupFailureHoldsPass(t *testing.T) {
 				ok, err := w.imapApply(t.Context(), []*imap.Fetched{
 					{Email: &models.EmailMessageData{MessageID: key, UID: 1}},
 					{Email: &models.EmailMessageData{MessageID: key, UID: 2}},
-				}, backfill, stats, nil)
+				}, backfill, stats, nil, 0)
 				if ok || err != nil || !stats.aborted || m.admissions != 1 || len(storage.body) != 1 || storage.deletes != 0 || budget.admitted != 1 || len(newEmails(*events)) != 0 {
 					t.Fatal("failed canonical lookup re-admitted duplicate, lost body or completed the pass")
 				}

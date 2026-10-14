@@ -579,8 +579,9 @@ func (r *advancedOutreachRepository) DeleteSuppressionByEmail(ctx context.Contex
 	return tag.RowsAffected() > 0, nil
 }
 
-// replyOptOutCheckKey marks an entry the reply opt-out recheck has read.
-const replyOptOutCheckKey = "reply_optout_recheck"
+// replyOptOutCheckKey marks an entry the reply opt-out recheck has read. The
+// v2 key re-reads entries kept on mail that predates the sender's contact.
+const replyOptOutCheckKey = "reply_optout_recheck_v2"
 
 func (r *advancedOutreachRepository) ListUncheckedReplyOptOuts(ctx context.Context, afterID uuid.UUID, limit int) ([]models.SuppressedRecipient, error) {
 	rows, err := resultDB(ctx, r.db).Query(ctx, `

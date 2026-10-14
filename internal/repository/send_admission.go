@@ -22,12 +22,16 @@ var ErrCampaignDailyLimit = fmt.Errorf("%w: campaign daily limit reached for thi
 
 var ErrMailboxSendingPlan = fmt.Errorf("%w: mailbox's current sending plan has no capacity", ErrSendAdmissionDenied)
 
+var ErrManualSendLimit = fmt.Errorf("%w: manual send limit reached for this mailbox", ErrSendAdmissionDenied)
+
 func SendAdmissionCode(err error) string {
 	switch {
 	case errors.Is(err, ErrCampaignDailyLimit):
 		return "CAMPAIGN_DAILY_LIMIT_REACHED"
 	case errors.Is(err, ErrMailboxSendingPlan):
 		return "MAILBOX_SENDING_PLAN_DENIED"
+	case errors.Is(err, ErrManualSendLimit):
+		return "MANUAL_SEND_LIMIT_REACHED"
 	case errors.Is(err, ErrSendAdmissionDenied):
 		return "SEND_ADMISSION_DENIED"
 	default:
@@ -158,13 +162,13 @@ func (r *taskRepository) ReserveOutbound(ctx context.Context, in OutboundReserva
 	if err != nil {
 		return uuid.Nil, err
 	}
-	var occurrences int
-	err = tx.QueryRow(ctx, `SELECT COALESCE(SUM(COALESCE(cardinality(send_recipients),GREATEST(1,cardinality(et.to_addrs)+COALESCE(cardinality(et.cc),0)+COALESCE(cardinality(et.bcc),0)))) FILTER(WHERE COALESCE(send_reserved_at,completed_at)>NOW()-INTERVAL '24 hours'),0)
-	 FROM tasks t LEFT JOIN email_tasks et ON et.task_id=t.id
-	 WHERE t.email_account_id=$1 AND t.id<>$2 AND task_type IN ('campaign','email','warmup','placement')
-	 AND ((send_reserved_at IS NOT NULL AND send_released_at IS NULL) OR (send_reserved_at IS NULL AND status='completed' AND completed_at IS NOT NULL
-	 AND (task_type<>'campaign' OR EXISTS(SELECT 1 FROM campaign_tasks ct WHERE ct.task_id=t.id AND ct.sequence_id IS NOT NULL))))
-	 AND COALESCE(send_reserved_at,completed_at)>NOW()-INTERVAL '24 hours'`, in.MailboxID, in.TaskID).Scan(&occurrences)
+	// Manual (unibox) mail is a conversation the user starts, not outreach: it
+	// spends none of the cold, diagnostic, shared or rolling allocations and is
+	// bounded only by its own recipient ceiling.
+	var manualRecipients int
+	err = tx.QueryRow(ctx, `SELECT COALESCE(SUM(GREATEST(1,cardinality(send_recipients))),0) FROM tasks
+	 WHERE email_account_id=$1 AND id<>$2 AND task_type='email' AND send_reserved_at>NOW()-INTERVAL '24 hours' AND send_released_at IS NULL`,
+		in.MailboxID, in.TaskID).Scan(&manualRecipients)
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -172,24 +176,25 @@ func (r *taskRepository) ReserveOutbound(ctx context.Context, in OutboundReserva
 	var attemptedRecipients, attemptedToday int
 	err = tx.QueryRow(ctx, `SELECT COALESCE(SUM(recipient_count) FILTER(WHERE attempted_at>NOW()-INTERVAL '24 hours'),0),
 	 COUNT(*) FILTER(WHERE (attempted_at AT TIME ZONE $2)::date=(NOW() AT TIME ZONE $2)::date)
-	 FROM outbound_attempts WHERE email_account_id=$1`, in.MailboxID, timezone).Scan(&attemptedRecipients, &attemptedToday)
+	 FROM outbound_attempts a WHERE email_account_id=$1
+	 AND NOT EXISTS(SELECT 1 FROM tasks m WHERE m.id=a.task_id AND m.task_type='email')`, in.MailboxID, timezone).Scan(&attemptedRecipients, &attemptedToday)
 	if err != nil {
 		return uuid.Nil, err
 	}
 	var reservedAttemptRecipients, reservedAttemptsToday int
 	err = tx.QueryRow(ctx, `SELECT COALESCE(SUM(GREATEST(1,cardinality(send_recipients))) FILTER(WHERE COALESCE(send_reserved_at,completed_at)>NOW()-INTERVAL '24 hours'),0),
 	 COUNT(*) FILTER(WHERE COALESCE(send_business_day,(completed_at AT TIME ZONE $3)::date)=(NOW() AT TIME ZONE $3)::date)
-	 FROM tasks t WHERE email_account_id=$1 AND id<>$2 AND task_type IN('email','campaign','warmup','placement')
+	 FROM tasks t WHERE email_account_id=$1 AND id<>$2 AND task_type IN('campaign','warmup','placement')
 	 AND ((send_reserved_at IS NOT NULL AND send_released_at IS NULL) OR (send_reserved_at IS NULL AND status='completed' AND completed_at IS NOT NULL
 	 AND (task_type<>'campaign' OR EXISTS(SELECT 1 FROM campaign_tasks ct WHERE ct.task_id=t.id AND ct.sequence_id IS NOT NULL))))
 	 AND NOT EXISTS(SELECT 1 FROM outbound_attempts a WHERE a.nonce=t.send_executor_nonce)`, in.MailboxID, in.TaskID, timezone).Scan(&reservedAttemptRecipients, &reservedAttemptsToday)
 	if err != nil {
 		return uuid.Nil, err
 	}
-	occurrences = attemptedRecipients + reservedAttemptRecipients
+	occurrences := attemptedRecipients + reservedAttemptRecipients
 	var dayTotal, dayCold, dayDiagnostic int
-	err = tx.QueryRow(ctx, `SELECT COUNT(*),COUNT(*) FILTER(WHERE task_type IN ('campaign','email')),COUNT(*) FILTER(WHERE task_type IN ('warmup','placement')) FROM tasks t
-	 WHERE email_account_id=$1 AND id<>$2 AND task_type IN ('campaign','email','warmup','placement')
+	err = tx.QueryRow(ctx, `SELECT COUNT(*),COUNT(*) FILTER(WHERE task_type='campaign'),COUNT(*) FILTER(WHERE task_type IN ('warmup','placement')) FROM tasks t
+	 WHERE email_account_id=$1 AND id<>$2 AND task_type IN ('campaign','warmup','placement')
 	 AND COALESCE(send_business_day,(completed_at AT TIME ZONE $3)::date)=(NOW() AT TIME ZONE $3)::date
 	 AND ((send_reserved_at IS NOT NULL AND send_released_at IS NULL) OR (send_reserved_at IS NULL AND status='completed' AND completed_at IS NOT NULL
 	 AND (task_type<>'campaign' OR EXISTS(SELECT 1 FROM campaign_tasks ct WHERE ct.task_id=t.id AND ct.sequence_id IS NOT NULL))))`, in.MailboxID, in.TaskID, timezone).Scan(&dayTotal, &dayCold, &dayDiagnostic)
@@ -203,7 +208,11 @@ func (r *taskRepository) ReserveOutbound(ctx context.Context, in OutboundReserva
 	if rolling != nil {
 		rollingCap = *rolling
 	}
-	if max(dayTotal, attemptedToday+reservedAttemptsToday) >= sharedCap || occurrences+len(recipients) > rollingCap || (lane == "campaign" || lane == "email") && dayCold >= campaignCap || (lane == "warmup" || lane == "placement") && dayDiagnostic >= warmupCap {
+	if lane == "email" {
+		if manualRecipients+len(recipients) > config.ManualSendRecipientsPer24h {
+			return uuid.Nil, ErrManualSendLimit
+		}
+	} else if max(dayTotal, attemptedToday+reservedAttemptsToday) >= sharedCap || occurrences+len(recipients) > rollingCap || lane == "campaign" && dayCold >= campaignCap || (lane == "warmup" || lane == "placement") && dayDiagnostic >= warmupCap {
 		return uuid.Nil, ErrSendAdmissionDenied
 	}
 	if lane == "campaign" {

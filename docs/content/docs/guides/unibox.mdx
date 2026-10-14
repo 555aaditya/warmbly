@@ -383,6 +383,10 @@ With a recipient set, **History** slides out every conversation you have had wit
 
 Scheduled and smart-queued sends skip the undo window, since they already wait. Cancel them from the **Scheduled** view, or via `DELETE /unibox/scheduled/:task_id`.
 
+Replies, forwards and new emails from the unibox are conversations, not outreach, so they never count toward a mailbox's daily campaign limit or its warmup volume, and a mailbox that has sent its campaign emails for the day can still answer a lead. They have their own ceiling instead: 500 recipients per mailbox in any 24 hours, counting every To, Cc and Bcc address. A mailbox that is paused or reconnecting, held after a send problem, or cooling down after a provider limit sends nothing from the unibox either, and neither does a send to an address on your suppression list.
+
+When a send is refused for one of those reasons, it is not sent and the mailbox owner sees an error naming the cause, so they can send it later or from another mailbox. If Warmbly cannot confirm the email reached the mailbox's sending worker, the error says so; check **Sent** before sending it again.
+
 </Fold>
 
 <Fold>

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/models"
 )
 
@@ -132,5 +133,90 @@ func TestLiveSharedAdmissionMixedLanesRetainsUnknownAndDoesNotDoubleCountCampaig
 				t.Fatal("durable replay unavailable", state, err)
 			}
 		})
+	}
+}
+
+// A unibox send is a conversation, not outreach: it spends no campaign slot,
+// is admitted with the campaign, shared and rolling caps full, and is bounded
+// only by its own recipient ceiling and the mailbox's standing (#956).
+func TestLiveManualSendIsOutsideTheCappedAllocations(t *testing.T) {
+	f, r := lineageFixture(t)
+	ctx := t.Context()
+	worker, campaign, step := uuid.New(), uuid.New(), uuid.New()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := f.pool.Exec(ctx, sql, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`INSERT INTO fleet_nodes(id,role,active,last_seen_at,warmup_send_protocol)VALUES($1,'worker',true,NOW(),2)`, worker)
+	exec(`INSERT INTO workers(id)VALUES($1)`, worker)
+	t.Cleanup(func() { _, _ = f.pool.Exec(context.Background(), `DELETE FROM fleet_nodes WHERE id=$1`, worker) })
+	exec(`UPDATE email_accounts SET worker_id=$1,campaign_limit=1,shared_daily_limit=1,rolling_recipient_limit=1 WHERE id=$2`, worker, f.sender)
+	exec(`INSERT INTO campaigns(id,user_id,organization_id,name,description,status,daily_limit,timezone,days,created_at,updated_at)VALUES($1,$2,$3,'Manual','','active',50,'UTC',127,NOW(),NOW())`, campaign, f.user, f.org)
+	exec(`INSERT INTO sequences(id,campaign_id,organization_id,name,subject,body_plain,body_html,wait_after,position)VALUES($1,$2,$3,'Step','Hello','Text','',0,1)`, step, campaign, f.org)
+	t.Cleanup(func() { _, _ = f.pool.Exec(context.Background(), `DELETE FROM campaigns WHERE id=$1`, campaign) })
+
+	newTask := func(lane string, recipients ...string) OutboundReservation {
+		t.Helper()
+		id := uuid.New()
+		exec(`INSERT INTO tasks(id,task_type,email_account_id,status,message_id)VALUES($1,$2,$3,'active','')`, id, lane, f.sender)
+		if lane == "campaign" {
+			contact := uuid.New()
+			exec(`INSERT INTO contacts(id,user_id,organization_id,email,first_name,last_name,company,phone,custom_fields)VALUES($1,$2,$3,$4,'Test','','','','{}')`, contact, f.user, f.org, recipients[0])
+			t.Cleanup(func() { _, _ = f.pool.Exec(context.Background(), `DELETE FROM contacts WHERE id=$1`, contact) })
+			exec(`INSERT INTO campaign_tasks(task_id,campaign_id,sequence_id,contact_id)VALUES($1,$2,$3,$4)`, id, campaign, step, contact)
+			exec(`INSERT INTO campaign_contact_progress(campaign_id,contact_id,sequence_id,dispatch_task_id,dispatched_at)VALUES($1,$2,$3,$4,NOW())`, campaign, contact, step, id)
+		}
+		return OutboundReservation{TaskID: id, MailboxID: f.sender, OrganizationID: f.org, WorkerID: worker, Provider: models.InboxProviderSMTPIMAP, Recipients: recipients}
+	}
+	addr := func(name string) string { return name + "-" + uuid.NewString()[:8] + "@test.local" }
+	send := func(in OutboundReservation) error {
+		t.Helper()
+		nonce, err := r.ReserveOutbound(ctx, in)
+		if err != nil {
+			return err
+		}
+		if _, err = r.BeginOutbound(ctx, in.TaskID, in.MailboxID, in.WorkerID, nonce); err != nil {
+			t.Fatal(err)
+		}
+		result := models.SendEmailResult{TaskID: in.TaskID, Success: true, MessageID: "<" + in.TaskID.String() + "@example.test>"}
+		if err = r.FinishOutbound(ctx, in.TaskID, in.MailboxID, in.WorkerID, result); err != nil {
+			t.Fatal(err)
+		}
+		if err = r.ApplySendResult(ctx, result, func(context.Context) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+		return nil
+	}
+
+	if err := send(newTask("email", addr("reply"))); err != nil {
+		t.Fatalf("first reply refused: %v", err)
+	}
+	if err := send(newTask("campaign", addr("lead"))); err != nil {
+		t.Fatalf("a reply spent the campaign slot: %v", err)
+	}
+	if err := send(newTask("campaign", addr("lead"))); !errors.Is(err, ErrSendAdmissionDenied) {
+		t.Fatalf("campaign send past the cap = %v, want refused", err)
+	}
+	if err := send(newTask("email", addr("reply"), addr("cc"))); err != nil {
+		t.Fatalf("reply refused with the campaign, shared and rolling caps full: %v", err)
+	}
+
+	exec(`UPDATE email_accounts SET send_recovery_hold=true,send_recovery_reason='authentication' WHERE id=$1`, f.sender)
+	if err := send(newTask("email", addr("reply"))); !errors.Is(err, ErrSendAdmissionDenied) {
+		t.Fatalf("reply under a recovery hold = %v, want refused", err)
+	}
+	exec(`UPDATE email_accounts SET send_recovery_hold=false,send_recovery_reason=NULL WHERE id=$1`, f.sender)
+
+	many := make([]string, config.ManualSendRecipientsPer24h)
+	for i := range many {
+		many[i] = addr("bulk")
+	}
+	if _, err := r.ReserveOutbound(ctx, newTask("email", many...)); !errors.Is(err, ErrManualSendLimit) {
+		t.Fatalf("reply past the manual ceiling = %v, want ErrManualSendLimit", err)
+	}
+	if got := SendAdmissionCode(ErrManualSendLimit); got != "MANUAL_SEND_LIMIT_REACHED" {
+		t.Fatalf("code = %q", got)
 	}
 }

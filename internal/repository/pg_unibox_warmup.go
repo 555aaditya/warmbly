@@ -206,10 +206,12 @@ func (r *uniboxRepository) ListUnprocessedCampaignReplies(ctx context.Context, s
 		            LATERAL (VALUES ('<' || btrim(x, '<>') || '>'), (btrim(x, '<>'))) AS f(v)))
 		    )
 		    -- The mailbox's workspace first, so idx_contacts_org_email serves the address match.
+		    -- Mail received before the contact existed answers nothing we sent it.
 		    OR EXISTS (
 		      SELECT 1 FROM contacts co
 		      WHERE co.organization_id = (SELECT ea.organization_id FROM email_accounts ea WHERE ea.id = u.email_id)
 		        AND lower(co.email) = `+bareFrom+`
+		        AND u.internal_date >= co.created_at
 		    )
 		  )
 		ORDER BY u.id LIMIT $4`, afterID, since, lastScanned, limit)

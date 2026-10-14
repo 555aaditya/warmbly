@@ -2,12 +2,14 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/observability/errs"
@@ -112,6 +114,8 @@ func (s *tasksService) HandleUserEmailTask(task *proto.ProcessTask) *errx.Error 
 		_ = s.taskRepo.UpdateTaskStatus(ctx, taskID, "cancelled")
 		log.Info().Str("task_id", taskID.String()).Str("status", string(account.Status)).
 			Msg("user_email cancelled: mailbox not active")
+		s.notifyUserEmailFailed(ctx, taskID, account, "Email was not sent",
+			fmt.Sprintf("%s did not send your email: the mailbox is not active. Reconnect it and send again.", account.Email))
 		return nil
 	}
 	// Tenancy gate: the entitlement check below is org-scoped, so a mailbox with
@@ -135,8 +139,20 @@ func (s *tasksService) HandleUserEmailTask(task *proto.ProcessTask) *errx.Error 
 			_ = s.taskRepo.UpdateTaskStatus(ctx, taskID, "cancelled")
 			log.Info().Str("task_id", taskID.String()).
 				Msg("user_email cancelled: feature gate denied at execution time")
+			s.notifyUserEmailFailed(ctx, taskID, account, "Email was not sent",
+				fmt.Sprintf("%s did not send your email: the workspace's plan does not include sending from the unibox.", account.Email))
 			return nil
 		}
+	}
+
+	// Checked while the task is still pending, so a failed read retries it.
+	if err := s.sendAdmission(ctx, account); err != nil {
+		if !errors.Is(err, repository.ErrSendAdmissionDenied) {
+			errs.CaptureException(err)
+			return errx.InternalError()
+		}
+		s.refuseUserEmail(ctx, taskID, account, err)
+		return nil
 	}
 
 	// STEP 5: Mark task as active (with advisory lock)
@@ -193,11 +209,14 @@ func (s *tasksService) HandleUserEmailTask(task *proto.ProcessTask) *errx.Error 
 		Tracking:  nil,
 	}
 
-	if err := s.sendAdmission(ctx, account); err != nil {
-		return errx.InternalError()
-	}
 	if err := s.emailSender.Send(ctx, taskID, emailMsg, *account); err != nil {
-		s.taskRepo.RecordTaskFailure(ctx, taskID, "Send failed", err.Error())
+		if !errors.Is(err, ErrSendDispatchUnknown) {
+			s.refuseUserEmail(ctx, taskID, account, err)
+			return nil
+		}
+		// The command may be with a worker, so the task is kept for evidence
+		// rather than retried, and the owner is told it may not have left.
+		_ = s.taskRepo.RecordTaskFailure(ctx, taskID, "Send outcome unknown", err.Error())
 		if s.advanced != nil {
 			_ = s.advanced.CaptureTaskDeadLetter(ctx, taskID, "user_email", map[string]interface{}{
 				"account_id": account.ID.String(),
@@ -205,6 +224,8 @@ func (s *tasksService) HandleUserEmailTask(task *proto.ProcessTask) *errx.Error 
 			}, err.Error(), 1)
 			_ = s.taskRepo.UpdateTaskStatus(ctx, taskID, "dead_lettered")
 		}
+		s.notifyUserEmailFailed(ctx, taskID, account, "Email may not have been sent",
+			fmt.Sprintf("%s could not confirm your email was handed to its sending worker. Check Sent before sending it again.", account.Email))
 		return nil
 	}
 
@@ -248,4 +269,40 @@ func userEmailBodies(emailTask *repository.EmailTask, account *models.Email) (bo
 	// Signature included, so a stylesheet in either half lands on the elements
 	// it matches. A no-op for a body with no <style>.
 	return mailhtml.InlineCSS(bodyHTML), bodyPlain
+}
+
+// refuseUserEmail ends a unibox send that provably never left: the failure is
+// recorded with its admission code and the mailbox owner is told why.
+func (s *tasksService) refuseUserEmail(ctx context.Context, taskID uuid.UUID, account *models.Email, err error) {
+	detail := err.Error()
+	if code := repository.SendAdmissionCode(err); code != "" {
+		detail = code + ": " + detail
+	}
+	_ = s.taskRepo.RecordTaskFailure(ctx, taskID, "Send refused", detail)
+	log.Info().Str("task_id", taskID.String()).Str("account_id", account.ID.String()).Err(err).
+		Msg("user_email refused before dispatch")
+	s.notifyUserEmailFailed(ctx, taskID, account, "Email was not sent",
+		fmt.Sprintf("%s did not send your email: %s", account.Email, userEmailRefusalReason(err)))
+}
+
+// userEmailRefusalReason says why a unibox send was refused, in words the
+// sender can act on.
+func userEmailRefusalReason(err error) string {
+	switch {
+	case errors.Is(err, repository.ErrManualSendLimit):
+		return fmt.Sprintf("the mailbox has reached its limit of %d manual recipients in 24 hours. Try again later or send from another mailbox.", config.ManualSendRecipientsPer24h)
+	case errors.Is(err, ErrWorkerOffline), errors.Is(err, ErrWorkerUnconfirmed):
+		return "its sending worker is offline. Try again in a few minutes."
+	case errors.Is(err, repository.ErrSendAdmissionDenied):
+		return "the mailbox cannot send right now. It may be paused or reconnecting, held after a send problem, cooling down after a provider limit, or a recipient may be on your suppression list."
+	default:
+		return "the send could not be prepared. Try again."
+	}
+}
+
+func (s *tasksService) notifyUserEmailFailed(ctx context.Context, taskID uuid.UUID, account *models.Email, title, message string) {
+	if s.streamingPublisher == nil {
+		return
+	}
+	s.streamingPublisher.PublishEmailError(ctx, account.UserID, account.ID, taskID, title, message)
 }
