@@ -32,6 +32,29 @@ defmodule RealtimeWeb.BulkChannelTest do
     assert_push("BULK_PROGRESS", %{"processed_items" => 40})
   end
 
+  test "each distinct event is delivered once and leaving removes the subscription" do
+    Process.flag(:trap_exit, true)
+    op = uuid()
+    {:ok, _, socket} = subscribe_and_join(user_socket("owner"), BulkChannel, "bulk:#{op}")
+
+    assert Enum.count(Registry.lookup(Realtime.PubSub, socket.topic), fn {pid, _} ->
+             pid == socket.channel_pid
+           end) == 1
+
+    for processed <- [40, 41] do
+      event = Map.put(progress_event("owner", op), "processed_items", processed)
+      Realtime.EventBroadcaster.broadcast(event)
+      assert_push("BULK_PROGRESS", ^event)
+      refute_push("BULK_PROGRESS", _payload, 50)
+    end
+
+    leave(socket)
+    ref = Process.monitor(socket.channel_pid)
+    assert_receive {:DOWN, ^ref, :process, _, _}
+    Realtime.EventBroadcaster.broadcast(progress_event("owner", op))
+    refute_push("BULK_PROGRESS", _payload, 50)
+  end
+
   test "another user joined to the same operation receives nothing" do
     op = uuid()
     {:ok, _, _socket} = subscribe_and_join(user_socket("snooper"), BulkChannel, "bulk:#{op}")
