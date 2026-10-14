@@ -29,7 +29,6 @@ defmodule RealtimeWeb.BulkChannel do
   defp subscribe(operation_id, socket) do
     if valid_uuid?(operation_id) do
       Logger.debug("User #{socket.assigns.user_id} joined bulk:#{operation_id}")
-      Phoenix.PubSub.subscribe(Realtime.PubSub, "bulk:#{operation_id}")
       {:ok, assign(socket, :operation_id, operation_id)}
     else
       ChannelGuard.join_error("invalid_operation_id", :invalid_topic)

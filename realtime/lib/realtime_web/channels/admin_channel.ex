@@ -20,8 +20,6 @@ defmodule RealtimeWeb.AdminChannel do
   alias Realtime.RateLimiter
   alias RealtimeWeb.ChannelGuard
 
-  @topic "admin:platform"
-
   # Admins drink from the platform firehose, so the per-minute outbound
   # budget is far above the org-channel default. It still exists as a
   # backstop against a runaway event storm saturating one socket.
@@ -46,7 +44,6 @@ defmodule RealtimeWeb.AdminChannel do
           Logger.debug("Admin #{user_id} joined the platform event channel")
 
           socket = assign(socket, :admin_permissions, Map.get(admin, :permissions, 0))
-          send(self(), :after_join)
 
           {:ok,
            %{
@@ -59,12 +56,6 @@ defmodule RealtimeWeb.AdminChannel do
           ChannelGuard.join_error("not_an_admin")
       end
     end
-  end
-
-  @impl true
-  def handle_info(:after_join, socket) do
-    Phoenix.PubSub.subscribe(Realtime.PubSub, @topic)
-    {:noreply, socket}
   end
 
   @impl true
@@ -85,8 +76,7 @@ defmodule RealtimeWeb.AdminChannel do
     {:noreply, socket}
   end
 
-  # Swallow duplicate %Broadcast{} structs the manual PubSub subscription
-  # can deliver (same reason as OrgChannel).
+  # Socket control broadcasts are handled by Phoenix, not forwarded as events.
   @impl true
   def handle_info(%Phoenix.Socket.Broadcast{}, socket), do: {:noreply, socket}
 
