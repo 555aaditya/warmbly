@@ -32,6 +32,7 @@ func (r *pgEmailGraphDeltaRepository) Put(ctx context.Context, userID, emailID u
 		VALUES ($1, $2, $3, $4, now())
 		ON CONFLICT (user_id, email_id, folder)
 		DO UPDATE SET delta_link = EXCLUDED.delta_link, last_updated_at = now()
+		WHERE email_delta_links.delta_link IS DISTINCT FROM EXCLUDED.delta_link
 	`
 	if _, err := r.db.Exec(ctx, q, userID, emailID, folder, deltaLink); err != nil {
 		return fmt.Errorf("email_delta_links: put: %w", err)

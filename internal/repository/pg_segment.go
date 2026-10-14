@@ -467,10 +467,13 @@ func insertSegmentLeads(ctx context.Context, tx pgx.Tx, orgID uuid.UUID, actor *
 		}
 	}
 	args = append(args, string(src))
+	// Existing leads are anti-joined out first; a sweep otherwise attempts
+	// one conflicting insert per member on every pass.
 	insertQ := fmt.Sprintf(`INSERT INTO campaign_leads (contact_id, campaign_id, source)
 		SELECT c.id, $%d::uuid, $%d FROM contacts c WHERE c.organization_id = $1 AND (%s)%s
+		  AND NOT EXISTS (SELECT 1 FROM campaign_leads cl WHERE cl.campaign_id = $%d AND cl.contact_id = c.id)
 		ON CONFLICT DO NOTHING
-		RETURNING contact_id, campaign_id`, cp, len(args), clause, guard)
+		RETURNING contact_id, campaign_id`, cp, len(args), clause, guard, cp)
 	rows, err := tx.Query(ctx, insertQ, args...)
 	if err != nil {
 		return nil, err

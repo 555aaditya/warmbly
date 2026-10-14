@@ -207,8 +207,8 @@ jobs:
         run: |
           set -o pipefail
           go run ./cmd/migrate
-          go test -race -v -p 1 ./internal/repository ./internal/app/analytics -run '^TestLive(WarmupPartnerCountsMatchIndividualCandidates|WarmupSummariesMatchIndividualReads|LinkedMailboxStatusBatchPreservesDetails)$' -count=1 | tee linked-mailbox-batch.log
-          for test in TestLiveWarmupPartnerCountsMatchIndividualCandidates TestLiveWarmupSummariesMatchIndividualReads TestLiveLinkedMailboxStatusBatchPreservesDetails; do
+          go test -race -v -p 1 ./internal/repository ./internal/app/analytics -run '^TestLive(WarmupPartnerCountsMatchIndividualCandidates|WarmupSummariesMatchIndividualReads|LinkedMailboxStatusBatchPreservesDetails|WarmupPartnerWeekCacheMatchesExactReadAndKeepsTheCapLive|WarmupPartnerWeekCacheRefreshesDetachedAndServesStale|WarmupPartnerCandidatesCarryReciprocityAndHonourTheCap|AccountStatusPageMatchesSingleReadsInBoundedQueries)$' -count=1 | tee linked-mailbox-batch.log
+          for test in TestLiveWarmupPartnerCountsMatchIndividualCandidates TestLiveWarmupSummariesMatchIndividualReads TestLiveLinkedMailboxStatusBatchPreservesDetails TestLiveWarmupPartnerWeekCacheMatchesExactReadAndKeepsTheCapLive TestLiveWarmupPartnerWeekCacheRefreshesDetachedAndServesStale TestLiveWarmupPartnerCandidatesCarryReciprocityAndHonourTheCap TestLiveAccountStatusPageMatchesSingleReadsInBoundedQueries; do
             grep -q -- "--- PASS: $test " linked-mailbox-batch.log
           done
           if grep -q -- '--- SKIP:' linked-mailbox-batch.log; then exit 1; fi
@@ -242,9 +242,9 @@ jobs:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
         run: |
           set -o pipefail
-          go test -race -v -p 1 ./internal/repository -run '^TestLive(TaskLedgerRangesAndClocksMatchLegacy|TaskLedgerDayRangePreservesDST|TaskQueryPressureUsesBoundedHistory|WarmupHealthCountsShareScansWithoutChangingSignals|DashboardOverallBoundsHistoryAndPreservesScopedCounts)$' -count=1 | tee cpu-query-pressure.log
+          go test -race -v -p 1 ./internal/repository -run '^TestLive(TaskLedgerRangesAndClocksMatchLegacy|TaskLedgerDayRangePreservesDST|TaskQueryPressureUsesBoundedHistory|WarmupHealthCountsShareScansWithoutChangingSignals|DashboardOverallBoundsHistoryAndPreservesScopedCounts|VerificationBacklogFollowsShelfLives|VerificationReopenOnProviderConnect|SegmentCampaignLinks|PoolLinkTouchIsThrottledButKeepsTheVersion)$' -count=1 | tee cpu-query-pressure.log
           if grep -q -- '--- SKIP:' cpu-query-pressure.log; then exit 1; fi
-          for test in TestLiveTaskLedgerRangesAndClocksMatchLegacy TestLiveTaskLedgerDayRangePreservesDST TestLiveTaskQueryPressureUsesBoundedHistory TestLiveWarmupHealthCountsShareScansWithoutChangingSignals TestLiveDashboardOverallBoundsHistoryAndPreservesScopedCounts; do
+          for test in TestLiveTaskLedgerRangesAndClocksMatchLegacy TestLiveTaskLedgerDayRangePreservesDST TestLiveTaskQueryPressureUsesBoundedHistory TestLiveWarmupHealthCountsShareScansWithoutChangingSignals TestLiveDashboardOverallBoundsHistoryAndPreservesScopedCounts TestLiveVerificationBacklogFollowsShelfLives TestLiveVerificationReopenOnProviderConnect TestLiveSegmentCampaignLinks TestLivePoolLinkTouchIsThrottledButKeepsTheVersion; do
             grep -q "^--- PASS: $test " cpu-query-pressure.log
           done
 

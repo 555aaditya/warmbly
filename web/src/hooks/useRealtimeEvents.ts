@@ -70,6 +70,10 @@ export function useRealtimeEvents() {
   const [inboxRefresh] = useState(() => createRefreshCoalescer(queryClient))
   const [isDuplicateDelivery] = useState(() => createDeliveryDeduper())
   useEffect(() => () => inboxRefresh.dispose(), [inboxRefresh])
+  // Mailbox events arrive in bursts (a fleet reconnect, a pool re-evaluation),
+  // and each one refetches the whole mailbox list and every status chunk.
+  const [accountRefresh] = useState(() => createRefreshCoalescer(queryClient))
+  useEffect(() => () => accountRefresh.dispose(), [accountRefresh])
 
   const handleRealtimeEvent = useCallback(
     (payload: Record<string, unknown>) => {
@@ -348,7 +352,7 @@ export function useRealtimeEvents() {
         // started/stopped holding it; the drawer's sync card refetches.
         const accountId = getString('email_account_id')
         if (accountId) invalidate([['emails', accountId, 'sync']])
-        invalidate([
+        accountRefresh.add([
           ['emails', 'list'],
           ['analytics', 'accounts'],
           ['analytics', 'warmup'],
@@ -620,6 +624,7 @@ export function useRealtimeEvents() {
       ])
     },
     [
+      accountRefresh,
       addUniboxEmail,
       currentOrg?.id,
       inboxRefresh,

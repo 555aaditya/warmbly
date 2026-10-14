@@ -257,7 +257,9 @@ func (r *poolLinkRepository) ListInstances(ctx context.Context, orgID uuid.UUID)
 }
 
 func (r *poolLinkRepository) TouchInstance(ctx context.Context, id uuid.UUID, version string) error {
-	query := `UPDATE pool_link_instances SET last_seen_at = NOW(), version = CASE WHEN $2 = '' THEN version ELSE $2 END WHERE id = $1`
+	// last_seen_at is a display value; a minute's resolution spares a write per call.
+	query := `UPDATE pool_link_instances SET last_seen_at = NOW(), version = CASE WHEN $2 = '' THEN version ELSE $2 END
+		WHERE id = $1 AND (last_seen_at IS NULL OR last_seen_at < NOW() - INTERVAL '1 minute' OR ($2 <> '' AND version IS DISTINCT FROM $2))`
 	_, err := r.db.Exec(ctx, query, id, version)
 	return err
 }

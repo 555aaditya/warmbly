@@ -838,36 +838,44 @@ func (r *contactRepository) ListVerificationCandidates(ctx context.Context, limi
 	}
 	requested := len(out)
 
-	query := `
-		SELECT c.id, c.organization_id, c.email, c.verification_requested_at
-		FROM contacts c
-		WHERE c.organization_id IS NOT NULL
+	// Each reason a contact is due is its own index-bounded arm, so a pass
+	// with nothing due reads a few index pages rather than every contact.
+	const due = `
+		SELECT c.id, c.organization_id, c.email, c.verification_requested_at,
+		       c.verification_checked_at, c.created_at
+		FROM contacts c`
+	const eligible = `
+		  AND c.organization_id IS NOT NULL
 		  AND c.verification_requested_at IS NULL
 		  AND c.verification_source <> 'manual'
 		  -- Real mail seen recently excuses the address from a check.
 		  AND (c.verification_evidence_at IS NULL OR c.verification_evidence_at < NOW() - make_interval(days => $4))
-		  AND (
-		    c.verification_checked_at IS NULL
-		    OR (c.verification_status = 'unknown' AND c.verification_checked_at < NOW() - make_interval(days => $2))
-		    OR c.verification_checked_at < NOW() - make_interval(days => $3)
-		    -- A built-in verdict reached before the workspace connected a
-		    -- verifier was reached without it; re-check once rather than after
-		    -- the shelf life. Only the built-in probe's verdicts: one a paid
-		    -- verifier already produced is a real answer, and re-checking it
-		    -- because another verifier was connected spends a credit for
-		    -- nothing.
-		    OR (
-		      c.verification_provider = $6
-		      AND EXISTS (
-		        SELECT 1 FROM integration_connections ic
-		        WHERE ic.organization_id = c.organization_id
-		          AND ic.provider = ANY($5)
-		          AND ic.status <> 'disconnected'
-		          AND c.verification_checked_at < ic.created_at
-		      )
-		    )
-		  )
 		ORDER BY c.verification_checked_at ASC NULLS FIRST, c.created_at ASC
+		LIMIT $1`
+	query := `
+		SELECT id, organization_id, email, verification_requested_at FROM (
+		  (` + due + `
+		   WHERE c.verification_checked_at IS NULL` + eligible + `)
+		  UNION
+		  (` + due + `
+		   WHERE c.verification_checked_at < NOW() - make_interval(days => LEAST($2::int, $3::int))
+		     AND ((c.verification_status = 'unknown' AND c.verification_checked_at < NOW() - make_interval(days => $2))
+		          OR c.verification_checked_at < NOW() - make_interval(days => $3))` + eligible + `)
+		  UNION
+		  -- A built-in verdict reached before the workspace connected a
+		  -- verifier was reached without it; re-check once rather than after
+		  -- the shelf life. Only the built-in probe's verdicts: one a paid
+		  -- verifier already produced is a real answer, and re-checking it
+		  -- because another verifier was connected spends a credit for
+		  -- nothing.
+		  (SELECT d.* FROM integration_connections ic
+		   CROSS JOIN LATERAL (` + due + `
+		     WHERE c.organization_id = ic.organization_id
+		       AND c.verification_provider = $6
+		       AND c.verification_checked_at < ic.created_at` + eligible + `) d
+		   WHERE ic.provider = ANY($5) AND ic.status <> 'disconnected')
+		) due
+		ORDER BY verification_checked_at ASC NULLS FIRST, created_at ASC
 		LIMIT $1
 	`
 	providers := make([]string, 0, len(models.VerificationProviders))

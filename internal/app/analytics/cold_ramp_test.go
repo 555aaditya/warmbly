@@ -22,6 +22,19 @@ func (r coldRampRepositoryStub) ColdRampStateForAccounts(context.Context, []uuid
 	return r.states, r.err
 }
 
+// The status page's other reads find nothing, so only the cold ramp speaks.
+func (coldRampRepositoryStub) GetCloudStandings(context.Context, []uuid.UUID) (map[uuid.UUID]*models.WarmupHealthInfo, error) {
+	return nil, nil
+}
+
+func (coldRampRepositoryStub) SpamPlacementsSinceForAccounts(context.Context, []uuid.UUID, time.Time) (map[uuid.UUID][]time.Time, error) {
+	return nil, nil
+}
+
+func (coldRampRepositoryStub) LastWarmupSendFailures(context.Context, []uuid.UUID, time.Time) (map[uuid.UUID]*models.WarmupSendFailure, error) {
+	return nil, nil
+}
+
 func TestColdRampUnknownFeedbackKeepsConservativeMailboxExplanation(t *testing.T) {
 	warmed := time.Now().Add(-90 * 24 * time.Hour)
 	ramp := time.Now().Add(-30 * 24 * time.Hour)
@@ -41,11 +54,11 @@ func TestColdRampUnknownFeedbackKeepsConservativeMailboxExplanation(t *testing.T
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &analyticsService{warmupRepo: tc.repo}
-			if info := s.coldRampInfo(t.Context(), email); info == nil || info.Ceiling != 5 || info.DaysToFullCap != -1 {
+			if info := coldRampFor(t, s, email); info == nil || info.Ceiling != 5 || info.DaysToFullCap != -1 {
 				t.Fatal("feedback gap hid the conservative explanation", info)
 			}
 			unwarmed := &models.Email{ID: uuid.New(), CampaignLimit: 50}
-			if info := s.coldRampInfo(t.Context(), unwarmed); info != nil {
+			if info := coldRampFor(t, s, unwarmed); info != nil {
 				t.Fatal("never-warmed mailbox acquired a graduation claim", info)
 			}
 		})
@@ -53,7 +66,14 @@ func TestColdRampUnknownFeedbackKeepsConservativeMailboxExplanation(t *testing.T
 	s := &analyticsService{warmupRepo: coldRampRepositoryStub{states: map[uuid.UUID]repository.ColdRampState{
 		email.ID: {ConfirmedReplies: 12, ColdRampStartedAt: &ramp},
 	}}}
-	if info := s.coldRampInfo(t.Context(), email); info == nil || info.Ceiling != 17 {
+	if info := coldRampFor(t, s, email); info == nil || info.Ceiling != 17 {
 		t.Fatal("explanation lost genuine reply evidence", info)
 	}
+}
+
+// coldRampFor reads one mailbox's cold-ramp notice the way a status page does.
+func coldRampFor(t *testing.T, s *analyticsService, email *models.Email) *models.ColdRampInfo {
+	t.Helper()
+	reads := s.loadStatusReads(t.Context(), []models.Email{*email}, nil)
+	return coldRampNotice(email, reads.coldRamp, reads.now)
 }
