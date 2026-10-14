@@ -26,6 +26,10 @@ type warmupDispatchStore interface {
 	ListOverdueWarmupDispatches(context.Context, time.Time) ([]repository.MailboxLoadingIncident, error)
 }
 
+type warmupStoppedDispatchStore interface {
+	ListPostStopWarmupDispatches(context.Context, time.Time) ([]repository.MailboxLoadingIncident, error)
+}
+
 type WarmupOperationsJob struct {
 	loading  warmupLoadingStore
 	dispatch warmupDispatchStore
@@ -69,11 +73,18 @@ func (j *WarmupOperationsJob) Run(ctx context.Context) error {
 	if err != nil {
 		return errors.New("warmup dispatch monitor query failed")
 	}
+	var stopped []repository.MailboxLoadingIncident
+	if store, ok := j.dispatch.(warmupStoppedDispatchStore); ok {
+		stopped, err = store.ListPostStopWarmupDispatches(ctx, now)
+		if err != nil {
+			return errors.New("warmup stop monitor query failed")
+		}
+	}
 	for _, v := range []struct {
 		kind string
 		rows []repository.MailboxLoadingIncident
 	}{
-		{"mailbox_loading", loading}, {"dispatch_overdue", overdue},
+		{"mailbox_loading", loading}, {"dispatch_overdue", overdue}, {"dispatch_after_stop", stopped},
 	} {
 		if err := j.alert(ctx, v.kind, v.rows, now); err != nil {
 			return err
@@ -124,6 +135,10 @@ func (j *WarmupOperationsJob) alert(ctx context.Context, kind string, rows []rep
 		if kind == "dispatch_overdue" {
 			title, summary = "Warmup task dispatch is overdue", "Active mailboxes have pending warmup tasks at least an hour past their intended schedule. Check dispatcher errors and retry/backoff. This does not establish a provider failure."
 			event = opsnotify.EventWarmupDispatchOverdue
+		}
+		if kind == "dispatch_after_stop" {
+			title, summary = "Warmup execution recorded after stop", "Recent execution-start timestamps follow a confirmed mailbox stop. Investigate sending and receiving authorization. Delayed result processing and provider delivery notices are not evidence of new execution."
+			event = opsnotify.EventWarmupDispatchAfterStop
 		}
 		fields := map[string]string{"Scope": key, "Mailboxes": strconv.Itoa(len(group)), "Workspaces": strconv.Itoa(len(orgs)), "Workers": strconv.Itoa(len(workers)), "Oldest observed delay": now.Sub(oldest).Round(time.Minute).String()}
 		if j.notifier != nil {

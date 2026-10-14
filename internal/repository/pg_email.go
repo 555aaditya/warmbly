@@ -1364,6 +1364,7 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 	setClauses := []string{}
 	args := []any{orgID, emailAccountID}
 	argPos := 3
+	statusSQL := "status"
 
 	if udata.Name != nil {
 		if !validate.EmailName(udata.Name) {
@@ -1453,6 +1454,7 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 			return nil, errx.ErrInvalid
 		}
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "status", argPos))
+		statusSQL = fmt.Sprintf("$%d::email_status", argPos)
 		args = append(args, status)
 		argPos++
 		if status == "active" {
@@ -1619,6 +1621,8 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 		argPos++
 	}
 
+	participationChanged := udata.Status != nil || udata.TestMode != nil || udata.TestSendEnabled != nil || udata.TestReceiveEnabled != nil
+	modeSQL, sendSQL, receiveSQL := "test_mode", "test_send_enabled", "test_receive_enabled"
 	if udata.TestMode == nil && (udata.TestSendEnabled != nil || udata.TestReceiveEnabled != nil) {
 		mode := models.TestParticipationDiagnostic
 		udata.TestMode = &mode
@@ -1628,6 +1632,7 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 			return nil, errx.ErrNotEnough
 		}
 		setClauses = append(setClauses, fmt.Sprintf("test_mode = $%d", argPos))
+		modeSQL = fmt.Sprintf("$%d", argPos)
 		args = append(args, *udata.TestMode)
 		argPos++
 	}
@@ -1639,9 +1644,17 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 	} {
 		if setting.value != nil {
 			setClauses = append(setClauses, fmt.Sprintf("%s = $%d", setting.column, argPos))
+			if setting.column == "test_send_enabled" {
+				sendSQL = fmt.Sprintf("$%d", argPos)
+			} else {
+				receiveSQL = fmt.Sprintf("$%d", argPos)
+			}
 			args = append(args, *setting.value)
 			argPos++
 		}
+	}
+	if participationChanged {
+		setClauses = append(setClauses, "warmup_stopped_at = CASE WHEN "+statusSQL+" IN ('inactive','revoked') OR "+modeSQL+"='off' OR "+modeSQL+"='diagnostic' AND NOT ("+sendSQL+") AND NOT ("+receiveSQL+") THEN COALESCE(warmup_stopped_at,clock_timestamp()) ELSE NULL END")
 	}
 	for _, setting := range []struct {
 		column string
@@ -1675,6 +1688,40 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 		return nil, errx.InternalError()
 	}
 	defer tx.Rollback(ctx)
+	if participationChanged {
+		mailbox, parseErr := uuid.Parse(emailAccountID)
+		if parseErr != nil {
+			return nil, errx.ErrUuid
+		}
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,270))`, mailbox.String()); err != nil {
+			return nil, errx.InternalError()
+		}
+		var currentMode *string
+		var currentStatus string
+		var currentSend, currentReceive, currentPaused bool
+		if err := tx.QueryRow(ctx, `SELECT test_mode,status,test_send_enabled,test_receive_enabled,warmup_paused_at IS NOT NULL FROM email_accounts WHERE organization_id=$1 AND id=$2`, orgID, mailbox).Scan(&currentMode, &currentStatus, &currentSend, &currentReceive, &currentPaused); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, errx.ErrNotFound
+			}
+			return nil, errx.InternalError()
+		}
+		direction := ""
+		diagnostic := currentMode != nil && *currentMode == "diagnostic"
+		sendingOff := currentPaused || diagnostic && !currentSend || udata.TestSendEnabled != nil && !*udata.TestSendEnabled
+		receivingOff := diagnostic && !currentReceive || udata.TestReceiveEnabled != nil && !*udata.TestReceiveEnabled
+		if currentStatus != "active" || udata.Status != nil && *udata.Status != "active" || currentMode != nil && *currentMode == "off" || udata.TestMode != nil && *udata.TestMode == "off" || sendingOff && receivingOff {
+			direction = "both"
+		} else if sendingOff {
+			direction = "sender"
+		} else if receivingOff {
+			direction = "receiver"
+		}
+		if direction != "" {
+			if err := retireStoppedWarmupDispatches(ctx, tx, mailbox, direction); err != nil {
+				return nil, errx.InternalError()
+			}
+		}
+	}
 	if resolution := udata.SendRecoveryResolution; resolution != nil {
 		mailboxID, parseErr := uuid.Parse(emailAccountID)
 		if parseErr != nil || resolution.HeldTaskID == uuid.Nil {
@@ -2235,7 +2282,7 @@ func (r *emailRepository) SetWarmupLifecycle(ctx context.Context, orgID, emailAc
 				WHEN warmup_paused_at IS NOT NULL THEN warmup + (now() - warmup_paused_at)
 				ELSE warmup
 			END,
-			warmup_paused_at = NULL,
+			warmup_paused_at = NULL, warmup_stopped_at = NULL,
 			test_receive_enabled = CASE WHEN test_mode IS NULL OR test_mode IN ('off','legacy') THEN true ELSE test_receive_enabled END,
 			test_mode = 'diagnostic', test_send_enabled = true`
 	case "pause":
@@ -2247,6 +2294,7 @@ func (r *emailRepository) SetWarmupLifecycle(ctx context.Context, orgID, emailAc
 			test_mode = 'diagnostic', test_send_enabled = false`
 	case "disable", "stop":
 		setClause = `warmup_paused_at = CASE WHEN warmup IS NOT NULL THEN COALESCE(warmup_paused_at,now()) ELSE NULL END,
+			warmup_stopped_at = COALESCE(warmup_stopped_at,clock_timestamp()),
 			test_mode = 'off', test_send_enabled = false, test_receive_enabled = false`
 	default:
 		return nil, errx.ErrInvalid
@@ -2258,7 +2306,45 @@ func (r *emailRepository) SetWarmupLifecycle(ctx context.Context, orgID, emailAc
 		WHERE organization_id = $1 AND id = $2
 	`, setClause)
 
-	tag, err := r.DB.Exec(ctx, query, orgID, emailAccountID)
+	id, perr := uuid.Parse(emailAccountID)
+	if perr != nil {
+		return nil, errx.ErrUuid
+	}
+	tx, err := r.DB.Begin(ctx)
+	if err != nil {
+		return nil, errx.InternalError()
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,270))`, id.String()); err != nil {
+		return nil, errx.InternalError()
+	}
+	var currentMode *string
+	var currentSend, currentReceive, currentPaused bool
+	var currentStatus string
+	if err := tx.QueryRow(ctx, `SELECT test_mode,status,test_send_enabled,test_receive_enabled,warmup_paused_at IS NOT NULL FROM email_accounts WHERE organization_id=$1 AND id=$2`, orgID, id).Scan(&currentMode, &currentStatus, &currentSend, &currentReceive, &currentPaused); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errx.ErrNotFound
+		}
+		return nil, errx.InternalError()
+	}
+	diagnostic := currentMode != nil && *currentMode == "diagnostic"
+	sendingOff := currentPaused || action == "pause" || diagnostic && !currentSend
+	receivingOff := diagnostic && !currentReceive
+	direction := ""
+	if action == "stop" || action == "disable" || currentStatus != "active" || currentMode != nil && *currentMode == "off" || sendingOff && receivingOff {
+		direction = "both"
+	} else if sendingOff {
+		direction = "sender"
+	} else if receivingOff {
+		direction = "receiver"
+	}
+	if direction != "" {
+		if err := retireStoppedWarmupDispatches(ctx, tx, id, direction); err != nil {
+			db.CaptureError(err, "retire stopped warmup dispatches", nil, "exec")
+			return nil, errx.InternalError()
+		}
+	}
+	tag, err := tx.Exec(ctx, query, orgID, emailAccountID)
 	if err != nil {
 		db.CaptureError(err, query, []any{orgID, emailAccountID}, "exec")
 		return nil, errx.InternalError()
@@ -2269,9 +2355,8 @@ func (r *emailRepository) SetWarmupLifecycle(ctx context.Context, orgID, emailAc
 
 	// The UPDATE already proved the mailbox belongs to this workspace, so the
 	// re-read can go by id.
-	id, perr := uuid.Parse(emailAccountID)
-	if perr != nil {
-		return nil, errx.ErrUuid
+	if err := tx.Commit(ctx); err != nil {
+		return nil, errx.InternalError()
 	}
 	return r.GetByID(ctx, id)
 }

@@ -456,7 +456,9 @@ Tracking uses the same host as everything else, so a [custom tracking domain](#c
 
 New mailboxes should warm up before carrying campaign volume. Defaults are `10`/day starting volume, `+1`/day ramp, and a `40`/day ceiling.
 
-Start, pause, resume, or stop from the mailbox's **Warmup** tab, or for several mailboxes at once from the Accounts selection bar. **Pausing keeps your ramp progress; stopping resets it**, so a restart begins at the base volume again.
+Start, pause, resume, or stop from the mailbox's **Warmup** tab, or for several mailboxes at once from the Accounts selection bar. Pausing keeps your ramp progress and stops new warmup sending. Stopping also disables warmup receiving and engagement without deleting the mailbox or its history.
+
+Stopping retires warmup requests that have not begun sending, including other mailboxes' requests to this recipient. Restarting does not reactivate those old requests. Directional participation switches retire requests only in the disabled direction. A send already underway or accepted by the provider cannot be recalled. Gmail can therefore send delayed-delivery notices for earlier messages after you stop warmup; a notice arriving later is not necessarily a new Warmbly send.
 
 The same tab decides where warmup mail lands **in your own mail client**: its own folder (`Warmbly` by default), left in the inbox, or archived. It covers both directions, the warmup this mailbox receives and the copy of what it sends, so neither Inbox nor Sent fills with it. See [keeping warmup out of your inbox](/guides/warmup/#keeping-warmup-out-of-your-inbox).
 

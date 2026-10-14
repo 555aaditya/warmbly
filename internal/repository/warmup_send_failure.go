@@ -70,6 +70,37 @@ type MailboxLoadingIncident struct {
 	LastFailureAt  time.Time
 }
 
+func (r *taskRepository) ListPostStopWarmupDispatches(ctx context.Context, now time.Time) ([]MailboxLoadingIncident, error) {
+	rows, err := r.db.Query(ctx, `WITH stopped AS (
+		SELECT id,organization_id,warmup_stopped_at FROM email_accounts WHERE warmup_stopped_at IS NOT NULL
+		AND (status IN ('inactive','revoked') OR test_mode='off' OR test_mode='diagnostic' AND NOT test_send_enabled AND NOT test_receive_enabled)),
+		linked AS (
+		SELECT ea.id,ea.organization_id,ea.warmup_stopped_at,t.id AS task_id FROM stopped ea JOIN tasks t ON t.email_account_id=ea.id
+		UNION SELECT ea.id,ea.organization_id,ea.warmup_stopped_at,w.task_id FROM stopped ea JOIN warmup_tasks w ON w.target_account_id=ea.id
+		WHERE NOT EXISTS(SELECT 1 FROM warmup_tokens wt WHERE wt.task_id=w.task_id)
+		UNION SELECT ea.id,ea.organization_id,ea.warmup_stopped_at,wt.task_id FROM stopped ea JOIN warmup_tokens wt ON wt.recipient_account_id=ea.id)
+		SELECT ea.id,ea.organization_id,COALESCE(t.send_executor_worker,w.dispatch_worker_id),
+		MIN(GREATEST(t.send_executor_started_at,w.dispatch_started_at)),MAX(GREATEST(t.send_executor_started_at,w.dispatch_started_at))
+		FROM linked ea JOIN tasks t ON t.id=ea.task_id JOIN warmup_tasks w ON w.task_id=t.id
+		WHERE t.task_type='warmup'
+		AND GREATEST(t.send_executor_started_at,w.dispatch_started_at)>ea.warmup_stopped_at
+		AND GREATEST(t.send_executor_started_at,w.dispatch_started_at) BETWEEN $1::timestamptz-INTERVAL '1 hour' AND $1
+		GROUP BY ea.id,ea.organization_id,COALESCE(t.send_executor_worker,w.dispatch_worker_id)`, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var incidents []MailboxLoadingIncident
+	for rows.Next() {
+		var v MailboxLoadingIncident
+		if err := rows.Scan(&v.AccountID, &v.OrganizationID, &v.WorkerID, &v.FirstFailureAt, &v.LastFailureAt); err != nil {
+			return nil, err
+		}
+		incidents = append(incidents, v)
+	}
+	return incidents, rows.Err()
+}
+
 func (r *taskRepository) ListOverdueWarmupDispatches(ctx context.Context, now time.Time) ([]MailboxLoadingIncident, error) {
 	rows, err := r.db.Query(ctx, `SELECT e.id,e.organization_id,e.worker_id,MIN(t.scheduled_at),$1::timestamptz
 	    FROM tasks t JOIN email_accounts e ON e.id=t.email_account_id

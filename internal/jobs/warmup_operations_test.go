@@ -13,8 +13,8 @@ import (
 )
 
 type warmupMonitorStore struct {
-	loading, overdue []repository.MailboxLoadingIncident
-	err              error
+	loading, overdue, stopped []repository.MailboxLoadingIncident
+	err                       error
 }
 
 func (s *warmupMonitorStore) ListMailboxLoadingIncidents(context.Context, time.Time) ([]repository.MailboxLoadingIncident, error) {
@@ -22,6 +22,35 @@ func (s *warmupMonitorStore) ListMailboxLoadingIncidents(context.Context, time.T
 }
 func (s *warmupMonitorStore) ListOverdueWarmupDispatches(context.Context, time.Time) ([]repository.MailboxLoadingIncident, error) {
 	return s.overdue, s.err
+}
+func (s *warmupMonitorStore) ListPostStopWarmupDispatches(context.Context, time.Time) ([]repository.MailboxLoadingIncident, error) {
+	return s.stopped, s.err
+}
+
+func TestWarmupOperationsPostStopEvidenceDeduplicatesAndExpires(t *testing.T) {
+	now := time.Now()
+	store := &warmupMonitorStore{stopped: []repository.MailboxLoadingIncident{{AccountID: uuid.New(), OrganizationID: uuid.New(), FirstFailureAt: now.Add(-time.Minute), LastFailureAt: now}}}
+	notifier := &warmupMonitorNotifier{}
+	job := NewWarmupOperationsJob(store, store, nil, notifier)
+	seen := false
+	job.claim = func(_ context.Context, key string) (bool, error) {
+		if key != "dispatch_after_stop:unassigned" {
+			t.Fatal("unexpected alert key", key)
+		}
+		claimed := !seen
+		seen = true
+		return claimed, nil
+	}
+	job.report = func(error, ...errs.Option) {}
+	for range 2 {
+		if err := job.Run(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store.stopped = nil
+	if err := job.Run(t.Context()); err != nil || len(notifier.keys) != 1 || notifier.keys[0] != opsnotify.EventWarmupDispatchAfterStop {
+		t.Fatal("post-stop alert not deduplicated", err, notifier.keys)
+	}
 }
 
 type warmupMonitorNotifier struct {
