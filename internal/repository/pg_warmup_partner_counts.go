@@ -21,52 +21,32 @@ func (r *warmupRepository) WarmupPartnerCounts(ctx context.Context, poolType str
 	if err != nil || len(orgs) == 0 {
 		return out, err
 	}
-	suffix := candidateSuffixFor(poolType)
-	own, err := r.queryPartnerCandidates(ctx, `
-		SELECT wpp.email_account_id AS id, ea.email, ea.organization_id, ea.provider::text AS provider, ea.mail_host
+	cands, err := r.partnerCohort(ctx, partnerCandidateColumns+`
 		FROM warmup_pool_participants wpp
 		JOIN warmup_pools wp ON wpp.pool_id = wp.id
 		JOIN email_accounts ea ON ea.id = wpp.email_account_id
 		WHERE wp.pool_type = $1 AND `+partnerEligibleSQL,
-		suffix, poolType, models.WarmupPartnerOwnTier, poolType)
+		poolType, models.WarmupPartnerOwnTier, poolType)
 	if err != nil {
 		return nil, err
 	}
-	ownIDs := make(map[uuid.UUID]bool, len(own))
-	for _, c := range own {
-		ownIDs[c.ID] = true
-	}
-	for id := range orgs {
-		out[id] = len(own)
-		if ownIDs[id] {
-			out[id]--
-		}
-	}
-	if borrowFrom, ok := models.WarmupPoolBorrowsFrom(poolType); ok {
-		borrowed, err := r.queryPartnerCandidates(ctx, `
-			SELECT wpp.email_account_id AS id, ea.email, ea.organization_id, ea.provider::text AS provider, ea.mail_host
+	borrowFrom, borrows := models.WarmupPoolBorrowsFrom(poolType)
+	if borrows {
+		borrowed, err := r.partnerCohort(ctx, partnerCandidateColumns+`
 			FROM warmup_pool_participants wpp
 			JOIN warmup_pools wp ON wpp.pool_id = wp.id
 			JOIN email_accounts ea ON ea.id = wpp.email_account_id
 			JOIN organizations o ON o.id = ea.organization_id
 			WHERE wp.pool_type = $1 AND `+partnerEligibleSQL+` AND `+partnerProvenSQL,
-			suffix, borrowFrom, models.WarmupPartnerBorrowed, borrowFrom, config.WarmupPoolFallbackMinAgeDays)
+			borrowFrom, models.WarmupPartnerBorrowed, borrowFrom, config.WarmupPoolFallbackMinAgeDays)
 		if err != nil {
 			return nil, err
 		}
-		byOrg := make(map[uuid.UUID]int)
-		for _, c := range borrowed {
-			if c.OrganizationID != nil {
-				byOrg[*c.OrganizationID]++
-			}
-		}
-		for id, org := range orgs {
-			out[id] += len(borrowed) - byOrg[org]
-		}
+		cands = append(cands, borrowed...)
 	}
-	if returnTo, ok := models.WarmupPoolReturnsTo(poolType); ok {
-		returns, err := r.queryPartnerCandidates(ctx, `
-			SELECT wpp.email_account_id AS id, ea.email, ea.organization_id, ea.provider::text AS provider, ea.mail_host
+	returnTo, returnsTo := models.WarmupPoolReturnsTo(poolType)
+	if returnsTo {
+		returns, err := r.partnerCohort(ctx, partnerCandidateColumns+`
 			FROM warmup_pool_participants wpp
 			JOIN warmup_pools wp ON wpp.pool_id = wp.id
 			JOIN email_accounts ea ON ea.id = wpp.email_account_id
@@ -75,14 +55,46 @@ func (r *warmupRepository) WarmupPartnerCounts(ctx context.Context, poolType str
 			      SELECT wr.sender_account_id FROM warmup_received wr
 			      WHERE wr.email_account_id = ANY($2::uuid[])
 			        AND wr.created_at >= NOW() - make_interval(days => $3))`,
-			suffix, returnTo, models.WarmupPartnerReturn, returnTo, senderIDs, config.WarmupPoolReturnVisitDays)
+			returnTo, models.WarmupPartnerReturn, returnTo, senderIDs, config.WarmupPoolReturnVisitDays)
 		if err != nil {
 			return nil, err
 		}
-		returnIDs := make(map[uuid.UUID]bool, len(returns))
-		for _, c := range returns {
+		cands = append(cands, returns...)
+	}
+	// One cap over every cohort, so the counts are read once for the page.
+	cands, err = r.capPartnerCandidates(ctx, poolType, cands)
+	if err != nil {
+		return nil, err
+	}
+
+	ownIDs := make(map[uuid.UUID]bool)
+	returnIDs := make(map[uuid.UUID]bool)
+	borrowedByOrg := make(map[uuid.UUID]int)
+	own, borrowed := 0, 0
+	for _, c := range cands {
+		switch c.Origin {
+		case models.WarmupPartnerOwnTier:
+			own++
+			ownIDs[c.ID] = true
+		case models.WarmupPartnerBorrowed:
+			borrowed++
+			if c.OrganizationID != nil {
+				borrowedByOrg[*c.OrganizationID]++
+			}
+		case models.WarmupPartnerReturn:
 			returnIDs[c.ID] = true
 		}
+	}
+	for id, org := range orgs {
+		out[id] = own
+		if ownIDs[id] {
+			out[id]--
+		}
+		if borrows {
+			out[id] += borrowed - borrowedByOrg[org]
+		}
+	}
+	if returnsTo {
 		rows, err := resultDB(ctx, r.db).Query(ctx, `
 			SELECT DISTINCT ea.id, wr.sender_account_id
 			FROM warmup_received wr

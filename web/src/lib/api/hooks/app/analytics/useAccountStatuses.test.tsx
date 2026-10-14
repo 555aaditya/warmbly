@@ -2,7 +2,7 @@ import type { PropsWithChildren } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import useAccountStatuses from "@/lib/api/hooks/app/analytics/useAccountStatuses";
+import useAccountStatuses, { stableChunks } from "@/lib/api/hooks/app/analytics/useAccountStatuses";
 import getAccountStatuses from "@/lib/api/client/app/analytics/getAccountStatuses";
 import type AccountStatus from "@/lib/api/models/app/analytics/AccountStatus";
 
@@ -40,6 +40,33 @@ describe("account status aggregation", () => {
         expect(getAccountStatuses).toHaveBeenCalledTimes(3);
         expect(client.getQueryCache().getAll().every((q) => q.queryKey.slice(0, 3).join("/") === "analytics/accounts/list")).toBe(true);
         unmount(); client.clear();
+    });
+
+    it("keeps loaded chunks when later list pages arrive", async () => {
+        const { client, wrapper } = harness();
+        const all = Array.from({ length: 400 }, (_, i) => String(i).padStart(3, "0"));
+        const firstPage = all.filter((_, i) => i % 2 === 0);
+        const { result, rerender, unmount } = renderHook(({ ids }) => useAccountStatuses(ids), { wrapper, initialProps: { ids: firstPage } });
+        await waitFor(() => expect(result.current.data).toHaveLength(200));
+        expect(getAccountStatuses).toHaveBeenCalledTimes(2);
+        rerender({ ids: all });
+        await waitFor(() => expect(result.current.data).toHaveLength(400));
+        // Only the second page's ids are asked for; the first page's chunks are reused.
+        expect(getAccountStatuses).toHaveBeenCalledTimes(4);
+        expect(vi.mocked(getAccountStatuses).mock.calls.slice(2).flatMap(([ids]) => ids).sort()).toEqual(all.filter((_, i) => i % 2 === 1));
+        unmount(); client.clear();
+    });
+
+    it("re-packs chunks once they fragment", () => {
+        let chunks: string[][] = [];
+        const ids: string[] = [];
+        for (let i = 0; i < 10; i++) {
+            ids.push(`m${i}`);
+            chunks = stableChunks(chunks, ids);
+        }
+        expect(chunks.length).toBeLessThanOrEqual(3);
+        expect(chunks.flat().sort()).toEqual([...ids].sort());
+        expect(stableChunks(chunks, ids.slice(0, 5)).flat().sort()).toEqual(ids.slice(0, 5));
     });
 
     it("skips per-row aggregation on unchanged renders and recomputes for realtime data", async () => {
