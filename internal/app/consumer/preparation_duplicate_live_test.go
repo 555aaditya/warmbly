@@ -18,7 +18,7 @@ func TestLiveDelayedPreparationDuplicateMustNotCreateDefinitiveConflict(t *testi
 	s.WarmupRepo = repository.NewWarmupRepository(h.Pool)
 	s.InitEvents()
 	ctx := t.Context()
-	task, worker := uuid.New(), uuid.New()
+	task, worker, recipient := uuid.New(), uuid.New(), uuid.New()
 	exec := func(query string, args ...any) {
 		t.Helper()
 		if _, err := h.Exec(ctx, query, args...); err != nil {
@@ -28,9 +28,20 @@ func TestLiveDelayedPreparationDuplicateMustNotCreateDefinitiveConflict(t *testi
 	exec(`INSERT INTO fleet_nodes(id,role,active,last_seen_at,warmup_send_protocol)VALUES($1,'worker',true,NOW(),1)`, worker)
 	exec(`INSERT INTO workers(id)VALUES($1)`, worker)
 	t.Cleanup(func() { _, _ = h.Exec(context.Background(), `DELETE FROM fleet_nodes WHERE id=$1`, worker) })
-	exec(`UPDATE email_accounts SET worker_id=$1,test_mode='legacy' WHERE id=$2`, worker, f.mailbox)
+	exec(`UPDATE organizations SET risk_state='trusted' WHERE id=$1`, f.org)
+	exec(`UPDATE email_accounts SET worker_id=$1,test_mode='legacy',warmup=NOW() WHERE id=$2`, worker, f.mailbox)
+	exec(`INSERT INTO email_accounts(id,user_id,organization_id,email,name,signature_plain,signature_html,provider,status,test_mode,warmup,timezone)
+		VALUES($1,$2,$3,$4,'Preparation recipient','','','smtp_imap','active','legacy',NOW(),'UTC')`, recipient, f.user, f.org, recipient.String()+"@test.local")
+	t.Cleanup(func() { _, _ = h.Exec(context.Background(), `DELETE FROM email_accounts WHERE id=$1`, recipient) })
+	exec(`INSERT INTO warmup_pool_participants(pool_id,email_account_id) SELECT wp.id,ea.id FROM warmup_pools wp CROSS JOIN email_accounts ea
+		WHERE wp.pool_type='free' AND ea.id IN($1,$2) ON CONFLICT DO NOTHING`, f.mailbox, recipient)
 	exec(`INSERT INTO tasks(id,email_account_id,task_type,status,message_id)VALUES($1,$2,'warmup','active','')`, task, f.mailbox)
-	exec(`INSERT INTO warmup_tasks(task_id,target_account_id,lineage_version)VALUES($1,$2,1)`, task, f.mailbox)
+	exec(`INSERT INTO warmup_tasks(task_id,target_account_id,lineage_version)VALUES($1,$2,1)`, task, recipient)
+	saveToken := func() {
+		exec(`INSERT INTO warmup_tokens(token,task_id,sender_account_id,recipient_account_id,subject)
+			VALUES($1,$2,$3,$4,'Preparation duplicate')`, uuid.New(), task, f.mailbox, recipient)
+	}
+	saveToken()
 	dispatch := s.TaskRepo.(repository.WarmupDispatchRepository)
 	nonce, err := dispatch.AuthorizeWarmupDispatch(ctx, task, f.mailbox, worker)
 	if err != nil {
@@ -51,6 +62,7 @@ func TestLiveDelayedPreparationDuplicateMustNotCreateDefinitiveConflict(t *testi
 	if claimed, err := claim.ClaimWarmupTask(ctx, task, time.Now().Add(time.Second)); err != nil || !claimed {
 		t.Fatalf("claim=%v error=%v", claimed, err)
 	}
+	saveToken()
 	if next, err := dispatch.AuthorizeWarmupDispatch(ctx, task, f.mailbox, worker); err != nil || next == nonce {
 		t.Fatalf("new authorization nonce=%s error=%v", next, err)
 	}
