@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useMemo, useState } from "react";
 import { useQueries, type UseQueryResult } from "@tanstack/react-query";
 import getAccountStatuses from "@/lib/api/client/app/analytics/getAccountStatuses";
 import type AccountStatus from "@/lib/api/models/app/analytics/AccountStatus";
@@ -36,14 +36,21 @@ export default function useAccountStatuses(emailIds: string[], options?: { enabl
     // list never re-keys (and refetches) the chunks already loaded.
     const enabled = options?.enabled ?? true;
     const sourceRevision = options?.sourceRevision ?? 0;
-    const chunksRef = useRef<string[][]>([]);
+    // The layout is state derived from the last committed one, so a render
+    // React discards never shapes the next render's keys.
+    const [layout, setLayout] = useState<{ ids: string[]; chunks: string[][] }>(() => ({ ids: emailIds, chunks: stableChunks([], emailIds) }));
+    let chunks = layout.chunks;
+    if (layout.ids !== emailIds) {
+        chunks = stableChunks(layout.chunks, emailIds);
+        setLayout({ ids: emailIds, chunks });
+    }
     const queries = useMemo(
-        () => (chunksRef.current = stableChunks(chunksRef.current, emailIds)).map((ids) => ({
+        () => chunks.map((ids) => ({
             queryKey: ["analytics", "accounts", "list", ids, sourceRevision],
             queryFn: ({ signal }: { signal: AbortSignal }) => getAccountStatuses(ids, signal),
             enabled: ids.length > 0 && enabled,
         })),
-        [emailIds, enabled, sourceRevision],
+        [chunks, enabled, sourceRevision],
     );
 
     return useQueries({ queries, combine: combineAccountStatuses });

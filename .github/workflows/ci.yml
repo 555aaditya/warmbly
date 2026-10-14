@@ -207,8 +207,8 @@ jobs:
         run: |
           set -o pipefail
           go run ./cmd/migrate
-          go test -race -v -p 1 ./internal/repository ./internal/app/analytics -run '^TestLive(WarmupPartnerCountsMatchIndividualCandidates|WarmupSummariesMatchIndividualReads|LinkedMailboxStatusBatchPreservesDetails|WarmupPartnerWeekCacheMatchesExactReadAndKeepsTheCapLive|WarmupPartnerCandidatesCarryReciprocityAndHonourTheCap|AccountStatusPageMatchesSingleReadsInBoundedQueries)$' -count=1 | tee linked-mailbox-batch.log
-          for test in TestLiveWarmupPartnerCountsMatchIndividualCandidates TestLiveWarmupSummariesMatchIndividualReads TestLiveLinkedMailboxStatusBatchPreservesDetails TestLiveWarmupPartnerWeekCacheMatchesExactReadAndKeepsTheCapLive TestLiveWarmupPartnerCandidatesCarryReciprocityAndHonourTheCap TestLiveAccountStatusPageMatchesSingleReadsInBoundedQueries; do
+          go test -race -v -p 1 ./internal/repository ./internal/app/analytics -run '^TestLive(WarmupPartnerCountsMatchIndividualCandidates|WarmupSummariesMatchIndividualReads|LinkedMailboxStatusBatchPreservesDetails|WarmupPartnerWeekCacheMatchesExactReadAndKeepsTheCapLive|WarmupPartnerWeekCacheRefreshesDetachedAndServesStale|WarmupPartnerCandidatesCarryReciprocityAndHonourTheCap|AccountStatusPageMatchesSingleReadsInBoundedQueries)$' -count=1 | tee linked-mailbox-batch.log
+          for test in TestLiveWarmupPartnerCountsMatchIndividualCandidates TestLiveWarmupSummariesMatchIndividualReads TestLiveLinkedMailboxStatusBatchPreservesDetails TestLiveWarmupPartnerWeekCacheMatchesExactReadAndKeepsTheCapLive TestLiveWarmupPartnerWeekCacheRefreshesDetachedAndServesStale TestLiveWarmupPartnerCandidatesCarryReciprocityAndHonourTheCap TestLiveAccountStatusPageMatchesSingleReadsInBoundedQueries; do
             grep -q -- "--- PASS: $test " linked-mailbox-batch.log
           done
           if grep -q -- '--- SKIP:' linked-mailbox-batch.log; then exit 1; fi

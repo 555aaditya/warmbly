@@ -22,6 +22,10 @@ type partnerWeek struct {
 	sent, received, junked int
 }
 
+// partnerWeekRefreshTimeout bounds one pool-wide refresh, which runs detached
+// from the caller that started it.
+const partnerWeekRefreshTimeout = 30 * time.Second
+
 // partnerWeekCache holds the pool-wide seven-day counts for one process, so
 // every sender shares one aggregate instead of rescanning the window per call.
 type partnerWeekCache struct {
@@ -29,6 +33,8 @@ type partnerWeekCache struct {
 	mu   sync.Mutex
 	at   time.Time
 	data map[uuid.UUID]partnerWeek
+	// refreshing is closed when the refresh in flight ends; nil when none is.
+	refreshing chan struct{}
 }
 
 func newPartnerWeekCache(ttl time.Duration) *partnerWeekCache {
@@ -61,23 +67,54 @@ var (
 )
 
 // partnerWeeks returns the seven-day counts for ids: from the shared cache
-// when the repository has one, otherwise read exactly for those ids.
+// when the repository has one, otherwise read exactly for those ids. An
+// expired snapshot is served while one refresh replaces it, so no sender waits
+// on the pool-wide scan once the first one has landed.
 func (r *warmupRepository) partnerWeeks(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]partnerWeek, error) {
-	if c := r.partnerWeeks7d; c != nil {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		if c.data != nil && time.Since(c.at) < c.ttl {
-			return c.data, nil
-		}
-		// The pool, not a caller's transaction: the snapshot is shared.
-		data, err := scanPartnerWeeks(ctx, r.db, partnerWeekAllSQL)
-		if err != nil {
-			return nil, err
-		}
-		c.data, c.at = data, time.Now()
+	c := r.partnerWeeks7d
+	if c == nil {
+		return scanPartnerWeeks(ctx, resultDB(ctx, r.db), partnerWeekIDsSQL, ids)
+	}
+	c.mu.Lock()
+	data, fresh := c.data, c.data != nil && time.Since(c.at) < c.ttl
+	wait := c.refreshing
+	if !fresh && wait == nil {
+		wait = make(chan struct{})
+		c.refreshing = wait
+		go r.refreshPartnerWeeks(context.WithoutCancel(ctx), c, wait)
+	}
+	c.mu.Unlock()
+	if data != nil {
 		return data, nil
 	}
+	select {
+	case <-wait:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	c.mu.Lock()
+	data = c.data
+	c.mu.Unlock()
+	if data != nil {
+		return data, nil
+	}
+	// The first refresh failed; this caller reads its own ids exactly.
 	return scanPartnerWeeks(ctx, resultDB(ctx, r.db), partnerWeekIDsSQL, ids)
+}
+
+// refreshPartnerWeeks replaces the snapshot and keeps the old one on failure.
+func (r *warmupRepository) refreshPartnerWeeks(ctx context.Context, c *partnerWeekCache, done chan struct{}) {
+	ctx, cancel := context.WithTimeout(ctx, partnerWeekRefreshTimeout)
+	defer cancel()
+	// The pool, not a caller's transaction: the snapshot is shared.
+	data, err := scanPartnerWeeks(ctx, r.db, partnerWeekAllSQL)
+	c.mu.Lock()
+	if err == nil {
+		c.data, c.at = data, time.Now()
+	}
+	c.refreshing = nil
+	c.mu.Unlock()
+	close(done)
 }
 
 func scanPartnerWeeks(ctx context.Context, db sendResultDB, query string, args ...any) (map[uuid.UUID]partnerWeek, error) {

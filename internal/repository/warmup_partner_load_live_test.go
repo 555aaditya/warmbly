@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -107,5 +108,62 @@ func TestPartnerInboundCapMatchesTheSQLRule(t *testing.T) {
 		if got := partnerInboundCap(tc.sent, tc.share); got != tc.want {
 			t.Fatalf("cap(%d, %d%%) = %d, want %d", tc.sent, tc.share, got, tc.want)
 		}
+	}
+}
+
+// A caller that gives up does not cancel the shared refresh, and an expired
+// snapshot is served while one refresh replaces it.
+func TestLiveWarmupPartnerWeekCacheRefreshesDetachedAndServesStale(t *testing.T) {
+	f := newPartnerOrgFixture(t)
+	c := newPartnerWeekCache(time.Hour)
+	repo := &warmupRepository{db: f.pool, partnerWeeks7d: c}
+	ids := []uuid.UUID{f.sender, f.sibling, f.outside}
+
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _ = repo.partnerWeeks(gone, ids)
+	got, err := repo.partnerWeeks(context.Background(), ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	landed := c.data != nil
+	c.mu.Unlock()
+	if !landed {
+		t.Fatal("the refresh a cancelled caller started did not land")
+	}
+	exact, err := (&warmupRepository{db: f.pool}).partnerWeeks(context.Background(), ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		if got[id] != exact[id] {
+			t.Fatalf("%s: snapshot %+v, exact %+v", id, got[id], exact[id])
+		}
+	}
+
+	c.mu.Lock()
+	c.at = time.Now().Add(-2 * time.Hour)
+	before := c.data
+	c.mu.Unlock()
+	stale, err := repo.partnerWeeks(context.Background(), ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reflect.ValueOf(stale).Pointer() != reflect.ValueOf(before).Pointer() {
+		t.Fatal("an expired snapshot was not served while it refreshed")
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		c.mu.Lock()
+		refreshed := time.Since(c.at) < time.Minute && c.refreshing == nil
+		c.mu.Unlock()
+		if refreshed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the expired snapshot was never replaced")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
