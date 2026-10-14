@@ -490,7 +490,8 @@ const taskDispatchedEmail = `(t.task_type <> 'campaign' OR t.message_id <> '' OR
 		SELECT 1 FROM campaign_contact_progress ccp WHERE ccp.dispatch_task_id = t.id))`
 
 const campaignSendToday = `t.status = 'completed' AND t.task_type = 'campaign'
-	AND (t.completed_at AT TIME ZONE 'UTC')::date = (NOW() AT TIME ZONE 'UTC')::date
+	AND t.completed_at >= (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date::timestamp AT TIME ZONE 'UTC'
+	AND t.completed_at < ((CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date + 1)::timestamp AT TIME ZONE 'UTC'
 	AND ` + taskDispatchedEmail
 
 // CountCampaignEmailsSentToday counts the campaign emails a mailbox dispatched
@@ -513,26 +514,26 @@ func (r *taskRepository) CountCampaignEmailsSentToday(ctx context.Context, accou
 	return count, err
 }
 
+const lastEmailTimesSQL = `
+	SELECT m.id, GREATEST(t.completed_at, ea.send_claimed_at)
+	FROM unnest($1::uuid[]) AS m(id)
+	LEFT JOIN LATERAL (
+		SELECT t.completed_at FROM tasks t
+		WHERE t.email_account_id = m.id AND t.status = 'completed'
+		  AND t.completed_at IS NOT NULL AND ` + taskDispatchedEmail + `
+		ORDER BY t.completed_at DESC LIMIT 1
+	) t ON true
+	LEFT JOIN email_accounts ea ON ea.id = m.id
+	WHERE t.completed_at IS NOT NULL OR ea.send_claimed_at IS NOT NULL
+`
+
 // GetLastEmailTimes is the min-gap clock for a whole pool in one query.
 func (r *taskRepository) GetLastEmailTimes(ctx context.Context, accountIDs []uuid.UUID) (map[uuid.UUID]time.Time, error) {
 	out := make(map[uuid.UUID]time.Time, len(accountIDs))
 	if len(accountIDs) == 0 {
 		return out, nil
 	}
-	query := `
-		SELECT id, MAX(at) FROM (
-			SELECT t.email_account_id AS id, t.completed_at AS at
-			FROM tasks t
-			WHERE t.email_account_id = ANY($1)
-			  AND t.status = 'completed'
-			  AND t.completed_at IS NOT NULL
-			  AND ` + taskDispatchedEmail + `
-			UNION ALL
-			` + sendClaimClock + `
-		) last
-		GROUP BY id
-	`
-	rows, err := r.db.Query(ctx, query, accountIDs)
+	rows, err := r.db.Query(ctx, lastEmailTimesSQL, accountIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -620,7 +621,9 @@ func (r *taskRepository) CampaignSendsPerDayByAccounts(ctx context.Context, acco
 
 // Queued placement probes hold today's UTC capacity until they send or cancel.
 const placementSendToday = `t.task_type = 'placement'
-	 AND ((t.status = 'completed' AND (t.completed_at AT TIME ZONE 'UTC')::date = (NOW() AT TIME ZONE 'UTC')::date)
+	 AND ((t.status = 'completed'
+	   AND t.completed_at >= (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date::timestamp AT TIME ZONE 'UTC'
+	   AND t.completed_at < ((CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date + 1)::timestamp AT TIME ZONE 'UTC')
 	 OR (t.status IN ('pending', 'active') AND t.scheduled_at < (((NOW() AT TIME ZONE 'UTC')::date + 1)::timestamp AT TIME ZONE 'UTC')))`
 
 const placementSentTodaySQL = `SELECT COUNT(*) FROM tasks t WHERE ` + placementSendToday
@@ -714,7 +717,8 @@ func (r *taskRepository) CountEmailsSentToday(ctx context.Context, accountID uui
 		FROM tasks t
 		WHERE t.email_account_id = $1
 		  AND t.status = 'completed'
-		  AND DATE(t.completed_at) = CURRENT_DATE
+		  AND t.completed_at >= CURRENT_DATE::timestamptz
+		  AND t.completed_at < (CURRENT_DATE + 1)::timestamptz
 		  AND ` + taskDispatchedEmail + `
 	`
 
@@ -730,7 +734,8 @@ func (r *taskRepository) CountWarmupEmailsSentToday(ctx context.Context, account
 		WHERE email_account_id = $1
 		  AND status = 'completed'
 		  AND task_type = 'warmup'
-		  AND DATE(completed_at) = CURRENT_DATE
+		  AND completed_at >= CURRENT_DATE::timestamptz
+		  AND completed_at < (CURRENT_DATE + 1)::timestamptz
 	`
 
 	var count int
@@ -744,11 +749,13 @@ func (r *taskRepository) CountWarmupEmailsSentToday(ctx context.Context, account
 func (r *taskRepository) GetLastEmailTime(ctx context.Context, accountID uuid.UUID) (*time.Time, error) {
 	query := `
 		SELECT GREATEST(
-			(SELECT MAX(t.completed_at)
+			(SELECT t.completed_at
 			 FROM tasks t
 			 WHERE t.email_account_id = $1
 			   AND t.status = 'completed'
-			   AND ` + taskDispatchedEmail + `),
+			   AND t.completed_at IS NOT NULL
+			   AND ` + taskDispatchedEmail + `
+			 ORDER BY t.completed_at DESC LIMIT 1),
 			(SELECT send_claimed_at FROM email_accounts WHERE id = $1))
 	`
 
@@ -761,6 +768,18 @@ func (r *taskRepository) GetLastEmailTime(ctx context.Context, accountID uuid.UU
 
 	return lastTime, err
 }
+
+const lastSendTimesSQL = `
+	SELECT m.id, t.completed_at
+	FROM unnest($1::uuid[]) AS m(id)
+	CROSS JOIN LATERAL (
+		SELECT t.completed_at FROM tasks t
+		WHERE t.email_account_id = m.id
+		  AND t.status = 'completed' AND t.task_type = $2::task_type
+		  AND t.completed_at IS NOT NULL AND ` + taskDispatchedEmail + `
+		ORDER BY t.completed_at DESC LIMIT 1
+	) t
+`
 
 // GetLastSendTimes returns the most recent completed send per account for a
 // task type, in one query.
@@ -777,18 +796,7 @@ func (r *taskRepository) GetLastSendTimes(ctx context.Context, accountIDs []uuid
 		return out, nil
 	}
 
-	query := `
-		SELECT t.email_account_id, MAX(t.completed_at)
-		FROM tasks t
-		WHERE t.email_account_id = ANY($1)
-		  AND t.status = 'completed'
-		  AND t.task_type = $2::task_type
-		  AND t.completed_at IS NOT NULL
-		  AND ` + taskDispatchedEmail + `
-		GROUP BY t.email_account_id
-	`
-
-	rows, err := r.db.Query(ctx, query, accountIDs, taskType)
+	rows, err := r.db.Query(ctx, lastSendTimesSQL, accountIDs, taskType)
 	if err != nil {
 		return nil, err
 	}

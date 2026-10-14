@@ -796,6 +796,7 @@ func (r *analyticsRepository) GetDashboardOverallStats(ctx context.Context, orgI
 		JOIN campaigns c ON c.id = ccp.campaign_id
 		JOIN sequences s ON s.id = ccp.sequence_id AND s.kind = 'email'
 		WHERE c.organization_id = $1` + inCampaignScope("c.id", scope, 4) + `
+		  AND ccp.sent_at >= $2 AND ccp.sent_at <= $3
 	`
 
 	params := append(append([]any{orgID, from, to}, scopeArgs(scope)...), mailboxArgs(mailboxes)...)

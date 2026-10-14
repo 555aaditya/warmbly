@@ -863,9 +863,18 @@ func (r *warmupRepository) ListParticipantHealth(ctx context.Context) ([]models.
 	return out, rows.Err()
 }
 
-// HealthMetricCounts runs the aggregates as one statement; each keeps its own
-// predicate so the (type, created_at) indexes still serve it. Placement is read
-// through the sender's verified receipts, so its rate is over deliveries.
+const healthFeedbackCountsSQL = `SELECT
+	COUNT(*) FILTER (WHERE de.event_type = 'complaint') AS complaints,
+	COUNT(*) FILTER (WHERE de.event_type = 'bounce') AS bounces
+	FROM deliverability_events de JOIN tasks t ON t.id = de.task_id
+	WHERE t.email_account_id = $1 AND de.created_at >= $3 AND de.event_type IN ('complaint', 'bounce')`
+
+const healthTamperingCountsSQL = `SELECT
+	COUNT(*) FILTER (WHERE kind = 'deletion') AS deletions,
+	COUNT(*) FILTER (WHERE kind = 'spam_flag') AS spam_flags
+	FROM warmup_tampering_events WHERE email_account_id = $1 AND created_at >= $2`
+
+// HealthMetricCounts shares scans only between signals with identical predicates.
 func (r *warmupRepository) HealthMetricCounts(ctx context.Context, accountID uuid.UUID, since7d, since30d time.Time) (models.WarmupHealthCounts, error) {
 	query := `
 		SELECT
@@ -875,20 +884,14 @@ func (r *warmupRepository) HealthMetricCounts(ctx context.Context, accountID uui
 			  WHERE reported_account_id = $1 AND created_at >= $2 AND report_type = 'spam_placement'),
 			(SELECT COUNT(*) FROM warmup_spam_reports
 			  WHERE reported_account_id = $1 AND created_at >= $2 AND report_type IN ('user_complaint', 'spam', 'spam_folder')),
-			(SELECT COUNT(*) FILTER (WHERE de.event_type = 'complaint') FROM deliverability_events de
-			  JOIN tasks t ON t.id = de.task_id
-			  WHERE t.email_account_id = $1 AND de.created_at >= $3 AND de.event_type IN ('complaint', 'bounce')),
-			(SELECT COUNT(*) FILTER (WHERE de.event_type = 'bounce') FROM deliverability_events de
-			  JOIN tasks t ON t.id = de.task_id
-			  WHERE t.email_account_id = $1 AND de.created_at >= $3 AND de.event_type IN ('complaint', 'bounce')),
+			feedback.complaints, feedback.bounces,
 			(SELECT COUNT(*) FROM tasks
 			  WHERE email_account_id = $1 AND status = 'completed' AND completed_at >= $3),
-			(SELECT COUNT(*) FILTER (WHERE kind = 'deletion') FROM warmup_tampering_events
-			  WHERE email_account_id = $1 AND created_at >= $2),
-			(SELECT COUNT(*) FILTER (WHERE kind = 'spam_flag') FROM warmup_tampering_events
-			  WHERE email_account_id = $1 AND created_at >= $2),
+			tampering.deletions, tampering.spam_flags,
 			placed.major, placed.major_spam, placed.other, placed.other_spam
 		FROM (` + placementEvidenceSQL("$1", "$2") + `) placed
+		CROSS JOIN (` + healthFeedbackCountsSQL + `) feedback
+		CROSS JOIN (` + healthTamperingCountsSQL + `) tampering
 	`
 	var c models.WarmupHealthCounts
 	p := &c.Placement
