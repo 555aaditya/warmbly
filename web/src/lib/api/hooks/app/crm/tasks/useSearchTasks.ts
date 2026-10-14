@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { infiniteQueryOptions, useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
 import type SearchTasks from "@/lib/api/models/app/crm/SearchTasks";
 import type TasksSearchResult from "@/lib/api/models/app/crm/TasksSearchResult";
@@ -36,9 +37,12 @@ export default function useSearchTasks({ filters, limit = 50, enabled = true }: 
         enabled,
     });
 
-    const tasks = queryResult.data?.pages
-        .flatMap((p) => p.data ?? [])
-        .filter((t): t is NonNullable<typeof t> => t != null);
+    const tasks = useMemo(
+        () => queryResult.data?.pages
+            .flatMap((p) => p.data ?? [])
+            .filter((t): t is NonNullable<typeof t> => t != null),
+        [queryResult.data],
+    );
 
     const total = queryResult.data?.pages[0]?.pagination.total ?? 0;
 

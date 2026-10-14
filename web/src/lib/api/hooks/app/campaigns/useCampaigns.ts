@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { infiniteQueryOptions, useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
 import getCampaigns from "@/lib/api/client/app/campaigns/getCampaigns";
 import useAllPages from "@/lib/api/hooks/useAllPages";
@@ -53,10 +54,12 @@ export default function useCampaigns({ query, folder, limit = CAMPAIGNS_PAGE_LIM
     // Defensive: backend may return `data: null` on empty result sets if
     // the underlying slice was nil. Coerce + drop nulls so consumers can
     // safely read fields without optional-chaining every access.
-    const campaigns =
-        queryResult.data?.pages
+    const campaigns = useMemo(
+        () => queryResult.data?.pages
             .flatMap((p) => p.data ?? [])
-            .filter((c): c is NonNullable<typeof c> => c != null) ?? [];
+            .filter((c): c is NonNullable<typeof c> => c != null) ?? [],
+        [queryResult.data],
+    );
 
     return {
         ...queryResult,

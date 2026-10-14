@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { infiniteQueryOptions, useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
 import type { MeetingsPage, MeetingsSearch } from "@/lib/api/models/app/integrations/Integration";
 import searchMeetings from "@/lib/api/client/app/meetings/searchMeetings";
@@ -33,9 +34,12 @@ export default function useSearchMeetings({ filters, limit = 50, enabled = true 
         enabled,
     });
 
-    const meetings = queryResult.data?.pages
-        .flatMap((p) => p.data ?? [])
-        .filter((m): m is NonNullable<typeof m> => m != null);
+    const meetings = useMemo(
+        () => queryResult.data?.pages
+            .flatMap((p) => p.data ?? [])
+            .filter((m): m is NonNullable<typeof m> => m != null),
+        [queryResult.data],
+    );
 
     const total = queryResult.data?.pages[0]?.pagination.total ?? 0;
 
