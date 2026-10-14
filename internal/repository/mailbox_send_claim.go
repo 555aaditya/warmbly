@@ -9,12 +9,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// sendClaimClock feeds a claimed-but-not-yet-handed-off campaign send into the
-// min-gap clock ($1 is the mailbox id array), so the next pass of any campaign
-// sees the mailbox as just used.
-const sendClaimClock = `SELECT ea.id, ea.send_claimed_at FROM email_accounts ea
-			WHERE ea.id = ANY($1) AND ea.send_claimed_at IS NOT NULL`
-
 // MailboxSendClaimer takes a mailbox for one campaign send.
 type MailboxSendClaimer interface {
 	ClaimMailboxSend(ctx context.Context, mailboxID uuid.UUID, window time.Duration) (bool, error)
