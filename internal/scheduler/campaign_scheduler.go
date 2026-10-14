@@ -331,7 +331,7 @@ func (s *schedulerService) placeCampaignSend(ctx context.Context, campaign *mode
 	// STEP 5: Apply campaign schedule constraints
 	// Fall back to UTC if campaign has no timezone set (account timezone checked later)
 	campaignTZName := campaign.ClockTimezone()
-	campaignTZ := loadLocation(campaignTZName)
+	campaignTZ := pass.location(campaignTZName)
 	// Authoritative per-day sending windows (or derived from the legacy
 	// days/start/end fields). Drives every day-of-week + time-window gate below.
 	windows := effectiveWindows(campaign)
