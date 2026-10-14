@@ -25,6 +25,7 @@ defmodule RealtimeWeb.OrgChannel do
 
   alias Realtime.Auth
   alias Realtime.Connections
+  alias Realtime.EventType
   alias Realtime.RateLimiter
   alias RealtimeWeb.ChannelGuard
   alias RealtimeWeb.Presence
@@ -306,7 +307,7 @@ defmodule RealtimeWeb.OrgChannel do
       {:ok, _remaining} ->
         # Forward only if the member may see it AND it matches the client's
         # declared intents (if any).
-        if can_see_event?(socket, event) and intents_allow?(socket, event) do
+        if visible_event?(socket, event) do
           push(socket, event["event_type"], event)
         end
 
@@ -421,7 +422,7 @@ defmodule RealtimeWeb.OrgChannel do
         tokens =
           list
           |> Enum.filter(&is_binary/1)
-          |> Enum.map(fn s -> s |> String.upcase() |> String.replace(~r/[.:\s-]+/, "_") end)
+          |> Enum.map(&EventType.normalize/1)
           |> Enum.reject(&(&1 == ""))
 
         if tokens == [], do: nil, else: tokens
@@ -480,7 +481,7 @@ defmodule RealtimeWeb.OrgChannel do
           {:ok, events} ->
             replayed =
               Enum.reduce(events, 0, fn ev, n ->
-                if can_see_event?(socket, ev) and intents_allow?(socket, ev) do
+                if visible_event?(socket, ev) do
                   push(socket, ev["event_type"], ev)
                   n + 1
                 else
@@ -502,21 +503,18 @@ defmodule RealtimeWeb.OrgChannel do
     :ok
   end
 
-  # When a client declared intents, forward only events whose normalized type
-  # contains one of the requested tokens. No intents = forward everything.
-  defp intents_allow?(socket, event) do
+  defp visible_event?(socket, event) do
+    type = EventType.normalize(Map.get(event, "event_type", ""))
+    can_see_event?(socket, event, type) and intents_allow?(socket, type)
+  end
+
+  # No intents forwards everything; otherwise match normalized event-family tokens.
+  defp intents_allow?(socket, type) do
     case socket.assigns[:intents] do
       nil ->
         true
 
       tokens ->
-        type =
-          event
-          |> Map.get("event_type", "")
-          |> to_string()
-          |> String.upcase()
-          |> String.replace(~r/[.:\s-]+/, "_")
-
         Enum.any?(tokens, fn t -> String.contains?(type, t) end)
     end
   end
@@ -526,13 +524,10 @@ defmodule RealtimeWeb.OrgChannel do
   # lowercase names and the Go publisher's UPPER_SNAKE names match.
   @doc false
   def can_see_event?(socket, event) do
-    event_type =
-      event
-      |> Map.get("event_type", "")
-      |> to_string()
-      |> String.upcase()
-      |> String.replace(~r/[.:\s-]+/, "_")
+    can_see_event?(socket, event, EventType.normalize(Map.get(event, "event_type", "")))
+  end
 
+  defp can_see_event?(socket, event, event_type) do
     (not restricted?(socket) or
        scoped_event?(socket.assigns.member, socket.assigns.user_id, event_type, event)) and
       permitted_event?(socket, event_type)
