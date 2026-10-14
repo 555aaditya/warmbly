@@ -1,5 +1,6 @@
 // Infinite scroll over the inbox search endpoint.
 
+import { useMemo } from "react";
 import { infiniteQueryOptions, useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
 import searchIncoming from "@/lib/api/client/app/unibox/searchIncoming";
 import type { UniboxSearchParams } from "@/lib/api/models/app/unibox/UniboxSearch";
@@ -37,10 +38,12 @@ export default function useUniboxSearch(params: UniboxSearchParams, scopeKey: st
 
     // Flatten + drop any null rows just in case the server returns a nil
     // slice (defensive — mirrors the contacts / campaigns hooks).
-    const emails =
-        q.data?.pages
+    const emails = useMemo(
+        () => q.data?.pages
             .flatMap((p) => p.data ?? [])
-            .filter((e): e is NonNullable<typeof e> => e != null) ?? [];
+            .filter((e): e is NonNullable<typeof e> => e != null) ?? [],
+        [q.data],
+    );
 
     return { ...q, emails };
 }
