@@ -198,6 +198,49 @@ defmodule RealtimeWeb.AuthorizationRefreshTest do
     end
   end
 
+  test "org intents share normalization without bypassing scope or permissions", ctx do
+    authorize(ctx, scope: "restricted")
+
+    {:ok, _, socket} =
+      subscribe_and_join(user_socket(ctx.user_id), OrgChannel, "org:#{ctx.org_id}", %{
+        "intents" => ["campaign", "billing"]
+      })
+
+    for type <- [
+          "CAMPAIGN_UPDATED",
+          "campaign.updated",
+          "Campaign:Updated",
+          "campaign -- updated"
+        ] do
+      ev = Map.put(event(ctx, :org), "event_type", type)
+      broadcast(socket, ev)
+      assert_push(^type, ^ev)
+    end
+
+    ev = Map.put(event(ctx, :org), "campaign_id", uuid())
+    broadcast(socket, ev)
+    refute_push("CAMPAIGN_UPDATED", _)
+
+    inbox = %{"event_type" => "EMAIL_RECEIVED", "email_account_id" => ctx.account_id}
+    broadcast(socket, inbox)
+    refute_push("EMAIL_RECEIVED", _)
+
+    expire(socket)
+    authorize(ctx, scope: "restricted", permissions: 0)
+    broadcast(socket, event(ctx, :org))
+    refute_push("CAMPAIGN_UPDATED", _)
+  end
+
+  test "org with no intents preserves legacy normalization and original payloads", ctx do
+    {:ok, _, socket} = join_channel(ctx, :org)
+
+    for type <- ["campaign.updated", "évent:créé", "CUSTOM_EVENT"] do
+      ev = Map.put(event(ctx, :org), "event_type", type)
+      broadcast(socket, ev)
+      assert_push(^type, ^ev)
+    end
+  end
+
   test "campaign reauthorization rejects a campaign moved out of a granted folder", ctx do
     authorize(ctx, scope: "restricted")
     {:ok, _, socket} = join_channel(ctx, :campaign)
