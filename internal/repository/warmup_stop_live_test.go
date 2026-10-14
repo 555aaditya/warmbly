@@ -14,10 +14,10 @@ import (
 func stopFixture(t *testing.T, protocol int) (*poolLinkFixture, *taskRepository, uuid.UUID, uuid.UUID, EmailRepository) {
 	t.Helper()
 	f, r, worker, nonce := newWarmupChargeFixture(t, false)
+	if _, err := f.pool.Exec(t.Context(), `UPDATE fleet_nodes SET warmup_send_protocol=$1 WHERE id=$2`, protocol, worker); err != nil {
+		t.Fatal(err)
+	}
 	if protocol == 2 {
-		if _, err := f.pool.Exec(t.Context(), `UPDATE fleet_nodes SET warmup_send_protocol=2 WHERE id=$1`, worker); err != nil {
-			t.Fatal(err)
-		}
 		var address string
 		if err := f.pool.QueryRow(t.Context(), `SELECT email FROM email_accounts WHERE id=$1`, f.recipient).Scan(&address); err != nil {
 			t.Fatal(err)
