@@ -92,7 +92,7 @@ func (w *WMail) onGraphMessageSeen(ctx context.Context, folder, providerID strin
 	}
 	if known != nil {
 		if !w.GraphData.Client.ImmutableIDMode() {
-			if err := w.onGraphFlagsChange(ctx, providerID, seen); err != nil {
+			if err := w.emitGraphFlagsChange(known, seen); err != nil {
 				return false, err
 			}
 			id, err := uuid.Parse(known.ID)
