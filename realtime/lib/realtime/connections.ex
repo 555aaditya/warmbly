@@ -21,6 +21,7 @@ defmodule Realtime.Connections do
 
   @table :realtime_connections
   @ip_table :realtime_ip_connections
+  @total_table :realtime_connection_total
 
   # Default limits (can be overridden via config). The cap is PER USER (not per
   # org), so 10 covers many tabs and devices for one person. Dead connections
@@ -91,7 +92,7 @@ defmodule Realtime.Connections do
   Get total global connection count (local instance).
   """
   def total_local do
-    :ets.foldl(fn {_, count}, acc -> acc + count end, 0, @table)
+    :ets.lookup_element(@total_table, :total, 2)
   end
 
   @doc """
@@ -150,6 +151,8 @@ defmodule Realtime.Connections do
   def init(_) do
     :ets.new(@table, [:named_table, :public, :set])
     :ets.new(@ip_table, [:named_table, :public, :set])
+    :ets.new(@total_table, [:named_table, :protected, :set, read_concurrency: true])
+    :ets.insert(@total_table, {:total, 0})
 
     Logger.info(
       "Connections tracker started (limits: user=#{max_per_user()}, ip=#{max_per_ip()}, global=#{max_global()})"
@@ -251,6 +254,7 @@ defmodule Realtime.Connections do
       true ->
         # Track locally in ETS
         :ets.update_counter(@table, user_id, {2, 1}, {user_id, 0})
+        :ets.update_counter(@total_table, :total, {2, 1})
 
         if ip do
           :ets.update_counter(@ip_table, ip, {2, 1}, {ip, 0})
@@ -268,9 +272,11 @@ defmodule Realtime.Connections do
     case :ets.lookup(@table, user_id) do
       [{^user_id, count}] when count > 1 ->
         :ets.update_counter(@table, user_id, {2, -1})
+        :ets.update_counter(@total_table, :total, {2, -1})
 
       [{^user_id, _}] ->
         :ets.delete(@table, user_id)
+        :ets.update_counter(@total_table, :total, {2, -1})
 
       [] ->
         :ok
