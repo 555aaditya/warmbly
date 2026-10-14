@@ -788,12 +788,89 @@ fn hash_ip(key: &str, ip: &str) -> String {
     hasher.update([0u8]);
     hasher.update(ip.as_bytes());
     let result = hasher.finalize();
-    format!("{:x}", result)[..16].to_string() // Take first 16 chars
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut token = String::with_capacity(16);
+    for byte in &result[..8] {
+        token.push(HEX[(byte >> 4) as usize] as char);
+        token.push(HEX[(byte & 0xf) as usize] as char);
+    }
+    token
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn baseline_hash_ip(key: &str, ip: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(key.as_bytes());
+        hasher.update([0u8]);
+        hasher.update(ip.as_bytes());
+        format!("{:x}", hasher.finalize())[..16].to_string()
+    }
+
+    #[test]
+    fn source_tokens_match_the_existing_digest_prefix_exactly() {
+        for key in [
+            String::new(),
+            "key".into(),
+            "nul\0key".into(),
+            "k".repeat(1024),
+        ] {
+            for ip in [
+                "",
+                "127.0.0.1",
+                "2001:db8::1",
+                "unknown",
+                "::ffff:192.0.2.1",
+            ] {
+                assert_eq!(hash_ip(&key, ip), baseline_hash_ip(&key, ip));
+            }
+            for i in 0..1024 {
+                let ip = format!("10.{}.{}.{}", i / 256, i % 256, i % 255);
+                let token = hash_ip(&key, &ip);
+                assert_eq!(token, baseline_hash_ip(&key, &ip));
+                assert_eq!(token.len(), 16);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "synthetic source-token benchmark; run with --ignored --nocapture"]
+    fn benchmark_source_tokens() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        let sources: Vec<String> = (0..1024)
+            .map(|i| {
+                if i % 2 == 0 {
+                    format!("192.0.2.{}", i % 255)
+                } else {
+                    format!("2001:db8::{i:x}")
+                }
+            })
+            .collect();
+        let key = "synthetic-internal-api-token-of-32";
+        for source in &sources {
+            assert_eq!(hash_ip(key, source), baseline_hash_ip(key, source));
+        }
+        const ITERATIONS: usize = 500_000;
+        type SourceHasher = fn(&str, &str) -> String;
+        for round in 0..4 {
+            let functions: [(&str, SourceHasher); 2] = if round % 2 == 0 {
+                [("BASE", baseline_hash_ip), ("optimized", hash_ip)]
+            } else {
+                [("optimized", hash_ip), ("BASE", baseline_hash_ip)]
+            };
+            for (name, hash) in functions {
+                let started = Instant::now();
+                for i in 0..ITERATIONS {
+                    black_box(hash(black_box(key), black_box(&sources[i % sources.len()])));
+                }
+                println!("source_token round={round} implementation={name} iterations={ITERATIONS} elapsed_us={}", started.elapsed().as_micros());
+            }
+        }
+    }
 
     // A scanner walks a message's links in parallel, so several requests
     // carrying one key genuinely arrive at once. Under check-then-insert every
