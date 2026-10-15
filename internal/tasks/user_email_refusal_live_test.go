@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/app/feature"
+	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/repository"
 	"github.com/warmbly/warmbly/internal/tasks/proto"
@@ -99,5 +101,47 @@ func TestLiveUnrecordedUniboxRefusalIsRetried(t *testing.T) {
 	}
 	if status != "pending" {
 		t.Errorf("status = %q, want pending so the retry runs it again", status)
+	}
+}
+
+// planGate answers the two gate questions a unibox send asks.
+type planGate struct {
+	feature.FeatureGateService
+	daily int
+}
+
+func (g planGate) CanUseUnibox(context.Context, uuid.UUID) (bool, *errx.Error) { return true, nil }
+
+func (g planGate) GetDailyEmailLimit(context.Context, uuid.UUID) (int, *errx.Error) {
+	return g.daily, nil
+}
+
+// The workspace's plan sizes the allowance the send is reserved under: twice
+// the plan's daily limit with a floor, and no bound on an unlimited plan or a
+// self-hosted instance.
+func TestLiveUniboxSendCarriesThePlanAllowance(t *testing.T) {
+	handle := liveCampaignDB(t)
+	f := newCampaignSendFixture(t, handle.Pool)
+	for _, tc := range []struct {
+		name  string
+		daily int
+		want  int
+	}{
+		{"starter", 150, 300},
+		{"free trial", 20, 100},
+		{"unlimited or self-hosted", -1, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sender := &recordingSender{}
+			svc := liveCampaignService(t, handle, sender)
+			svc.featureGate = planGate{daily: tc.daily}
+			taskID := queueUniboxReply(t, handle.Pool, f.mailbox, "", "")
+			if xerr := svc.HandleUserEmailTask(&proto.ProcessTask{TaskId: taskID.String()}); xerr != nil {
+				t.Fatalf("handle reply: %v", xerr)
+			}
+			if got := sender.message(t, 0).ManualPlanAllowance; got != tc.want {
+				t.Errorf("plan allowance = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }

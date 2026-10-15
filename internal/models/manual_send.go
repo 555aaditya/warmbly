@@ -11,7 +11,7 @@ import (
 // are held to fair use instead: a generous daily recipient allowance sized to
 // what the mailbox's provider accepts, lowered by what is known about the
 // mailbox and its workspace, with a burst, a new-conversation and a
-// per-message bound under it. Replies and forwards inside a conversation only
+// per-message bound under it, and a workspace-wide bound from its plan. Replies and forwards inside a conversation only
 // spend the daily and hourly allowance; new conversations are the cold-outreach
 // path, so they also spend their own, smaller one.
 const (
@@ -28,6 +28,11 @@ const (
 	manualSendNewConvDivisor   = 4 // a quarter of the day to new conversations
 	manualSendYoungMailboxDays = 14
 	manualSendNewMailboxDays   = 2
+
+	// The workspace's plan bounds its unibox sends across every mailbox:
+	// twice the plan's daily email limit, never under the floor.
+	ManualSendPlanMultiple   = 2
+	ManualSendWorkspaceFloor = 100
 )
 
 var (
@@ -105,6 +110,16 @@ func manualSendDailyBase(provider InboxProvider, address string) int {
 	}
 }
 
+// ManualSendWorkspaceAllowance is a workspace's unibox recipients in 24 hours
+// across all its mailboxes, from its plan's daily email limit. A negative
+// limit is an unlimited plan (or a self-hosted instance) and returns 0, no bound.
+func ManualSendWorkspaceAllowance(planDaily int) int {
+	if planDaily < 0 {
+		return 0
+	}
+	return max(ManualSendWorkspaceFloor, planDaily*ManualSendPlanMultiple)
+}
+
 // ManualSendWindow names the bound a manual send ran into.
 type ManualSendWindow string
 
@@ -113,6 +128,8 @@ const (
 	ManualSendWindowHour    ManualSendWindow = "hour"
 	ManualSendWindowDay     ManualSendWindow = "day"
 	ManualSendWindowNew     ManualSendWindow = "new_conversations"
+	// ManualSendWindowPlan is the workspace's plan allowance, across mailboxes.
+	ManualSendWindowPlan ManualSendWindow = "plan"
 )
 
 // ManualSendUsage is what the mailbox has already sent manually, in recipient
@@ -145,6 +162,8 @@ func ManualSendRefusal(window ManualSendWindow, limit int) string {
 		return fmt.Sprintf("the mailbox has reached its fair-use limit of %d recipients in an hour. Try again later or send from another mailbox.", limit)
 	case ManualSendWindowNew:
 		return fmt.Sprintf("the mailbox has started conversations with %d recipients in the last 24 hours, its fair-use limit for new emails. Replies still go out; use a campaign for outreach.", limit)
+	case ManualSendWindowPlan:
+		return fmt.Sprintf("your workspace has reached its plan's fair-use limit of %d unibox recipients in 24 hours across all mailboxes. Try again later or upgrade the plan for a higher limit.", limit)
 	default:
 		return fmt.Sprintf("the mailbox has reached its fair-use limit of %d recipients in 24 hours. Try again later or send from another mailbox.", limit)
 	}

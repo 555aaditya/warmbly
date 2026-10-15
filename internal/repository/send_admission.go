@@ -58,6 +58,9 @@ type OutboundReservation struct {
 	WorkerID       uuid.UUID
 	Provider       models.InboxProvider
 	Recipients     []string
+	// ManualPlanAllowance bounds the workspace's manual (unibox) recipients
+	// in 24 hours across its mailboxes; 0 means no plan bound.
+	ManualPlanAllowance int
 }
 
 type OutboundAdmissionRepository interface {
@@ -176,6 +179,9 @@ func (r *taskRepository) ReserveOutbound(ctx context.Context, in OutboundReserva
 	}
 	if lane == "email" {
 		if err = checkManualSendFairUse(ctx, tx, in.TaskID, in.MailboxID, len(recipients)); err != nil {
+			return uuid.Nil, err
+		}
+		if err = checkManualSendPlan(ctx, tx, in.TaskID, in.OrganizationID, len(recipients), in.ManualPlanAllowance); err != nil {
 			return uuid.Nil, err
 		}
 	}
@@ -299,6 +305,30 @@ func checkManualSendFairUse(ctx context.Context, tx pgx.Tx, task, mailbox uuid.U
 	allowance := models.ManualSendAllowanceFor(standing)
 	if window, limit, over := allowance.Exceeded(used, n, startsConversation); over {
 		return &ManualSendLimitError{Window: window, Limit: limit}
+	}
+	return nil
+}
+
+// checkManualSendPlan holds a workspace's manual sends, across all its
+// mailboxes, to the allowance its plan gives. The workspace lock keeps two
+// mailboxes from both taking the last of it.
+func checkManualSendPlan(ctx context.Context, tx pgx.Tx, task, org uuid.UUID, n, allowance int) error {
+	if allowance <= 0 {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,273))`, org.String()); err != nil {
+		return err
+	}
+	var used int
+	err := tx.QueryRow(ctx, `SELECT COALESCE(SUM(GREATEST(1,cardinality(t.send_recipients))),0)
+	 FROM tasks t JOIN email_accounts ea ON ea.id=t.email_account_id
+	 WHERE ea.organization_id=$1 AND t.id<>$2 AND t.task_type='email'
+	 AND t.send_reserved_at>NOW()-INTERVAL '24 hours' AND t.send_released_at IS NULL`, org, task).Scan(&used)
+	if err != nil {
+		return err
+	}
+	if used+n > allowance {
+		return &ManualSendLimitError{Window: models.ManualSendWindowPlan, Limit: allowance}
 	}
 	return nil
 }

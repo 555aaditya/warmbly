@@ -65,3 +65,23 @@ func TestManualSendExceededChargesNewConversationsOnly(t *testing.T) {
 		})
 	}
 }
+
+func TestManualSendWorkspaceAllowanceFollowsThePlan(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		planDaily int
+		want      int
+	}{
+		{"unlimited plan or self-hosted", -1, 0},
+		{"free trial (20 a day) keeps the floor", 20, 100},
+		{"starter (150 a day)", 150, 300},
+		{"grow (3,000 a day)", 3000, 6000},
+		{"no daily limit at all still keeps the floor", 0, 100},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ManualSendWorkspaceAllowance(tc.planDaily); got != tc.want {
+				t.Errorf("allowance = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}

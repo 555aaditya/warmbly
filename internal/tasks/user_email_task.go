@@ -152,6 +152,10 @@ func (s *tasksService) HandleUserEmailTask(task *proto.ProcessTask) *errx.Error 
 		}
 		return s.refuseUserEmail(ctx, taskID, account, err)
 	}
+	planAllowance, xerr := s.manualPlanAllowance(ctx, *account.OrganizationID)
+	if xerr != nil {
+		return xerr
+	}
 
 	// STEP 5: Mark task as active (with advisory lock)
 	if err := s.taskRepo.UpdateTaskStatusWithLock(ctx, taskID, "active"); err != nil {
@@ -205,6 +209,8 @@ func (s *tasksService) HandleUserEmailTask(task *proto.ProcessTask) *errx.Error 
 		ThreadID:  threadID,
 		IsWarmup:  false,
 		Tracking:  nil,
+
+		ManualPlanAllowance: planAllowance,
 	}
 
 	if err := s.emailSender.Send(ctx, taskID, emailMsg, *account); err != nil {
@@ -307,6 +313,20 @@ func userEmailRefusalReason(err error) string {
 	default:
 		return "the send could not be prepared. Try again."
 	}
+}
+
+// manualPlanAllowance is the workspace's plan-based unibox allowance, read
+// while the task is still pending so a failed read retries it. No gate (or a
+// plan without a daily limit, or a self-hosted instance) means no plan bound.
+func (s *tasksService) manualPlanAllowance(ctx context.Context, org uuid.UUID) (int, *errx.Error) {
+	if s.featureGate == nil {
+		return 0, nil
+	}
+	daily, xerr := s.featureGate.GetDailyEmailLimit(ctx, org)
+	if xerr != nil {
+		return 0, xerr
+	}
+	return models.ManualSendWorkspaceAllowance(daily), nil
 }
 
 func (s *tasksService) notifyUserEmailFailed(ctx context.Context, taskID uuid.UUID, account *models.Email, title, message string) {

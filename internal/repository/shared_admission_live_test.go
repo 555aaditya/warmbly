@@ -234,6 +234,31 @@ func TestLiveManualSendIsOutsideTheCappedAllocations(t *testing.T) {
 	if err := send(reply); err != nil {
 		t.Fatalf("threaded reply refused by the new-conversation allowance: %v", err)
 	}
+	// The plan bounds the workspace across mailboxes: another mailbox's 5
+	// recipients count toward this one's allowance of 20, and no plan bound
+	// (an unlimited plan or a self-hosted instance) admits the same send.
+	exec(`INSERT INTO tasks(id,task_type,email_account_id,status,message_id,send_reserved_at,send_recipients)VALUES($1,'email',$2,'completed','',NOW()-INTERVAL '3 hours',$3)`, uuid.New(), f.recipient, recipients(5))
+	plan := newTask("email", recipients(1)...)
+	exec(`INSERT INTO email_tasks(task_id,subject,body,in_reply_to)VALUES($1,'Re: Hello','Thanks',ARRAY['<parent@test.local>'])`, plan.TaskID)
+	var dayUsed int
+	if err := f.pool.QueryRow(ctx, `SELECT COALESCE(SUM(cardinality(t.send_recipients)),0) FROM tasks t JOIN email_accounts ea ON ea.id=t.email_account_id
+		WHERE ea.organization_id=$1 AND t.task_type='email' AND t.send_reserved_at>NOW()-INTERVAL '24 hours' AND t.send_released_at IS NULL`, f.org).Scan(&dayUsed); err != nil {
+		t.Fatal(err)
+	}
+	plan.ManualPlanAllowance = dayUsed
+	if _, err := r.ReserveOutbound(ctx, plan); !errors.As(err, &limit) || limit.Window != models.ManualSendWindowPlan || limit.Limit != dayUsed {
+		t.Fatalf("send past the plan allowance = %v, want the plan bound", err)
+	}
+	plan.ManualPlanAllowance = dayUsed + 1
+	if err := send(plan); err != nil {
+		t.Fatalf("send within the plan allowance refused: %v", err)
+	}
+	unbounded := newTask("email", recipients(1)...)
+	exec(`INSERT INTO email_tasks(task_id,subject,body,in_reply_to)VALUES($1,'Re: Hello','Thanks',ARRAY['<parent@test.local>'])`, unbounded.TaskID)
+	if err := send(unbounded); err != nil {
+		t.Fatalf("send with no plan bound refused: %v", err)
+	}
+
 	if got := SendAdmissionCode(&ManualSendLimitError{Window: models.ManualSendWindowDay, Limit: 1}); got != "MANUAL_SEND_LIMIT_REACHED" {
 		t.Fatalf("code = %q", got)
 	}
