@@ -76,6 +76,16 @@ type AdvisorMailbox struct {
 	InActiveCampaign bool
 	// SendLifecycle is active, resting or reserve (held by its owner).
 	SendLifecycle string
+	// The pool's warmup mail handed off to this mailbox over seven days, how
+	// much its sync verified, and how many sender workspaces lost mail to it.
+	WarmupDelivered7d int
+	WarmupArrived7d   int
+	WarmupLostBy7d    int
+}
+
+// WarmupUnreachable reports a mailbox the pool has stopped drawing as a recipient.
+func (m AdvisorMailbox) WarmupUnreachable() bool {
+	return models.WarmupRecipientUnreachable(m.WarmupDelivered7d, m.WarmupArrived7d, m.WarmupLostBy7d)
 }
 
 // SendingCold is true when campaigns can actually pick this mailbox right now.

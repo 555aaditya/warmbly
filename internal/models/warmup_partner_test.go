@@ -65,3 +65,28 @@ func TestWarmupPartnerCandidateFilterJunkRate(t *testing.T) {
 		})
 	}
 }
+
+// A recipient is drawn by the chance its mail arrives, read only on a sample
+// and never down to nothing, so a recovered inbox can show it.
+func TestWarmupPartnerCandidateArrivalRate(t *testing.T) {
+	cases := []struct {
+		name               string
+		delivered, arrived int
+		want               float64
+	}{
+		{"nothing handed off", 0, 0, 1},
+		{"below the sample", 4, 0, 1},
+		{"everything arrived", 20, 20, 1},
+		{"half arrived", 20, 10, 0.5},
+		{"nothing arrived keeps the floor", 20, 0, warmupArrivalFloor},
+		{"late arrivals never exceed one", 5, 6, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := WarmupPartnerCandidate{Delivered7d: tc.delivered, Arrived7d: tc.arrived}
+			if got := c.ArrivalRate(); got != tc.want {
+				t.Fatalf("ArrivalRate() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

@@ -1091,3 +1091,40 @@ func TestSpamPlacementAtSmallHostsAloneDoesNotAlarm(t *testing.T) {
 		t.Fatalf("small-host spam alone raised %q: %s", f.Severity, f.Title)
 	}
 }
+
+// A warming mailbox the pool has stopped reaching is told why, and the finding
+// goes away the moment one warmup email arrives or warmup is off.
+func TestDetectWarmupMailNotArriving(t *testing.T) {
+	fires := func(m repository.AdvisorMailbox) bool {
+		t.Helper()
+		for _, f := range Detect(snapshotOf(m), defaults()) {
+			if f.Key == "warmup_mail_not_arriving" {
+				return true
+			}
+		}
+		return false
+	}
+	m := healthyMailbox()
+	m.WarmupDelivered7d, m.WarmupLostBy7d = 12, 3
+	if !fires(m) {
+		t.Fatal("an unreachable warming mailbox produced no finding")
+	}
+	arrived := m
+	arrived.WarmupArrived7d = 1
+	if fires(arrived) {
+		t.Fatal("a mailbox that verified an arrival is still reported")
+	}
+	oneSender := m
+	oneSender.WarmupLostBy7d = 1
+	if fires(oneSender) {
+		t.Fatal("losses from one workspace are blamed on the recipient")
+	}
+	off := m
+	off.WarmupActive = false
+	if fires(off) {
+		t.Fatal("a mailbox with warmup off is reported")
+	}
+	if fires(healthyMailbox()) {
+		t.Fatal("a healthy mailbox is reported")
+	}
+}

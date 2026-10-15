@@ -17,10 +17,30 @@ import (
 // always read live.
 const partnerWeekTTL = time.Minute
 
-// partnerWeek is what a mailbox sent, received and had junked over seven days.
+// partnerWeek is what a mailbox sent, received and had junked over seven days,
+// and what the pool handed off to it, how much of that arrived and how many
+// sender workspaces lost mail to it.
 type partnerWeek struct {
-	sent, received, junked int
+	sent, received, junked     int
+	delivered, arrived, lostBy int
 }
+
+func (w partnerWeek) unreachable() bool {
+	return models.WarmupRecipientUnreachable(w.delivered, w.arrived, w.lostBy)
+}
+
+// warmupInboundSQL selects the pool's handed-off warmup mail to the recipients
+// warmup_tokens wt names, past the arrival grace, joined to each sender as s.
+var warmupInboundSQL = fmt.Sprintf(`
+		FROM warmup_tokens wt
+		JOIN email_accounts s ON s.id = wt.sender_account_id
+		WHERE wt.created_at >= NOW() - interval '7 days'
+		  AND wt.created_at < NOW() - make_interval(hours => %d)
+		  AND wt.sent_message_id <> ''`, config.WarmupRecipientArrivalGraceHours)
+
+// warmupInboundColumns are delivered, arrived and lost_by over warmupInboundSQL.
+const warmupInboundColumns = `COUNT(*) AS delivered, COUNT(wt.consumed_at) AS arrived,
+		       COUNT(DISTINCT s.organization_id) FILTER (WHERE wt.consumed_at IS NULL) AS lost_by`
 
 // partnerWeekRefreshTimeout bounds one pool-wide refresh, which runs detached
 // from the caller that started it.
@@ -56,14 +76,21 @@ const partnerWeekSQL = `
 		FROM warmup_tokens wt
 		WHERE wt.created_at >= NOW() - interval '7 days' AND wt.sent_message_id <> '' %[2]s
 		GROUP BY 1
+	),
+	inbound AS (
+		SELECT wt.recipient_account_id AS id, %[4]s %[5]s %[3]s
+		GROUP BY 1
 	)
-	SELECT COALESCE(recv.id, sent.id), COALESCE(sent.week, 0), COALESCE(recv.week, 0), COALESCE(recv.junk, 0)
-	FROM recv FULL JOIN sent ON sent.id = recv.id`
+	SELECT COALESCE(recv.id, sent.id, inbound.id), COALESCE(sent.week, 0), COALESCE(recv.week, 0), COALESCE(recv.junk, 0),
+	       COALESCE(inbound.delivered, 0), COALESCE(inbound.arrived, 0), COALESCE(inbound.lost_by, 0)
+	FROM recv FULL JOIN sent ON sent.id = recv.id
+	FULL JOIN inbound ON inbound.id = COALESCE(recv.id, sent.id)`
 
 var (
-	partnerWeekAllSQL = fmt.Sprintf(partnerWeekSQL, "", "")
+	partnerWeekAllSQL = fmt.Sprintf(partnerWeekSQL, "", "", "", warmupInboundColumns, warmupInboundSQL)
 	partnerWeekIDsSQL = fmt.Sprintf(partnerWeekSQL,
-		"AND wr.email_account_id = ANY($1::uuid[])", "AND wt.sender_account_id = ANY($1::uuid[])")
+		"AND wr.email_account_id = ANY($1::uuid[])", "AND wt.sender_account_id = ANY($1::uuid[])",
+		"AND wt.recipient_account_id = ANY($1::uuid[])", warmupInboundColumns, warmupInboundSQL)
 )
 
 // partnerWeeks returns the seven-day counts for ids: from the shared cache
@@ -127,7 +154,7 @@ func scanPartnerWeeks(ctx context.Context, db sendResultDB, query string, args .
 	for rows.Next() {
 		var id uuid.UUID
 		var w partnerWeek
-		if err := rows.Scan(&id, &w.sent, &w.received, &w.junked); err != nil {
+		if err := rows.Scan(&id, &w.sent, &w.received, &w.junked, &w.delivered, &w.arrived, &w.lostBy); err != nil {
 			return nil, err
 		}
 		out[id] = w
@@ -194,8 +221,9 @@ func inboundSharePercent(poolType string) int {
 }
 
 // capPartnerCandidates attaches each candidate's seven-day counts and drops
-// every one already at its inbound cap for today, before any count or sample
-// is taken from the set, so a thin tier is sized on who can still receive.
+// every one that is unreachable or already at its inbound cap for today,
+// before any count or sample is taken from the set, so a thin tier is sized on
+// who can still receive.
 func (r *warmupRepository) capPartnerCandidates(ctx context.Context, poolType string, cands []models.WarmupPartnerCandidate) ([]models.WarmupPartnerCandidate, error) {
 	if len(cands) == 0 {
 		return cands, nil
@@ -217,10 +245,11 @@ func (r *warmupRepository) capPartnerCandidates(ctx context.Context, poolType st
 	out := cands[:0]
 	for _, c := range cands {
 		w, t := weeks[c.ID], todays[c.ID]
-		if max(t.received, t.inflight) >= partnerInboundCap(w.sent, share) {
+		if w.unreachable() || max(t.received, t.inflight) >= partnerInboundCap(w.sent, share) {
 			continue
 		}
 		c.Sent7d, c.Received7d, c.Junked7d = w.sent, w.received, w.junked
+		c.Delivered7d, c.Arrived7d = w.delivered, w.arrived
 		out = append(out, c)
 	}
 	return out, nil

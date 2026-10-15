@@ -589,7 +589,14 @@ const (
 	// A free sender stops at this share of an inbox's daily cap, so the rest
 	// of every inbox's day is left for premium senders.
 	WarmupFreeInboundSharePercent = 75
-	DailyThrottleNewOrgs          = 3 // new workspaces per owner per day
+	// A recipient is unreachable when this many handed-off warmup sends from at
+	// least this many sender workspaces over seven days never verifiably
+	// arrived. Sends younger than the grace are left out, so a slow sync is
+	// not read as a loss.
+	WarmupRecipientArrivalGraceHours        = 6
+	WarmupRecipientUnreachableMinDelivered  = 5
+	WarmupRecipientUnreachableMinSenderOrgs = 2
+	DailyThrottleNewOrgs                    = 3 // new workspaces per owner per day
 
 	// CLI sign-in handshake (`warmbly auth login`). Shorter-lived than the pool
 	// link handshake because a person is watching the terminal while it runs.
