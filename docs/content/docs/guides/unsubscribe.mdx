@@ -126,6 +126,7 @@ Only a person answering you can opt out this way: someone replying in one of you
 - a bounce or delivery failure, which returns your own email (and its unsubscribe header) inside the notice
 - an out-of-office or other automatic reply
 - a newsletter or notification sent to a list, whose "unsubscribe" footer is its own sender's
+- mail a contact sent before they became a contact, for example older messages from an address you later import, which cannot be an answer to anything you sent them. It stays in the unibox but opts nobody out, opens no follow-up task and records no reply. A reply in one of your campaign threads always counts
 
 Entries written under an earlier, broader reading of replies are read again once. When neither the message that wrote an entry nor any other message from that address asks to stop under this rule, the entry is lifted, the contact's **Subscribed** flag is restored, and the lift is recorded in the audit log. An entry that began with a link or one-click unsubscribe, or whose mail can no longer be found, stays.
 

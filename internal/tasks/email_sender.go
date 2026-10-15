@@ -39,6 +39,9 @@ type EmailMessage struct {
 	// bytes from object storage at send time. Refs travel inside the S3 body
 	// blob, never the Avro Kafka event.
 	Attachments []models.AttachmentRef
+	// ManualPlanAllowance is the workspace's plan-based unibox recipients in
+	// 24 hours; 0 means no plan bound.
+	ManualPlanAllowance int
 }
 
 // EmailSender interface for sending emails via workers
@@ -187,7 +190,7 @@ func (s *emailSender) Send(ctx context.Context, taskID uuid.UUID, msg EmailMessa
 	recipients := append(append(append([]string{}, msg.To...), msg.CC...), msg.BCC...)
 	nonce, err := s.admission.ReserveOutbound(ctx, repository.OutboundReservation{
 		TaskID: taskID, MailboxID: account.ID, OrganizationID: *account.OrganizationID, WorkerID: *workerID,
-		Provider: models.InboxProvider(account.Provider), Recipients: recipients,
+		Provider: models.InboxProvider(account.Provider), Recipients: recipients, ManualPlanAllowance: msg.ManualPlanAllowance,
 	})
 	if err != nil {
 		if msg.IsWarmup && msg.DispatchNonce != "" {

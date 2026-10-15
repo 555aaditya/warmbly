@@ -85,7 +85,7 @@ func TestLiveFailedProviderAttemptSurvivesRefundAndCapsOtherLanes(t *testing.T) 
 		exec(`INSERT INTO tasks(id,task_type,email_account_id,status,message_id)VALUES($1,$2,$3,'active','')`, id, lane, f.sender)
 		return OutboundReservation{TaskID: id, MailboxID: f.sender, OrganizationID: f.org, WorkerID: worker, Provider: models.InboxProviderSMTPIMAP, Recipients: []string{"recipient@example.test"}}
 	}
-	in := reservation("email")
+	in := reservation("placement")
 	nonce, err := r.ReserveOutbound(ctx, in)
 	if err != nil {
 		t.Fatal(err)
@@ -113,10 +113,12 @@ func TestLiveFailedProviderAttemptSurvivesRefundAndCapsOtherLanes(t *testing.T) 
 	if err = f.pool.QueryRow(ctx, `SELECT COUNT(*) FROM outbound_attempts WHERE task_id=$1`, in.TaskID).Scan(&attempts); err != nil || attempts != 1 {
 		t.Fatal("duplicate execution/result changed attempts", attempts, err)
 	}
-	for _, lane := range []string{"email", "placement"} {
-		if _, err = r.ReserveOutbound(ctx, reservation(lane)); !errors.Is(err, ErrSendAdmissionDenied) {
-			t.Fatal("refunded attempt escaped shared rate limit", lane, err)
-		}
+	if _, err = r.ReserveOutbound(ctx, reservation("placement")); !errors.Is(err, ErrSendAdmissionDenied) {
+		t.Fatal("refunded attempt escaped shared rate limit", err)
+	}
+	// Manual sends sit outside the shared allocation, so they are not held to it.
+	if _, err = r.ReserveOutbound(ctx, reservation("email")); err != nil {
+		t.Fatal("manual send refused by another lane's shared limit", err)
 	}
 }
 

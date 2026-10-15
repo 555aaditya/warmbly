@@ -89,27 +89,45 @@ func (s *service) recheckReplyOptOut(ctx context.Context, entry *models.Suppress
 		return replyOptOutOtherOrigin, nil
 	}
 
-	// Contacts are deleted outright, so "was a contact" is read from what
-	// outlives one: a campaign the entry was attributed to, or mail we sent
-	// the address. Either makes it someone we were writing to.
-	fromContact := entry.CampaignID != nil
-	if !fromContact {
-		c, cerr := s.contactRepo.GetByEmailAndOrganization(ctx, entry.OrganizationID, sender)
-		if cerr != nil {
-			return "", cerr
-		}
-		fromContact = c != nil
+	// A message is from a contact when it arrived after the contact existed
+	// or after we first wrote. Contacts are deleted outright, so only when
+	// none is left does the entry's campaign stand in for one.
+	var contactSince time.Time
+	isContact, attributed := false, false
+	c, cerr := s.contactRepo.GetByEmailAndOrganization(ctx, entry.OrganizationID, sender)
+	if cerr != nil {
+		return "", cerr
 	}
-	if !fromContact {
-		written, werr := s.uniboxRepo.HasWrittenTo(ctx, entry.OrganizationID, sender)
-		if werr != nil {
-			return "", werr
+	switch {
+	case c != nil:
+		isContact, contactSince = true, c.CreatedAt
+	case entry.CampaignID != nil:
+		attributed = true
+	}
+	var firstWritten *time.Time
+	writtenLoaded := false
+	wroteBefore := func(received time.Time) (bool, error) {
+		if !writtenLoaded {
+			at, werr := s.uniboxRepo.FirstWrittenTo(ctx, entry.OrganizationID, sender)
+			if werr != nil {
+				return false, werr
+			}
+			firstWritten, writtenLoaded = at, true
 		}
-		fromContact = written
+		return firstWritten != nil && (received.IsZero() || firstWritten.Before(received)), nil
 	}
 	threads := map[string]bool{}
 	for i := range msgs {
-		stands, err := s.replyOptOutStands(ctx, &msgs[i].EmailMessageStoreData, fromContact, threads)
+		msg := &msgs[i].EmailMessageStoreData
+		msgFromContact := attributed || (isContact && !receivedBefore(msg.InternalDate, contactSince))
+		if !msgFromContact {
+			w, werr := wroteBefore(msg.InternalDate)
+			if werr != nil {
+				return "", werr
+			}
+			msgFromContact = w
+		}
+		stands, err := s.replyOptOutStands(ctx, msg, msgFromContact, threads)
 		if err != nil {
 			return "", err
 		}
@@ -134,7 +152,7 @@ func (s *service) recheckReplyOptOut(ctx context.Context, entry *models.Suppress
 				"value":  entry.Email,
 				"kind":   string(entry.Kind),
 				"source": string(entry.Source),
-				"reason": "no message from the sender asks to stop: it was a bounce, an automatic reply, list mail or quoted history",
+				"reason": "no message from the sender asks to stop: it was a bounce, an automatic reply, list mail, quoted history or mail from before the address was a contact",
 			})
 	}
 	log.Info().

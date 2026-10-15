@@ -131,8 +131,8 @@ func newRotationFixture(t *testing.T, leads int) *rotationFixture {
 		id := uuid.New()
 		f.leads = append(f.leads, id)
 		exec(`INSERT INTO contacts (id, user_id, organization_id, email, first_name, last_name, company, phone, custom_fields, verification_status, created_at)
-		      VALUES ($1, $2, $3, $4, 'Live', 'Contact', '', '', '{}', 'valid', NOW() + make_interval(secs => $5))`,
-			id, f.user, f.org, "rot-lead-"+id.String()[:8]+"@test.local", float64(i))
+		      VALUES ($1, $2, $3, $4, 'Live', 'Contact', '', '', '{}', 'valid', NOW() - make_interval(secs => $5))`,
+			id, f.user, f.org, "rot-lead-"+id.String()[:8]+"@test.local", float64(leads-i))
 		exec(`INSERT INTO campaign_leads (campaign_id, contact_id, position) VALUES ($1, $2, $3)`, f.campaign, id, i)
 	}
 

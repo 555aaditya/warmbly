@@ -1768,8 +1768,9 @@ func main() {
 		}
 		// Never hand a send to a worker that stopped heartbeating: nothing
 		// would execute it and nothing would report it, so the step would
-		// look sent forever. The worker reconciler re-places the mailbox and
-		// the dead-letter retry replays the task once it has.
+		// look sent forever. The worker reconciler re-places the mailbox; a
+		// campaign retries on its next pass, and a unibox send is refused and
+		// reported to the mailbox owner.
 		if liveness, ok := emailSender.(interface{ WireWorkerLiveness(tasks.WorkerLiveness) }); ok {
 			liveness.WireWorkerLiveness(tasks.NewWorkerLiveness(workerRepository, cache))
 		}

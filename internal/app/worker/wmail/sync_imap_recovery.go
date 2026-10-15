@@ -150,7 +150,7 @@ func (w *WMail) imapRecoverFolders(ctx context.Context, folders []models.Mailbox
 			if err != nil {
 				return err
 			}
-			done, err := w.imapApply(ctx, fetched, true, stats, recovery)
+			done, err := w.imapApply(ctx, fetched, true, stats, recovery, 0)
 			if err != nil {
 				return err
 			}

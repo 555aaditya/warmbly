@@ -78,15 +78,15 @@ Unsubscribe here.', ARRAY['<a@example.test>'], ARRAY['List-Id:<news.example.org>
 	}
 
 	// A sent copy to the address is what outlives a deleted contact.
-	written, err := unibox.HasWrittenTo(ctx, f.org, sender)
-	if err != nil || !written {
-		t.Fatalf("HasWrittenTo(sender) = %v, %v; want true from the sent copy", written, err)
+	first, err := unibox.FirstWrittenTo(ctx, f.org, sender)
+	if err != nil || first == nil {
+		t.Fatalf("FirstWrittenTo(sender) = %v, %v; want the sent copy's date", first, err)
 	}
-	if written, err := unibox.HasWrittenTo(ctx, f.org, "someone@example.org"); err != nil || written {
-		t.Fatalf("HasWrittenTo(an address only received from) = %v, %v; want false", written, err)
+	if first, err := unibox.FirstWrittenTo(ctx, f.org, "someone@example.org"); err != nil || first != nil {
+		t.Fatalf("FirstWrittenTo(an address only received from) = %v, %v; want nil", first, err)
 	}
-	if written, err := unibox.HasWrittenTo(ctx, uuid.New(), sender); err != nil || written {
-		t.Fatalf("HasWrittenTo in another workspace = %v, %v; want false", written, err)
+	if first, err := unibox.FirstWrittenTo(ctx, uuid.New(), sender); err != nil || first != nil {
+		t.Fatalf("FirstWrittenTo in another workspace = %v, %v; want nil", first, err)
 	}
 
 	adv := &advancedOutreachRepository{db: pool}

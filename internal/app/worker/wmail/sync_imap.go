@@ -530,8 +530,13 @@ func (w *WMail) imapIncremental(ctx context.Context, box, before *models.Mailbox
 		return true, view, nil, nil
 	}
 	var uids []goimap.UID
+	// New mail always takes a UID at or above the held UIDNEXT, so on the
+	// mod-sequence path an unknown UID below it is history a folder-wide
+	// bump re-reported, not an arrival (#959).
+	var historyBelow uint32
 	if condStore && before.HighestModSeq > 0 && view.HighestModSeq > 0 {
 		uids, err = client.SearchChangedSince(before.HighestModSeq)
+		historyBelow = before.UIDNext
 	} else {
 		uids, err = client.SearchNewSince(before.UIDNext)
 	}
@@ -557,7 +562,7 @@ func (w *WMail) imapIncremental(ctx context.Context, box, before *models.Mailbox
 		if err != nil {
 			return false, view, touched, err
 		}
-		done, err := w.imapApply(ctx, fetched, false, stats, nil)
+		done, err := w.imapApply(ctx, fetched, false, stats, nil, historyBelow)
 		if err != nil {
 			return false, view, touched, err
 		}
@@ -654,9 +659,10 @@ func (w *WMail) imapReconcileDrafts(ctx context.Context, box *models.Mailbox, to
 
 // imapApply routes one fetched batch: known messages get an UPDATE_EMAIL,
 // unknown ones are stored if their lane admits them. backfill selects the
-// backfill lane and skips flood accounting. Returns whether every unknown
-// message in the batch was stored.
-func (w *WMail) imapApply(ctx context.Context, fetched []*imap.Fetched, backfill bool, stats *tickStats, recovery *imapFolderRecovery) (bool, *errx.MailError) {
+// backfill lane and skips flood accounting. Unknown live UIDs below
+// historyBelow are left to the backfill rather than admitted as new mail.
+// Returns whether every unknown message in the batch was stored.
+func (w *WMail) imapApply(ctx context.Context, fetched []*imap.Fetched, backfill bool, stats *tickStats, recovery *imapFolderRecovery, historyBelow uint32) (bool, *errx.MailError) {
 	sort.Slice(fetched, func(i, j int) bool { return fetched[i].Email.UID > fetched[j].Email.UID })
 	if ctx.Err() != nil || stats.aborted {
 		return false, nil
@@ -683,6 +689,9 @@ func (w *WMail) imapApply(ctx context.Context, fetched []*imap.Fetched, backfill
 				continue
 			}
 			if recovery == nil {
+				if !backfill && f.Email.UID < historyBelow {
+					continue
+				}
 				fresh = append(fresh, f)
 				continue
 			}
@@ -991,7 +1000,7 @@ func (w *WMail) imapBackfill(ctx context.Context, folders []models.Mailbox, stat
 			if err != nil {
 				return err
 			}
-			done, err := w.imapApply(ctx, fetched, true, stats, nil)
+			done, err := w.imapApply(ctx, fetched, true, stats, nil, 0)
 			if err != nil {
 				return err
 			}

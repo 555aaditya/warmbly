@@ -22,12 +22,28 @@ var ErrCampaignDailyLimit = fmt.Errorf("%w: campaign daily limit reached for thi
 
 var ErrMailboxSendingPlan = fmt.Errorf("%w: mailbox's current sending plan has no capacity", ErrSendAdmissionDenied)
 
+var ErrManualSendLimit = fmt.Errorf("%w: manual send fair-use limit reached for this mailbox", ErrSendAdmissionDenied)
+
+// ManualSendLimitError names the fair-use bound a manual send ran into.
+type ManualSendLimitError struct {
+	Window models.ManualSendWindow
+	Limit  int
+}
+
+func (e *ManualSendLimitError) Error() string {
+	return fmt.Sprintf("%v (%s: %d recipients)", ErrManualSendLimit, e.Window, e.Limit)
+}
+
+func (e *ManualSendLimitError) Unwrap() error { return ErrManualSendLimit }
+
 func SendAdmissionCode(err error) string {
 	switch {
 	case errors.Is(err, ErrCampaignDailyLimit):
 		return "CAMPAIGN_DAILY_LIMIT_REACHED"
 	case errors.Is(err, ErrMailboxSendingPlan):
 		return "MAILBOX_SENDING_PLAN_DENIED"
+	case errors.Is(err, ErrManualSendLimit):
+		return "MANUAL_SEND_LIMIT_REACHED"
 	case errors.Is(err, ErrSendAdmissionDenied):
 		return "SEND_ADMISSION_DENIED"
 	default:
@@ -42,6 +58,9 @@ type OutboundReservation struct {
 	WorkerID       uuid.UUID
 	Provider       models.InboxProvider
 	Recipients     []string
+	// ManualPlanAllowance bounds the workspace's manual (unibox) recipients
+	// in 24 hours across its mailboxes; 0 means no plan bound.
+	ManualPlanAllowance int
 }
 
 type OutboundAdmissionRepository interface {
@@ -161,38 +180,37 @@ func (r *taskRepository) ReserveOutbound(ctx context.Context, in OutboundReserva
 	if err != nil {
 		return uuid.Nil, err
 	}
-	var occurrences int
-	err = tx.QueryRow(ctx, `SELECT COALESCE(SUM(COALESCE(cardinality(send_recipients),GREATEST(1,cardinality(et.to_addrs)+COALESCE(cardinality(et.cc),0)+COALESCE(cardinality(et.bcc),0)))) FILTER(WHERE COALESCE(send_reserved_at,completed_at)>NOW()-INTERVAL '24 hours'),0)
-	 FROM tasks t LEFT JOIN email_tasks et ON et.task_id=t.id
-	 WHERE t.email_account_id=$1 AND t.id<>$2 AND task_type IN ('campaign','email','warmup','placement')
-	 AND ((send_reserved_at IS NOT NULL AND send_released_at IS NULL) OR (send_reserved_at IS NULL AND status='completed' AND completed_at IS NOT NULL
-	 AND (task_type<>'campaign' OR EXISTS(SELECT 1 FROM campaign_tasks ct WHERE ct.task_id=t.id AND ct.sequence_id IS NOT NULL))))
-	 AND COALESCE(send_reserved_at,completed_at)>NOW()-INTERVAL '24 hours'`, in.MailboxID, in.TaskID).Scan(&occurrences)
-	if err != nil {
-		return uuid.Nil, err
+	if lane == "email" {
+		if err = checkManualSendFairUse(ctx, tx, in.TaskID, in.MailboxID, len(recipients)); err != nil {
+			return uuid.Nil, err
+		}
+		if err = checkManualSendPlan(ctx, tx, in.TaskID, in.OrganizationID, len(recipients), in.ManualPlanAllowance); err != nil {
+			return uuid.Nil, err
+		}
 	}
 	// Calendar counters and rolling recipient occurrences are independent constraints.
 	var attemptedRecipients, attemptedToday int
 	err = tx.QueryRow(ctx, `SELECT COALESCE(SUM(recipient_count) FILTER(WHERE attempted_at>NOW()-INTERVAL '24 hours'),0),
 	 COUNT(*) FILTER(WHERE (attempted_at AT TIME ZONE $2)::date=(NOW() AT TIME ZONE $2)::date)
-	 FROM outbound_attempts WHERE email_account_id=$1`, in.MailboxID, timezone).Scan(&attemptedRecipients, &attemptedToday)
+	 FROM outbound_attempts a WHERE email_account_id=$1
+	 AND NOT EXISTS(SELECT 1 FROM tasks m WHERE m.id=a.task_id AND m.task_type='email')`, in.MailboxID, timezone).Scan(&attemptedRecipients, &attemptedToday)
 	if err != nil {
 		return uuid.Nil, err
 	}
 	var reservedAttemptRecipients, reservedAttemptsToday int
 	err = tx.QueryRow(ctx, `SELECT COALESCE(SUM(GREATEST(1,cardinality(send_recipients))) FILTER(WHERE COALESCE(send_reserved_at,completed_at)>NOW()-INTERVAL '24 hours'),0),
 	 COUNT(*) FILTER(WHERE COALESCE(send_business_day,(completed_at AT TIME ZONE $3)::date)=(NOW() AT TIME ZONE $3)::date)
-	 FROM tasks t WHERE email_account_id=$1 AND id<>$2 AND task_type IN('email','campaign','warmup','placement')
+	 FROM tasks t WHERE email_account_id=$1 AND id<>$2 AND task_type IN('campaign','warmup','placement')
 	 AND ((send_reserved_at IS NOT NULL AND send_released_at IS NULL) OR (send_reserved_at IS NULL AND status='completed' AND completed_at IS NOT NULL
 	 AND (task_type<>'campaign' OR EXISTS(SELECT 1 FROM campaign_tasks ct WHERE ct.task_id=t.id AND ct.sequence_id IS NOT NULL))))
 	 AND NOT EXISTS(SELECT 1 FROM outbound_attempts a WHERE a.nonce=t.send_executor_nonce)`, in.MailboxID, in.TaskID, timezone).Scan(&reservedAttemptRecipients, &reservedAttemptsToday)
 	if err != nil {
 		return uuid.Nil, err
 	}
-	occurrences = attemptedRecipients + reservedAttemptRecipients
+	occurrences := attemptedRecipients + reservedAttemptRecipients
 	var dayTotal, dayCold, dayDiagnostic int
-	err = tx.QueryRow(ctx, `SELECT COUNT(*),COUNT(*) FILTER(WHERE task_type IN ('campaign','email')),COUNT(*) FILTER(WHERE task_type IN ('warmup','placement')) FROM tasks t
-	 WHERE email_account_id=$1 AND id<>$2 AND task_type IN ('campaign','email','warmup','placement')
+	err = tx.QueryRow(ctx, `SELECT COUNT(*),COUNT(*) FILTER(WHERE task_type='campaign'),COUNT(*) FILTER(WHERE task_type IN ('warmup','placement')) FROM tasks t
+	 WHERE email_account_id=$1 AND id<>$2 AND task_type IN ('campaign','warmup','placement')
 	 AND COALESCE(send_business_day,(completed_at AT TIME ZONE $3)::date)=(NOW() AT TIME ZONE $3)::date
 	 AND ((send_reserved_at IS NOT NULL AND send_released_at IS NULL) OR (send_reserved_at IS NULL AND status='completed' AND completed_at IS NOT NULL
 	 AND (task_type<>'campaign' OR EXISTS(SELECT 1 FROM campaign_tasks ct WHERE ct.task_id=t.id AND ct.sequence_id IS NOT NULL))))`, in.MailboxID, in.TaskID, timezone).Scan(&dayTotal, &dayCold, &dayDiagnostic)
@@ -206,7 +224,9 @@ func (r *taskRepository) ReserveOutbound(ctx context.Context, in OutboundReserva
 	if rolling != nil {
 		rollingCap = *rolling
 	}
-	if max(dayTotal, attemptedToday+reservedAttemptsToday) >= sharedCap || occurrences+len(recipients) > rollingCap || (lane == "campaign" || lane == "email") && dayCold >= campaignCap || (lane == "warmup" || lane == "placement") && dayDiagnostic >= warmupCap {
+	// Manual (unibox) mail is a conversation, not outreach: it spends none of
+	// these allocations and was held to its own fair use above.
+	if lane != "email" && (max(dayTotal, attemptedToday+reservedAttemptsToday) >= sharedCap || occurrences+len(recipients) > rollingCap || lane == "campaign" && dayCold >= campaignCap || (lane == "warmup" || lane == "placement") && dayDiagnostic >= warmupCap) {
 		return uuid.Nil, ErrSendAdmissionDenied
 	}
 	if lane == "campaign" {
@@ -243,6 +263,77 @@ func (r *taskRepository) ReserveOutbound(ctx context.Context, in OutboundReserva
 		return uuid.Nil, err
 	}
 	return nonce, nil
+}
+
+// checkManualSendFairUse holds a manual send to the mailbox's fair-use
+// allowance, decided from its provider, connection age, warmup standing and
+// workspace risk. A reply or forward spends the daily and hourly allowance; a
+// send that starts a conversation also spends the new-conversation one.
+func checkManualSendFairUse(ctx context.Context, tx pgx.Tx, task, mailbox uuid.UUID, n int) error {
+	var standing models.ManualSendStanding
+	var provider, risk string
+	var connectedSeconds float64
+	err := tx.QueryRow(ctx, `SELECT ea.provider::text, ea.email, GREATEST(0,EXTRACT(EPOCH FROM NOW()-ea.created_at))::float8, o.risk_state,
+	 COALESCE((SELECT h.state FROM (
+	   SELECT p.health_state::text AS state FROM warmup_pool_participants p WHERE p.email_account_id=ea.id
+	   UNION ALL SELECT l.health_state FROM warmup_reputation_ledger l WHERE l.organization_id=ea.organization_id AND l.email=lower(btrim(ea.email))
+	 ) h ORDER BY array_position(ARRAY['blocked','quarantined','throttled','watch','healthy'], h.state) NULLS LAST LIMIT 1),'healthy')
+	 FROM email_accounts ea JOIN organizations o ON o.id=ea.organization_id WHERE ea.id=$1`, mailbox).
+		Scan(&provider, &standing.Address, &connectedSeconds, &risk, &standing.Health)
+	if err != nil {
+		return err
+	}
+	standing.Provider = models.InboxProvider(provider)
+	standing.OrgRisk = models.OrgRiskState(risk)
+	standing.ConnectedFor = time.Duration(connectedSeconds * float64(time.Second))
+
+	// No email_tasks row (a test send) is treated as starting a conversation.
+	var startsConversation bool
+	err = tx.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM email_tasks et WHERE et.task_id=$1
+	 AND (COALESCE(cardinality(et.in_reply_to),0)>0 OR et.thread_id IS NOT NULL OR et.forward_thread_id IS NOT NULL))`, task).Scan(&startsConversation)
+	if err != nil {
+		return err
+	}
+	var used models.ManualSendUsage
+	err = tx.QueryRow(ctx, `SELECT COALESCE(SUM(s.n),0), COALESCE(SUM(s.n) FILTER(WHERE s.at>NOW()-INTERVAL '1 hour'),0), COALESCE(SUM(s.n) FILTER(WHERE s.fresh),0)
+	 FROM (SELECT GREATEST(1,cardinality(t.send_recipients)) AS n, t.send_reserved_at AS at,
+	   NOT (COALESCE(cardinality(et.in_reply_to),0)>0 OR et.thread_id IS NOT NULL OR et.forward_thread_id IS NOT NULL) AS fresh
+	   FROM tasks t LEFT JOIN email_tasks et ON et.task_id=t.id
+	   WHERE t.email_account_id=$1 AND t.id<>$2 AND t.task_type='email'
+	   AND t.send_reserved_at>NOW()-INTERVAL '24 hours' AND t.send_released_at IS NULL) s`, mailbox, task).
+		Scan(&used.Day, &used.Hour, &used.NewConversations)
+	if err != nil {
+		return err
+	}
+	allowance := models.ManualSendAllowanceFor(standing)
+	if window, limit, over := allowance.Exceeded(used, n, startsConversation); over {
+		return &ManualSendLimitError{Window: window, Limit: limit}
+	}
+	return nil
+}
+
+// checkManualSendPlan holds a workspace's manual sends, across all its
+// mailboxes, to the allowance its plan gives. The workspace lock keeps two
+// mailboxes from both taking the last of it.
+func checkManualSendPlan(ctx context.Context, tx pgx.Tx, task, org uuid.UUID, n, allowance int) error {
+	if allowance <= 0 {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,274))`, org.String()); err != nil {
+		return err
+	}
+	var used int
+	err := tx.QueryRow(ctx, `SELECT COALESCE(SUM(GREATEST(1,cardinality(t.send_recipients))),0)
+	 FROM tasks t JOIN email_accounts ea ON ea.id=t.email_account_id
+	 WHERE ea.organization_id=$1 AND t.id<>$2 AND t.task_type='email'
+	 AND t.send_reserved_at>NOW()-INTERVAL '24 hours' AND t.send_released_at IS NULL`, org, task).Scan(&used)
+	if err != nil {
+		return err
+	}
+	if used+n > allowance {
+		return &ManualSendLimitError{Window: models.ManualSendWindowPlan, Limit: allowance}
+	}
+	return nil
 }
 
 func checkSendRecipients(ctx context.Context, tx pgx.Tx, org uuid.UUID, recipients []string) error {
