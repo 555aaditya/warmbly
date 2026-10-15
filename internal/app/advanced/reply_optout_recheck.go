@@ -91,44 +91,38 @@ func (s *service) recheckReplyOptOut(ctx context.Context, entry *models.Suppress
 
 	// Contacts are deleted outright, so "was a contact" is read from what
 	// outlives one: a campaign the entry was attributed to, or mail we sent
-	// the address. Either makes it someone we were writing to.
-	fromContact := entry.CampaignID != nil
+	// the address. Either makes it someone we were writing to, but only for
+	// mail that arrived after the contact existed or after we first wrote.
+	attributed := entry.CampaignID != nil
 	var contactSince time.Time
-	if !fromContact {
+	isContact := false
+	if !attributed {
 		c, cerr := s.contactRepo.GetByEmailAndOrganization(ctx, entry.OrganizationID, sender)
 		if cerr != nil {
 			return "", cerr
 		}
 		if c != nil {
-			fromContact, contactSince = true, c.CreatedAt
+			isContact, contactSince = true, c.CreatedAt
 		}
 	}
-	var written *bool
-	writtenTo := func() (bool, error) {
-		if written == nil {
-			w, werr := s.uniboxRepo.HasWrittenTo(ctx, entry.OrganizationID, sender)
+	var firstWritten *time.Time
+	writtenLoaded := false
+	wroteBefore := func(received time.Time) (bool, error) {
+		if !writtenLoaded {
+			at, werr := s.uniboxRepo.FirstWrittenTo(ctx, entry.OrganizationID, sender)
 			if werr != nil {
 				return false, werr
 			}
-			written = &w
+			firstWritten, writtenLoaded = at, true
 		}
-		return *written, nil
-	}
-	if !fromContact {
-		w, werr := writtenTo()
-		if werr != nil {
-			return "", werr
-		}
-		fromContact = w
+		return firstWritten != nil && (received.IsZero() || firstWritten.Before(received)), nil
 	}
 	threads := map[string]bool{}
 	for i := range msgs {
 		msg := &msgs[i].EmailMessageStoreData
-		msgFromContact := fromContact
-		// A contact created after the message is not who it was written to;
-		// only mail we sent the address still makes the sender one of ours.
-		if fromContact && receivedBefore(msg.InternalDate, contactSince) {
-			w, werr := writtenTo()
+		msgFromContact := attributed || (isContact && !receivedBefore(msg.InternalDate, contactSince))
+		if !msgFromContact {
+			w, werr := wroteBefore(msg.InternalDate)
 			if werr != nil {
 				return "", werr
 			}

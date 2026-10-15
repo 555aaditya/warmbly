@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/models"
 )
 
@@ -138,7 +137,7 @@ func TestLiveSharedAdmissionMixedLanesRetainsUnknownAndDoesNotDoubleCountCampaig
 
 // A unibox send is a conversation, not outreach: it spends no campaign slot,
 // is admitted with the campaign, shared and rolling caps full, and is bounded
-// only by its own recipient ceiling and the mailbox's standing (#956).
+// only by its own fair use and the mailbox's standing (#956).
 func TestLiveManualSendIsOutsideTheCappedAllocations(t *testing.T) {
 	f, r := lineageFixture(t)
 	ctx := t.Context()
@@ -209,14 +208,33 @@ func TestLiveManualSendIsOutsideTheCappedAllocations(t *testing.T) {
 	}
 	exec(`UPDATE email_accounts SET send_recovery_hold=false,send_recovery_reason=NULL WHERE id=$1`, f.sender)
 
-	many := make([]string, config.ManualSendRecipientsPer24h)
-	for i := range many {
-		many[i] = addr("bulk")
+	recipients := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = addr("bulk")
+		}
+		return out
 	}
-	if _, err := r.ReserveOutbound(ctx, newTask("email", many...)); !errors.Is(err, ErrManualSendLimit) {
-		t.Fatalf("reply past the manual ceiling = %v, want ErrManualSendLimit", err)
+	var limit *ManualSendLimitError
+	// A just-connected SMTP mailbox: a quarter of the 750 base, so 37 a message.
+	if _, err := r.ReserveOutbound(ctx, newTask("email", recipients(38)...)); !errors.As(err, &limit) || limit.Window != models.ManualSendWindowMessage {
+		t.Fatalf("38 recipients on one message = %v, want the per-message bound", err)
 	}
-	if got := SendAdmissionCode(ErrManualSendLimit); got != "MANUAL_SEND_LIMIT_REACHED" {
+
+	// A month-old mailbox that started conversations with 180 people two hours
+	// ago: a new email to 10 more is refused, a threaded reply to 10 is not.
+	exec(`UPDATE email_accounts SET created_at=NOW()-INTERVAL '30 days' WHERE id=$1`, f.sender)
+	used := uuid.New()
+	exec(`INSERT INTO tasks(id,task_type,email_account_id,status,message_id,send_reserved_at,send_recipients)VALUES($1,'email',$2,'completed','',NOW()-INTERVAL '2 hours',$3)`, used, f.sender, recipients(180))
+	if _, err := r.ReserveOutbound(ctx, newTask("email", recipients(10)...)); !errors.As(err, &limit) || limit.Window != models.ManualSendWindowNew {
+		t.Fatalf("new email past the new-conversation allowance = %v, want that bound", err)
+	}
+	reply := newTask("email", recipients(10)...)
+	exec(`INSERT INTO email_tasks(task_id,subject,body,in_reply_to)VALUES($1,'Re: Hello','Thanks',ARRAY['<parent@test.local>'])`, reply.TaskID)
+	if err := send(reply); err != nil {
+		t.Fatalf("threaded reply refused by the new-conversation allowance: %v", err)
+	}
+	if got := SendAdmissionCode(&ManualSendLimitError{Window: models.ManualSendWindowDay, Limit: 1}); got != "MANUAL_SEND_LIMIT_REACHED" {
 		t.Fatalf("code = %q", got)
 	}
 }

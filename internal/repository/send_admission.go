@@ -22,7 +22,19 @@ var ErrCampaignDailyLimit = fmt.Errorf("%w: campaign daily limit reached for thi
 
 var ErrMailboxSendingPlan = fmt.Errorf("%w: mailbox's current sending plan has no capacity", ErrSendAdmissionDenied)
 
-var ErrManualSendLimit = fmt.Errorf("%w: manual send limit reached for this mailbox", ErrSendAdmissionDenied)
+var ErrManualSendLimit = fmt.Errorf("%w: manual send fair-use limit reached for this mailbox", ErrSendAdmissionDenied)
+
+// ManualSendLimitError names the fair-use bound a manual send ran into.
+type ManualSendLimitError struct {
+	Window models.ManualSendWindow
+	Limit  int
+}
+
+func (e *ManualSendLimitError) Error() string {
+	return fmt.Sprintf("%v (%s: %d recipients)", ErrManualSendLimit, e.Window, e.Limit)
+}
+
+func (e *ManualSendLimitError) Unwrap() error { return ErrManualSendLimit }
 
 func SendAdmissionCode(err error) string {
 	switch {
@@ -162,15 +174,10 @@ func (r *taskRepository) ReserveOutbound(ctx context.Context, in OutboundReserva
 	if err != nil {
 		return uuid.Nil, err
 	}
-	// Manual (unibox) mail is a conversation the user starts, not outreach: it
-	// spends none of the cold, diagnostic, shared or rolling allocations and is
-	// bounded only by its own recipient ceiling.
-	var manualRecipients int
-	err = tx.QueryRow(ctx, `SELECT COALESCE(SUM(GREATEST(1,cardinality(send_recipients))),0) FROM tasks
-	 WHERE email_account_id=$1 AND id<>$2 AND task_type='email' AND send_reserved_at>NOW()-INTERVAL '24 hours' AND send_released_at IS NULL`,
-		in.MailboxID, in.TaskID).Scan(&manualRecipients)
-	if err != nil {
-		return uuid.Nil, err
+	if lane == "email" {
+		if err = checkManualSendFairUse(ctx, tx, in.TaskID, in.MailboxID, len(recipients)); err != nil {
+			return uuid.Nil, err
+		}
 	}
 	// Calendar counters and rolling recipient occurrences are independent constraints.
 	var attemptedRecipients, attemptedToday int
@@ -208,11 +215,9 @@ func (r *taskRepository) ReserveOutbound(ctx context.Context, in OutboundReserva
 	if rolling != nil {
 		rollingCap = *rolling
 	}
-	if lane == "email" {
-		if manualRecipients+len(recipients) > config.ManualSendRecipientsPer24h {
-			return uuid.Nil, ErrManualSendLimit
-		}
-	} else if max(dayTotal, attemptedToday+reservedAttemptsToday) >= sharedCap || occurrences+len(recipients) > rollingCap || lane == "campaign" && dayCold >= campaignCap || (lane == "warmup" || lane == "placement") && dayDiagnostic >= warmupCap {
+	// Manual (unibox) mail is a conversation, not outreach: it spends none of
+	// these allocations and was held to its own fair use above.
+	if lane != "email" && (max(dayTotal, attemptedToday+reservedAttemptsToday) >= sharedCap || occurrences+len(recipients) > rollingCap || lane == "campaign" && dayCold >= campaignCap || (lane == "warmup" || lane == "placement") && dayDiagnostic >= warmupCap) {
 		return uuid.Nil, ErrSendAdmissionDenied
 	}
 	if lane == "campaign" {
@@ -249,6 +254,53 @@ func (r *taskRepository) ReserveOutbound(ctx context.Context, in OutboundReserva
 		return uuid.Nil, err
 	}
 	return nonce, nil
+}
+
+// checkManualSendFairUse holds a manual send to the mailbox's fair-use
+// allowance, decided from its provider, connection age, warmup standing and
+// workspace risk. A reply or forward spends the daily and hourly allowance; a
+// send that starts a conversation also spends the new-conversation one.
+func checkManualSendFairUse(ctx context.Context, tx pgx.Tx, task, mailbox uuid.UUID, n int) error {
+	var standing models.ManualSendStanding
+	var provider, risk string
+	var connectedSeconds float64
+	err := tx.QueryRow(ctx, `SELECT ea.provider::text, ea.email, GREATEST(0,EXTRACT(EPOCH FROM NOW()-ea.created_at))::float8, o.risk_state,
+	 COALESCE((SELECT h.state FROM (
+	   SELECT p.health_state::text AS state FROM warmup_pool_participants p WHERE p.email_account_id=ea.id
+	   UNION ALL SELECT l.health_state FROM warmup_reputation_ledger l WHERE l.organization_id=ea.organization_id AND l.email=lower(btrim(ea.email))
+	 ) h ORDER BY array_position(ARRAY['blocked','quarantined','throttled','watch','healthy'], h.state) NULLS LAST LIMIT 1),'healthy')
+	 FROM email_accounts ea JOIN organizations o ON o.id=ea.organization_id WHERE ea.id=$1`, mailbox).
+		Scan(&provider, &standing.Address, &connectedSeconds, &risk, &standing.Health)
+	if err != nil {
+		return err
+	}
+	standing.Provider = models.InboxProvider(provider)
+	standing.OrgRisk = models.OrgRiskState(risk)
+	standing.ConnectedFor = time.Duration(connectedSeconds * float64(time.Second))
+
+	// No email_tasks row (a test send) is treated as starting a conversation.
+	var startsConversation bool
+	err = tx.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM email_tasks et WHERE et.task_id=$1
+	 AND (COALESCE(cardinality(et.in_reply_to),0)>0 OR et.thread_id IS NOT NULL OR et.forward_thread_id IS NOT NULL))`, task).Scan(&startsConversation)
+	if err != nil {
+		return err
+	}
+	var used models.ManualSendUsage
+	err = tx.QueryRow(ctx, `SELECT COALESCE(SUM(s.n),0), COALESCE(SUM(s.n) FILTER(WHERE s.at>NOW()-INTERVAL '1 hour'),0), COALESCE(SUM(s.n) FILTER(WHERE s.fresh),0)
+	 FROM (SELECT GREATEST(1,cardinality(t.send_recipients)) AS n, t.send_reserved_at AS at,
+	   NOT (COALESCE(cardinality(et.in_reply_to),0)>0 OR et.thread_id IS NOT NULL OR et.forward_thread_id IS NOT NULL) AS fresh
+	   FROM tasks t LEFT JOIN email_tasks et ON et.task_id=t.id
+	   WHERE t.email_account_id=$1 AND t.id<>$2 AND t.task_type='email'
+	   AND t.send_reserved_at>NOW()-INTERVAL '24 hours' AND t.send_released_at IS NULL) s`, mailbox, task).
+		Scan(&used.Day, &used.Hour, &used.NewConversations)
+	if err != nil {
+		return err
+	}
+	allowance := models.ManualSendAllowanceFor(standing)
+	if window, limit, over := allowance.Exceeded(used, n, startsConversation); over {
+		return &ManualSendLimitError{Window: window, Limit: limit}
+	}
+	return nil
 }
 
 func checkSendRecipients(ctx context.Context, tx pgx.Tx, org uuid.UUID, recipients []string) error {

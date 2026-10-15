@@ -178,12 +178,6 @@ const (
 	// tick retries it; this bounds that loop for a mailbox that can never send.
 	CampaignSendMaxAttempts = 5
 
-	// ManualSendRecipientsPer24h bounds the recipients one mailbox's unibox
-	// sends (reply, forward, compose) may reach in a rolling 24 hours. Manual
-	// mail is outside the campaign and warmup allocations, so this is its own
-	// ceiling and keeps the composer from becoming an uncapped bulk channel.
-	ManualSendRecipientsPer24h = 500
-
 	// CampaignLeadMaxCC caps the contacts copied on one lead's emails. Every
 	// copy is one more recipient who did not ask for the email.
 	CampaignLeadMaxCC = 2

@@ -82,10 +82,20 @@ type optOutUnibox struct {
 	repository.UniboxRepository
 	byAddress map[string][]repository.InboundMessage
 	written   map[string]bool
+	writtenAt map[string]time.Time
 }
 
-func (u optOutUnibox) HasWrittenTo(_ context.Context, _ uuid.UUID, address string) (bool, error) {
-	return u.written[address], nil
+// FirstWrittenTo dates every written address long ago, unless writtenAt
+// names when.
+func (u optOutUnibox) FirstWrittenTo(_ context.Context, _ uuid.UUID, address string) (*time.Time, error) {
+	if at, ok := u.writtenAt[address]; ok {
+		return &at, nil
+	}
+	if u.written[address] {
+		at := time.Unix(0, 0)
+		return &at, nil
+	}
+	return nil, nil
 }
 
 func (u optOutUnibox) ListInboundFrom(_ context.Context, _ uuid.UUID, address string, _ int) ([]repository.InboundMessage, error) {
@@ -367,18 +377,25 @@ func TestRecheckLiftsOptOutsOnlyMailFromBeforeTheContactSupports(t *testing.T) {
 		return m
 	}
 	historical, recent, mailed := entry("old@example.org"), entry("new@example.org"), entry("mailed@example.org")
-	repo.entries = []models.SuppressedRecipient{historical, recent, mailed}
+	mailedLater := entry("later@example.org")
+	repo.entries = []models.SuppressedRecipient{historical, recent, mailed, mailedLater}
 	svc.uniboxRepo = optOutUnibox{byAddress: map[string][]repository.InboundMessage{
 		"old@example.org":    {msg("Old <old@example.org>", created.Add(-90*24*time.Hour))},
 		"new@example.org":    {msg("New <new@example.org>", created.Add(time.Hour))},
 		"mailed@example.org": {msg("Mailed <mailed@example.org>", created.Add(-90*24*time.Hour))},
-	}, written: map[string]bool{"mailed@example.org": true}}
+		// We first wrote to this address after its message arrived.
+		"later@example.org": {msg("Later <later@example.org>", created.Add(-90*24*time.Hour))},
+	}, written: map[string]bool{"mailed@example.org": true}, writtenAt: map[string]time.Time{"later@example.org": created.Add(-30 * 24 * time.Hour)}}
 
 	if _, _, err := svc.RecheckReplyOptOuts(context.Background(), uuid.Nil, 100); err != nil {
 		t.Fatal(err)
 	}
-	if len(repo.deleted) != 1 || repo.deleted[0] != historical.ID {
-		t.Fatalf("lifted %v, want only %v", repo.deleted, historical.ID)
+	lifted := map[uuid.UUID]bool{}
+	for _, id := range repo.deleted {
+		lifted[id] = true
+	}
+	if len(lifted) != 2 || !lifted[historical.ID] || !lifted[mailedLater.ID] {
+		t.Fatalf("lifted %v, want %v and %v", repo.deleted, historical.ID, mailedLater.ID)
 	}
 	if repo.checked[recent.ID] != replyOptOutKept || repo.checked[mailed.ID] != replyOptOutKept {
 		t.Errorf("outcomes = %q / %q, want both kept", repo.checked[recent.ID], repo.checked[mailed.ID])

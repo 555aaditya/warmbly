@@ -91,9 +91,9 @@ type UniboxRepository interface {
 	// ListInboundFrom returns a workspace's inbound mail from one address,
 	// newest first: the evidence behind an opt-out that address triggered.
 	ListInboundFrom(ctx context.Context, orgID uuid.UUID, address string, limit int) ([]InboundMessage, error)
-	// HasWrittenTo reports whether any of the workspace's mailboxes holds a
-	// sent message addressed to the address.
-	HasWrittenTo(ctx context.Context, orgID uuid.UUID, address string) (bool, error)
+	// FirstWrittenTo returns when the workspace's mailboxes first sent the
+	// address a message, or nil when they never have.
+	FirstWrittenTo(ctx context.Context, orgID uuid.UUID, address string) (*time.Time, error)
 	DeferWarmupVerification(ctx context.Context, e *models.JobEventNewEmail) error
 	ClaimPendingWarmupVerification(ctx context.Context, limit int) ([]models.JobEventNewEmail, error)
 	ProcessPendingWarmupVerification(ctx context.Context, id uuid.UUID, process func(*models.JobEventNewEmail) error) error

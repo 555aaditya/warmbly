@@ -206,12 +206,12 @@ func (r *uniboxRepository) ListUnprocessedCampaignReplies(ctx context.Context, s
 		            LATERAL (VALUES ('<' || btrim(x, '<>') || '>'), (btrim(x, '<>'))) AS f(v)))
 		    )
 		    -- The mailbox's workspace first, so idx_contacts_org_email serves the address match.
-		    -- Mail received before the contact existed answers nothing we sent it.
+		    -- Mail received before the contact existed answers nothing we sent it; an unknown (zero) date stays eligible.
 		    OR EXISTS (
 		      SELECT 1 FROM contacts co
 		      WHERE co.organization_id = (SELECT ea.organization_id FROM email_accounts ea WHERE ea.id = u.email_id)
 		        AND lower(co.email) = `+bareFrom+`
-		        AND u.internal_date >= co.created_at
+		        AND (u.internal_date >= co.created_at OR u.internal_date = '0001-01-01 00:00:00+00'::timestamptz)
 		    )
 		  )
 		ORDER BY u.id LIMIT $4`, afterID, since, lastScanned, limit)
@@ -283,16 +283,14 @@ func (r *uniboxRepository) ListInboundFrom(ctx context.Context, orgID uuid.UUID,
 	return out, rows.Err()
 }
 
-func (r *uniboxRepository) HasWrittenTo(ctx context.Context, orgID uuid.UUID, address string) (bool, error) {
-	var written bool
+func (r *uniboxRepository) FirstWrittenTo(ctx context.Context, orgID uuid.UUID, address string) (*time.Time, error) {
+	var first *time.Time
 	err := r.db.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			FROM unibox_emails u
-			JOIN email_accounts ea ON ea.id = u.email_id
-			WHERE ea.organization_id = $1
-			  AND (u.folder = 'sent' OR u.provider_folder = 'sent')
-			  AND strpos(lower(array_to_string(u.to_addr || u.cc || u.bcc, ' ')), lower(btrim($2))) > 0
-		)`, orgID, address).Scan(&written)
-	return written, err
+		SELECT MIN(u.internal_date)
+		FROM unibox_emails u
+		JOIN email_accounts ea ON ea.id = u.email_id
+		WHERE ea.organization_id = $1
+		  AND (u.folder = 'sent' OR u.provider_folder = 'sent')
+		  AND strpos(lower(array_to_string(u.to_addr || u.cc || u.bcc, ' ')), lower(btrim($2))) > 0`, orgID, address).Scan(&first)
+	return first, err
 }
