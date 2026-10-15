@@ -2,6 +2,7 @@ package imap
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"strconv"
 	"strings"
@@ -142,7 +143,11 @@ func fetchMIMEText(c *imapclient.Client, uid imap.UID) (plain, html string, err 
 	if err != nil {
 		return "", "", err
 	}
-	plain, html = mimeTextParts(raw[""])
+	body, ok := raw[""]
+	if !ok {
+		return "", "", errors.New("imap: required body section missing")
+	}
+	plain, html = mimeTextParts(body)
 	return plain, html, nil
 }
 

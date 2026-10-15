@@ -223,10 +223,10 @@ func TestLiveWarmupPartnerCandidatesDropAnUnreachableRecipient(t *testing.T) {
 	offered("losses from two workspaces", false)
 
 	f.exec(`UPDATE warmup_tokens SET consumed_at = NOW()
-	        WHERE token = (SELECT token FROM warmup_tokens WHERE recipient_account_id = $1 AND sender_account_id = $2 ORDER BY created_at LIMIT 1)`,
+	        WHERE token = (SELECT token FROM warmup_tokens WHERE recipient_account_id = $1 AND sender_account_id = $2 ORDER BY created_at DESC LIMIT 1)`,
 		f.sibling, f.outside)
-	c := offered("one verified arrival", true)
-	if c.Delivered7d != sample+1 || c.Arrived7d != 1 {
-		t.Fatalf("delivered/arrived = %d/%d, want %d/1", c.Delivered7d, c.Arrived7d, sample+1)
+	c := offered("one verified arrival inside the grace", true)
+	if c.Delivered7d != sample+2 || c.Arrived7d != 1 {
+		t.Fatalf("delivered/arrived = %d/%d, want %d/1", c.Delivered7d, c.Arrived7d, sample+2)
 	}
 }

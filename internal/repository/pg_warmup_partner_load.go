@@ -30,12 +30,13 @@ func (w partnerWeek) unreachable() bool {
 }
 
 // warmupInboundSQL selects the pool's handed-off warmup mail to the recipients
-// warmup_tokens wt names, past the arrival grace, joined to each sender as s.
+// warmup_tokens wt names, once past the arrival grace or arrived, joined to
+// each sender as s.
 var warmupInboundSQL = fmt.Sprintf(`
 		FROM warmup_tokens wt
 		JOIN email_accounts s ON s.id = wt.sender_account_id
 		WHERE wt.created_at >= NOW() - interval '7 days'
-		  AND wt.created_at < NOW() - make_interval(hours => %d)
+		  AND (wt.created_at < NOW() - make_interval(hours => %d) OR wt.consumed_at IS NOT NULL)
 		  AND wt.sent_message_id <> ''`, config.WarmupRecipientArrivalGraceHours)
 
 // warmupInboundColumns are delivered, arrived and lost_by over warmupInboundSQL.
