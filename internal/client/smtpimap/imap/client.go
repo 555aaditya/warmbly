@@ -129,6 +129,9 @@ type Client struct {
 	// one is reported once rather than every pass.
 	lastUnreadable atomic.Pointer[string]
 
+	// envelopes is how each message that stepped down is asked for now.
+	envelopes envelopeRungs
+
 	// dateScans is that read per folder, extended rather than repeated on the
 	// next pass. Guarded by scanMu.
 	scanMu    sync.Mutex
@@ -543,6 +546,8 @@ type Fetched struct {
 	Email *models.EmailMessageData
 	uid   imap.UID
 	body  imap.BodyStructure
+	// bare is a message fetched without its structure; its body is parsed locally.
+	bare bool
 }
 
 // SearchSince returns the UIDs in the selected mailbox whose internal date is
@@ -831,14 +836,11 @@ func (c *Client) uidSearch(criteria *imap.SearchCriteria) ([]imap.UID, *errx.Mai
 
 // FetchEnvelopes reads envelope, flags, structure and the classification
 // headers for the given UIDs (at most ImapFetchBatchSize per call is the
-// caller's job) without bodies.
+// caller's job) without bodies. A message whose answer could not be read
+// before is asked for the next way down (see envelopeRung).
 func (c *Client) FetchEnvelopes(ctx context.Context, uids []imap.UID) ([]*Fetched, *errx.MailError) {
 	if len(uids) == 0 {
 		return nil, nil
-	}
-	var set imap.UIDSet
-	for _, uid := range uids {
-		set.AddNum(uid)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -848,13 +850,39 @@ func (c *Client) FetchEnvelopes(ctx context.Context, uids []imap.UID) ([]*Fetche
 	if err := c.resumeSyncLocked(); err != nil {
 		return nil, c.handleError(err)
 	}
+	view := c.envelopeView()
+	var collected []*Fetched
+	for _, req := range c.planEnvelopes(view, uids) {
+		fetched, err := c.fetchEnvelopeSet(ctx, req.uids, req.rung == envelopeFull)
+		if err != nil {
+			if unreadableReply(err) {
+				c.stepDownEnvelopes(view, req)
+			}
+			return nil, c.handleError(err)
+		}
+		collected = append(collected, fetched...)
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return collected, nil
+}
+
+// fetchEnvelopeSet runs one envelope FETCH, with or without the structure.
+func (c *Client) fetchEnvelopeSet(ctx context.Context, uids []imap.UID, structure bool) ([]*Fetched, error) {
+	var set imap.UIDSet
+	for _, uid := range uids {
+		set.AddNum(uid)
+	}
+	var bodyStructure *imap.FetchItemBodyStructure
+	if structure {
+		bodyStructure = &imap.FetchItemBodyStructure{Extended: true}
+	}
 	cmd := c.client.Fetch(set, &imap.FetchOptions{
-		UID:      true,
-		Envelope: true,
-		BodyStructure: &imap.FetchItemBodyStructure{
-			Extended: true,
-		},
-		Flags: true,
+		UID:           true,
+		Envelope:      true,
+		BodyStructure: bodyStructure,
+		Flags:         true,
 		// MODSEQ is a CONDSTORE fetch item (RFC 7162). Asking a server that
 		// never advertised it for one is a malformed fetch-att, and a strict
 		// parser answers BAD and syncs nothing: issue #405, where IONOS said
@@ -914,14 +942,14 @@ func (c *Client) FetchEnvelopes(ctx context.Context, uids []imap.UID) ([]*Fetche
 		}
 
 		email.Flags = append(email.Flags, headerFlags...)
-		collected = append(collected, &Fetched{Email: email, uid: euid, body: bodyStructure})
+		collected = append(collected, &Fetched{Email: email, uid: euid, body: bodyStructure, bare: !structure})
 		if ctx.Err() != nil {
 			break
 		}
 	}
 
 	if err := cmd.Close(); err != nil {
-		return nil, c.handleError(err)
+		return nil, err
 	}
 	return collected, nil
 }
@@ -942,7 +970,13 @@ func (c *Client) FetchBody(f *Fetched) *errx.MailError {
 	if err := c.resumeSyncLocked(); err != nil {
 		return errx.ErrMailServerUnreachable
 	}
-	plain, html, err := fetchTextParts(c.client, f.uid, f.body)
+	var plain, html string
+	var err error
+	if f.bare {
+		plain, html, err = fetchMIMEText(c.client, f.uid)
+	} else {
+		plain, html, err = fetchTextParts(c.client, f.uid, f.body)
+	}
 	if errors.Is(err, errBodyMessageGone) {
 		return errx.ErrMailResourceNotFound
 	}

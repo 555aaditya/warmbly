@@ -92,6 +92,10 @@ var reportPartTypes = map[string]bool{
 	"message/rfc822":          true,
 	"message/rfc822-headers":  true,
 	"text/rfc822-headers":     true,
+	// RFC 6533: the same parts when the bounce concerns internationalized mail.
+	"message/global-delivery-status": true,
+	"message/global":                 true,
+	"message/global-headers":         true,
 }
 
 // selectTextParts walks the body structure and returns the leaves that make up
