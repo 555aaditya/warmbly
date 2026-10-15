@@ -145,12 +145,21 @@ type AuthService interface {
 	SSOBegin(ctx context.Context, provider string) (*SSORedirect, *errx.Error)
 	// SSOCallbackComplete returns a single-use handoff code, not a session: the
 	// provider redirects a browser here, so the response must be a redirect.
-	SSOCallbackComplete(ctx context.Context, in SSOCallback) (string, *errx.Error)
+	SSOCallbackComplete(ctx context.Context, in SSOCallback) (*SSOCallbackResult, *errx.Error)
 	SSOExchange(ctx context.Context, code, binding string) (*models.LoginResult, *errx.Error)
 	// SSOLinkConfirm completes a federated sign-in that came back with
 	// link_required: the address already belongs to a password account, and
 	// the identity is attached only once that password is presented.
 	SSOLinkConfirm(ctx context.Context, data *SSOLinkData, ipaddr, userAgent string) (*models.LoginResult, *errx.Error)
+
+	// Re-authentication of a signed-in session through an identity linked to
+	// the account. Each succeeds only for (issuer, subject) already bound to
+	// userID, and only for the session that began it; the caller stamps it.
+	ReauthIdentities(ctx context.Context, userID uuid.UUID) (browser, native []string, err *errx.Error)
+	ReauthSSOBegin(ctx context.Context, provider string, userID, sessionID uuid.UUID) (*SSORedirect, *errx.Error)
+	ReauthSSOFinish(ctx context.Context, code, binding string, userID, sessionID uuid.UUID) *errx.Error
+	ReauthNativeBegin(ctx context.Context, sessionID uuid.UUID) (string, *errx.Error)
+	ReauthNativeVerify(ctx context.Context, provider, rawToken string, userID, sessionID uuid.UUID) *errx.Error
 }
 
 // OperatorNotifier is the instance-wide operator alert surface, injected

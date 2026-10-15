@@ -71,6 +71,10 @@ The email step shows native **Sign in with Apple** and **Continue with Google** 
 
 First-time social sign-ins auto-provision the user, workspace, and trial server-side; there is no OTP step because the provider identity is already verified.
 
+### Confirming a recent sign-in
+
+Connecting a grant's mailboxes and deleting the account need a recent sign-in, asked for by the **Confirm it's you** sheet (`Features/Auth/ReauthSheet.swift`). It reads `GET /v1/auth/reauth/methods` and offers only what the account can use: **Continue with Apple** or **Continue with Google** for a linked identity the server can verify (`native_providers`), then the password, and a two-factor code when 2FA is on. A provider confirmation calls `POST /v1/auth/reauth/native/begin` for a single-use nonce, runs the provider sheet with it, and sends the ID token to `POST /v1/auth/reauth/native`; password and code go to `POST /v1/auth/reauth`. An account with none of these is told to sign out and back in. Passkeys and browser-only providers confirm on the web, not in the app. If the methods call fails, the sheet falls back to the password and code form.
+
 ## Pointing at another host (staging, self-hosted)
 
 The server is an in-app runtime setting, not a build-time constant, so one binary serves everyone: the hosted SaaS, a self-hosted instance, or a local stack. Users switch hosts from the Server sheet on the sign-in screen; nobody rebuilds the app to reach their own infrastructure.
@@ -185,4 +189,4 @@ A fork that wants its own build changes `PRODUCT_BUNDLE_IDENTIFIER`, registers t
 
 ## What stays on the web
 
-By design, a few flows stay on the dashboard instead of being reimplemented on mobile: setting up a new admin grant, campaign sequence editing, and changing a plan or payment method (the app shows billing read-only). Mailbox connect works natively with app passwords, existing admin grants (connecting a grant's mailboxes asks for a recent sign-in through `POST /v1/auth/reauth`), inbox vendor keys, file and pasted imports (`POST /emails/imports/preview`, then `POST /emails/imports`) and Warmbly Cloud workspace mailboxes; per-mailbox Google or Microsoft sign-in is not offered. See the [README](README.md#known-limits) for the full list.
+By design, a few flows stay on the dashboard instead of being reimplemented on mobile: setting up a new admin grant, campaign sequence editing, and changing a plan or payment method (the app shows billing read-only). Mailbox connect works natively with app passwords, existing admin grants (connecting a grant's mailboxes asks for a recent sign-in, see [Confirming a recent sign-in](#confirming-a-recent-sign-in)), inbox vendor keys, file and pasted imports (`POST /emails/imports/preview`, then `POST /emails/imports`) and Warmbly Cloud workspace mailboxes; per-mailbox Google or Microsoft sign-in is not offered. See the [README](README.md#known-limits) for the full list.

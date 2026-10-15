@@ -158,7 +158,8 @@ final class GoogleSignInFlow: NSObject, ASWebAuthenticationPresentationContextPr
     private var activeSession: ASWebAuthenticationSession?
     private var presentationWindow: UIWindow?
 
-    func signIn(clientID: String) async throws -> String {
+    /// `nonce`, when set, is echoed in the ID token's `nonce` claim.
+    func signIn(clientID: String, nonce: String? = nil) async throws -> String {
         // Captured up front (we're on the main actor) so the presentation
         // callback never has to conjure a window of its own.
         guard let window = Self.keyWindow else { throw Failure.malformedResponse }
@@ -180,6 +181,9 @@ final class GoogleSignInFlow: NSObject, ASWebAuthenticationPresentationContextPr
             URLQueryItem(name: "code_challenge", value: challenge),
             URLQueryItem(name: "code_challenge_method", value: "S256"),
         ]
+        if let nonce {
+            authorize.queryItems?.append(URLQueryItem(name: "nonce", value: nonce))
+        }
 
         let callback = try await runWebAuth(url: authorize.url!, callbackScheme: scheme)
         guard

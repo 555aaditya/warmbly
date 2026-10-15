@@ -777,7 +777,7 @@ Auth: Session only (not available to API keys).
 
 Generates a TOTP secret and the `otpauth://` provisioning URI (returned once). The client renders the URI as a QR code; the remaining fields spell out the same parameters for manual entry.
 
-Requires a recent confirmation (`POST /auth/reauth`), like confirming enrollment below; without one it answers `403 reauth_required`. An account with neither a password nor 2FA cannot confirm, so it is accepted instead from a session signed in within the last five minutes, and an older session answers `400 reauth_no_factor`.
+Requires a recent confirmation (`POST /auth/reauth`), like confirming enrollment below; without one it answers `403 reauth_required`. An account with neither a password nor 2FA confirms with a passkey or its linked sign-in provider (`GET /auth/reauth/methods`). One with none of those is accepted from a session signed in within the last five minutes, and an older session answers `400 reauth_no_factor`.
 
 Auth: Session only (not available to API keys).
 

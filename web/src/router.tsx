@@ -234,6 +234,8 @@ const inviteRoute = standalone("invite", () => import("./app/invite/page"), "Joi
 const connectRoute = standalone("connect", () => import("./app/connect/page"), "Connect");
 // Where `warmbly auth login` sends the browser to approve its code.
 const cliRoute = standalone("cli", () => import("./app/cli/page"), "Authorize CLI");
+// Where a "confirm it is you" provider window reports back to the dashboard tab.
+const reauthCompleteRoute = standalone("reauth/complete", () => import("./app/reauth/complete/page"), "Confirm it is you");
 // Where Warmbly Cloud sends the Google/Microsoft popup back to on a linked instance.
 const cloudOAuthDoneRoute = standalone("cloud-oauth/done", () => import("./app/cloud-oauth/done/page"), "Mailbox connected");
 // Where a sign-in window without an opener hands its result to the waiting dashboard tab.
@@ -418,6 +420,7 @@ const routeTree = rootRoute.addChildren([
     cliRoute,
     cloudOAuthDoneRoute,
     oauthReturnRoute,
+    reauthCompleteRoute,
     setupRoute,
     oauthRoute.addChildren([oauthAuthorize]),
     appRoute.addChildren([

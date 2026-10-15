@@ -135,9 +135,16 @@ Some changes ask you to confirm it is you even though you are already signed in:
 - transferring a workspace to someone else
 - scheduling a workspace or account for deletion
 
-Enter your password or a code from your authenticator, whichever your account has. The confirmation lasts five minutes, so a run of related changes only asks once.
+The prompt offers only what your account can actually use:
 
-If you signed up with Google, Apple or your company's single sign-on, your account may have neither a password nor 2FA yet. There is nothing to confirm with in that case, so your sign-in is the confirmation: 2FA can be turned on within five minutes of signing in. If more time has passed, sign out, sign in again, and set it up straight away. From then on you confirm with your authenticator.
+- **a passkey**, if you have added one
+- **Continue with Google, Apple or your single sign-on**, if you sign in that way. A small window opens at your provider, and the account you pick there has to be the one linked to Warmbly. Allow pop-ups for the dashboard if your browser blocks the window
+- **your password**, if your account has one
+- **a code from your authenticator** or a recovery code, if two-factor authentication is on
+
+The confirmation lasts five minutes, so a run of related changes only asks once. In the iOS app the same prompt offers Continue with Apple and Continue with Google alongside your password and authenticator code.
+
+An account with none of these (for example one created through a sign-in provider this server no longer offers) is told so instead of being shown a field it cannot fill. Your sign-in is the confirmation in that case: sign in again and repeat the change within five minutes, then add a passkey or turn on 2FA so it does not happen again.
 
 This exists because the things on that list either hand out a credential that outlives the session that made it, reveal a secret, change who can get in, or cannot be undone from your side. Someone who got hold of a signed-in browser should not be able to do any of them without knowing something you know.
 

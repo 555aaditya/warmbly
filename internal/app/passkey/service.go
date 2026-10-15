@@ -36,6 +36,13 @@ type Service interface {
 	// handle, and mints a full session — single step, no email OTP.
 	FinishLogin(ctx context.Context, session string, credential []byte, ipaddr, userAgent string) (*models.Token, *errx.Error)
 
+	// BeginReauth asks a signed-in user for one of their own passkeys, keyed
+	// by the session it will re-authenticate. FinishReauth verifies it.
+	BeginReauth(ctx context.Context, userID, sessionID uuid.UUID) (*protocol.CredentialAssertion, *errx.Error)
+	FinishReauth(ctx context.Context, userID, sessionID uuid.UUID, credential []byte) *errx.Error
+	// HasCredentials reports whether the user has enrolled any passkey.
+	HasCredentials(ctx context.Context, userID uuid.UUID) (bool, *errx.Error)
+
 	// ListCredentials returns the user's passkeys for the manager UI.
 	ListCredentials(ctx context.Context, userID uuid.UUID) ([]*CredentialView, *errx.Error)
 	// RenameCredential updates a passkey's friendly name.
