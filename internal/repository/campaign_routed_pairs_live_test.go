@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -138,6 +140,114 @@ func TestLiveFindRoutedPairsLimitBelowOneReturnsOne(t *testing.T) {
 		pairs, _, _ := f.find(t, nil, limit)
 		if len(pairs) != 1 {
 			t.Fatalf("limit %d returned %d pairs, want 1", limit, len(pairs))
+		}
+	}
+}
+
+func TestLiveFindRoutedPairsPriorityMatchesLegacyOrdering(t *testing.T) {
+	_, pool := liveContactDB(t)
+	f := newRoutedPairsFixture(t, pool, 6)
+	ctx := t.Context()
+	target := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO sequences (id, campaign_id, organization_id, name, subject,
+		body_plain, body_html, wait_after, position, kind)
+		VALUES ($1, $2, $3, 'Follow-up', 'Hi', 'Hi', '', 0, 1, 'email')`, target, f.campaign, f.org); err != nil {
+		t.Fatal(err)
+	}
+	bc, err := json.Marshal(models.BranchConditions{Branches: []models.Branch{{BranchID: "next", TargetSequenceID: &target}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE sequences SET conditions=$2 WHERE id=$1`, f.step, bc); err != nil {
+		t.Fatal(err)
+	}
+	for i, id := range f.leads {
+		if _, err := pool.Exec(ctx, `UPDATE contacts SET
+			created_at=date_trunc('day', NOW()), first_name=$2, last_name=$3,
+			custom_fields=jsonb_build_object('Company Mobile', $4::text) WHERE id=$1`,
+			id, fmt.Sprint(i%2), fmt.Sprint(6-i), fmt.Sprint(i%3)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, i := range []int{0, 3} {
+		if _, err := pool.Exec(ctx, `INSERT INTO campaign_contact_progress (campaign_id, contact_id, sequence_id, sent_at)
+			VALUES ($1, $2, $3, NOW()-interval '2 hours')`, f.campaign, f.leads[i], f.step); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO campaign_contact_progress (campaign_id, contact_id, sequence_id, dispatched_at)
+		VALUES ($1, $2, $3, NOW())`, f.campaign, f.leads[1], target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO campaign_contact_progress (campaign_id, contact_id, sequence_id, failed_at, send_attempts)
+		VALUES ($1, $2, $3, NOW(), 1)`, f.campaign, f.leads[2], f.step); err != nil {
+		t.Fatal(err)
+	}
+	other := newRoutedPairsFixture(t, pool, 0)
+	if _, err := pool.Exec(ctx, `INSERT INTO campaign_contact_progress (campaign_id, contact_id, sequence_id, sent_at)
+		VALUES ($1, $2, $3, NOW())`, other.campaign, f.leads[5], other.step); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct{ by, field, sql string }{
+		{"created_at", "", "c.created_at"}, {"email", "", "c.email"},
+		{"name", "", "c.first_name, c.last_name"}, {"manual", "", "cl.position NULLS LAST, c.created_at"},
+		{"custom_field", "Company Mobile", "c.custom_fields->>$2"}, {"custom_field", "", "c.created_at"},
+	} {
+		for _, dir := range []string{"asc", "desc"} {
+			for _, priority := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/%s/priority=%t", tc.by, tc.field, dir, priority), func(t *testing.T) {
+					args := []any{f.campaign}
+					if tc.field != "" {
+						args = append(args, tc.field)
+					}
+					prefix := ""
+					if priority {
+						prefix = "(lp.sequence_id IS NULL) DESC, "
+					}
+					rows, err := pool.Query(ctx, `SELECT cl.contact_id FROM campaign_leads cl
+						JOIN contacts c ON c.id=cl.contact_id LEFT JOIN LATERAL (
+						SELECT sequence_id FROM campaign_contact_progress p WHERE p.campaign_id=$1
+						AND p.contact_id=cl.contact_id AND p.sent_at IS NOT NULL ORDER BY p.sent_at DESC LIMIT 1
+						) lp ON true WHERE cl.campaign_id=$1 ORDER BY `+prefix+tc.sql+" "+dir+", cl.contact_id", args...)
+					if err != nil {
+						t.Fatal(err)
+					}
+					var want []uuid.UUID
+					for rows.Next() {
+						var id uuid.UUID
+						if err := rows.Scan(&id); err != nil {
+							t.Fatal(err)
+						}
+						want = append(want, id)
+					}
+					rows.Close()
+					if err := rows.Err(); err != nil {
+						t.Fatal(err)
+					}
+					for _, excludeNew := range []bool{false, true} {
+						pairs, _, _, err := NewCampaignProgressRepository(pool).FindRoutedPairs(ctx, f.campaign, tc.by, dir, tc.field, priority, excludeNew, nil, 10)
+						if err != nil {
+							t.Fatal(err)
+						}
+						var got, filtered []uuid.UUID
+						for _, id := range want {
+							if !excludeNew || id == f.leads[0] || id == f.leads[3] {
+								filtered = append(filtered, id)
+							}
+						}
+						for _, pair := range pairs {
+							got = append(got, pair.ContactID)
+							if isNew := pair.ContactID != f.leads[0] && pair.ContactID != f.leads[3]; pair.IsNewLead != isNew {
+								t.Fatalf("new-lead state changed: %+v", pair)
+							}
+						}
+						if !reflect.DeepEqual(got, filtered) {
+							t.Fatalf("excludeNew=%t: got=%v legacy=%v", excludeNew, got, filtered)
+						}
+					}
+				})
+			}
 		}
 	}
 }
