@@ -185,12 +185,16 @@ func (r *emailAccountErrorRepository) CreateOnce(ctx context.Context, data *Crea
 		          resolved_at, resolved_by, created_at,operation,observation_source,received_at
 	`
 
+	resolveMethod := data.ResolveMethod
+	if resolveMethod == string(errx.MailErrorResolveMethodNone) {
+		resolveMethod = MapResolveMethod(errx.MailErrorResolveMethodNone)
+	}
 	params := []any{
 		data.EmailAccountID,
 		data.UserID,
 		data.ErrorCode,
 		data.Severity,
-		data.ResolveMethod,
+		resolveMethod,
 		data.Title,
 		data.Message,
 		data.UserMessage,
