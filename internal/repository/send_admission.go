@@ -316,7 +316,7 @@ func checkManualSendPlan(ctx context.Context, tx pgx.Tx, task, org uuid.UUID, n,
 	if allowance <= 0 {
 		return nil
 	}
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,273))`, org.String()); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,274))`, org.String()); err != nil {
 		return err
 	}
 	var used int
