@@ -39,10 +39,7 @@ func (r *taskRepository) AuthorizeWarmupDispatch(ctx context.Context, task, mail
 		return uuid.Nil, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,268))`, task.String()); err != nil {
-		return uuid.Nil, err
-	}
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,269))`, mailbox.String()); err != nil {
+	if err = lockSend(ctx, tx, task, mailbox); err != nil {
 		return uuid.Nil, err
 	}
 	nonce := uuid.New()
@@ -52,6 +49,10 @@ func (r *taskRepository) AuthorizeWarmupDispatch(ctx context.Context, task, mail
         FROM tasks t JOIN email_accounts ea ON ea.id=t.email_account_id JOIN fleet_nodes n ON n.id=ea.worker_id
         WHERE w.task_id=t.id AND t.id=$1 AND t.email_account_id=$2 AND ea.worker_id=$3 AND t.status='active'
 		AND w.lineage_version=1 AND w.dispatch_nonce IS NULL
+		AND `+testSenderSQL+` AND EXISTS(SELECT 1 FROM warmup_tokens wt
+		JOIN email_accounts ea ON ea.id=wt.recipient_account_id
+		JOIN warmup_pool_participants wpp ON wpp.email_account_id=ea.id
+		WHERE wt.task_id=t.id AND `+partnerEligibleSQL+`)
 		AND (w.warmup_charged_date IS NULL OR w.warmup_refunded_at IS NOT NULL) AND ea.status='active'
         AND NOT ea.send_recovery_hold AND (ea.send_cooldown_until IS NULL OR ea.send_cooldown_until<=NOW())
         AND n.role='worker' AND n.active AND n.last_seen_at>NOW()-$5::interval AND n.warmup_send_protocol>=1
@@ -80,11 +81,14 @@ func (r *taskRepository) InspectWarmupDispatch(ctx context.Context, task, mailbo
 	var assigned *uuid.UUID
 	var cancelled bool
 	err := r.db.QueryRow(ctx, `SELECT w.dispatch_nonce,w.dispatch_started_at,w.dispatch_result,w.dispatch_worker_id,t.status='cancelled'
-        FROM warmup_tasks w JOIN tasks t ON t.id=w.task_id WHERE t.id=$1 AND t.email_account_id=$2`, task, mailbox).Scan(&nonce, &started, &result, &assigned, &cancelled)
+        FROM tasks t LEFT JOIN warmup_tasks w ON w.task_id=t.id WHERE t.id=$1 AND t.email_account_id=$2 AND t.task_type='warmup'`, task, mailbox).Scan(&nonce, &started, &result, &assigned, &cancelled)
 	if err == nil && cancelled {
 		return &WarmupDispatchState{State: "denied"}, nil
 	}
-	if errors.Is(err, pgx.ErrNoRows) || err == nil && nonce == nil {
+	if err == nil && nonce == nil {
+		return &WarmupDispatchState{State: "denied"}, nil
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
 		return &WarmupDispatchState{State: "legacy"}, nil
 	}
 	if err != nil {
@@ -113,10 +117,7 @@ func (r *taskRepository) BeginWarmupDispatch(ctx context.Context, task, mailbox,
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,268))`, task.String()); err != nil {
-		return nil, err
-	}
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,269))`, mailbox.String()); err != nil {
+	if err = lockSend(ctx, tx, task, mailbox); err != nil {
 		return nil, err
 	}
 	tag, err := tx.Exec(ctx, `UPDATE warmup_tasks w SET dispatch_started_at=NOW()

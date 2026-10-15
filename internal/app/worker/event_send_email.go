@@ -45,11 +45,14 @@ func (w *WorkerService) HandleSendEmail(ctx context.Context, sendEmail models.Se
 					return errors.New("send envelope does not match durable authorization")
 				}
 			}
+			if hasPending {
+				return w.replayPendingSend(ctx, sendEmail, workerID, pending.(pendingSendResult))
+			}
 			if state.State == "denied" {
 				return nil
 			}
-			if hasPending {
-				return w.replayPendingSend(ctx, sendEmail, workerID, pending.(pendingSendResult))
+			if sendEmail.IsWarmup && state.State == "legacy" {
+				return nil
 			}
 			if state.State == "started" {
 				return nil
@@ -64,6 +67,9 @@ func (w *WorkerService) HandleSendEmail(ctx context.Context, sendEmail models.Se
 	}
 	if hasPending {
 		return w.replayPendingSend(ctx, sendEmail, workerID, pending.(pendingSendResult))
+	}
+	if sendEmail.IsWarmup && dispatch == nil {
+		return errors.New("warmup dispatch authority unavailable")
 	}
 	log.Info().
 		Str("task_id", sendEmail.TaskID.String()).

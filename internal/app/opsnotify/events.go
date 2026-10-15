@@ -12,19 +12,20 @@ package opsnotify
 // Event keys. Adding one means adding it to Catalog too, otherwise the admin
 // panel cannot subscribe a channel to it.
 const (
-	EventEnterpriseInquiry     = "enterprise_inquiry.created"
-	EventLimitRequest          = "limit_request.created"
-	EventWarmupAppeal          = "warmup_appeal.created"
-	EventOrganizationNew       = "organization.created"
-	EventUserRegistered        = "user.registered"
-	EventWorkerOffline         = "worker.offline"
-	EventWarmupLoading         = "warmup.worker_loading"
-	EventWarmupDispatchOverdue = "warmup.dispatch_overdue"
-	EventOrgRisk               = "org_risk.escalated"
-	EventSubscriptionIssue     = "subscription.payment_failed"
-	EventAdminSignIn           = "admin.signed_in"
-	EventAdminAccess           = "admin.access_changed"
-	EventTest                  = "test"
+	EventEnterpriseInquiry       = "enterprise_inquiry.created"
+	EventLimitRequest            = "limit_request.created"
+	EventWarmupAppeal            = "warmup_appeal.created"
+	EventOrganizationNew         = "organization.created"
+	EventUserRegistered          = "user.registered"
+	EventWorkerOffline           = "worker.offline"
+	EventWarmupLoading           = "warmup.worker_loading"
+	EventWarmupDispatchOverdue   = "warmup.dispatch_overdue"
+	EventWarmupDispatchAfterStop = "warmup.dispatch_after_stop"
+	EventOrgRisk                 = "org_risk.escalated"
+	EventSubscriptionIssue       = "subscription.payment_failed"
+	EventAdminSignIn             = "admin.signed_in"
+	EventAdminAccess             = "admin.access_changed"
+	EventTest                    = "test"
 )
 
 // Severity drives the colour a chat transport renders.
@@ -53,6 +54,12 @@ type EventDef struct {
 // Catalog is the inventory the admin panel renders. Declaration order is
 // display order.
 var Catalog = []EventDef{
+	{
+		Key: EventWarmupDispatchAfterStop, Group: "Operations",
+		Label:       "Warmup execution after stop",
+		Description: "Recent warmup execution started after a confirmed mailbox stop. Delayed results and provider notices do not trigger this alert.",
+		Severity:    SeverityUrgent, SelfHostRelevant: true,
+	},
 	{Key: EventWarmupLoading, Group: "Operations", Label: "Persistent warmup loading failures", Description: "Repeated recent worker-loading failures span at least an hour without a later confirmed warmup send. Grouped by worker or fleet and deduplicated for six hours.", Severity: SeverityUrgent, SelfHostRelevant: true},
 	{Key: EventWarmupDispatchOverdue, Group: "Operations", Label: "Warmup dispatch is overdue", Description: "Active mailboxes have warmup tasks over an hour past their intended schedule. Grouped by worker or fleet and deduplicated for six hours.", Severity: SeverityUrgent, SelfHostRelevant: true},
 	{

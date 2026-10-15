@@ -83,6 +83,31 @@ func (b *dispatchResultBus) Publish(context.Context, string, string, []byte) err
 
 type dispatchNativeTransport struct{ calls atomic.Int32 }
 
+func TestWarmupWorkerRejectsLegacyCommandsAndPreservesPendingResults(t *testing.T) {
+	for _, state := range []string{"legacy", "denied", "started"} {
+		t.Run(state, func(t *testing.T) {
+			authority := &dispatchAuthority{state: state}
+			bus := &dispatchResultBus{}
+			worker := &WorkerService{ID: uuid.NewString(), SyncContextRepository: authority, Bus: bus, Codec: codec.NewJSON()}
+			command := models.SendEmail{TaskID: uuid.New(), EmailID: uuid.New(), IsWarmup: true, To: []string{"recipient@example.test"}}
+			if err := worker.HandleSendEmail(t.Context(), command); err != nil || bus.events != 0 {
+				t.Fatalf("obsolete command was not retired before mailbox/provider access: %v", err)
+			}
+			worker.pendingSendResults.Store(command.TaskID, pendingSendResult{
+				result:    models.SendEmailResult{TaskID: command.TaskID, Success: true, MessageID: "accepted@example.test"},
+				mailboxID: command.EmailID, workerID: uuid.MustParse(worker.ID), recipients: command.To,
+			})
+			if err := worker.HandleSendEmail(t.Context(), command); err != nil || bus.events != 1 {
+				t.Fatalf("accepted result lost after participation revoked: %v", err)
+			}
+		})
+	}
+	worker := &WorkerService{}
+	if err := worker.HandleSendEmail(t.Context(), models.SendEmail{TaskID: uuid.New(), EmailID: uuid.New(), IsWarmup: true}); err == nil {
+		t.Fatal("missing authority permitted warmup execution")
+	}
+}
+
 func (r *dispatchNativeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	r.calls.Add(1)
 	return &http.Response{StatusCode: 429, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"code":429,"message":"fixture"}}`)), Request: req}, nil

@@ -106,6 +106,9 @@ func sendAuthority(ctx context.Context, tx pgx.Tx, task, mailbox, org, worker uu
 }
 
 func lockSend(ctx context.Context, tx pgx.Tx, task, mailbox uuid.UUID) error {
+	if err := lockWarmupParticipation(ctx, tx, task, mailbox); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,268))`, task.String()); err != nil {
 		return err
 	}
