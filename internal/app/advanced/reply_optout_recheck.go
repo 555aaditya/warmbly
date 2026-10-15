@@ -89,21 +89,20 @@ func (s *service) recheckReplyOptOut(ctx context.Context, entry *models.Suppress
 		return replyOptOutOtherOrigin, nil
 	}
 
-	// Contacts are deleted outright, so "was a contact" is read from what
-	// outlives one: a campaign the entry was attributed to, or mail we sent
-	// the address. Either makes it someone we were writing to, but only for
-	// mail that arrived after the contact existed or after we first wrote.
-	attributed := entry.CampaignID != nil
+	// A message is from a contact when it arrived after the contact existed
+	// or after we first wrote. Contacts are deleted outright, so only when
+	// none is left does the entry's campaign stand in for one.
 	var contactSince time.Time
-	isContact := false
-	if !attributed {
-		c, cerr := s.contactRepo.GetByEmailAndOrganization(ctx, entry.OrganizationID, sender)
-		if cerr != nil {
-			return "", cerr
-		}
-		if c != nil {
-			isContact, contactSince = true, c.CreatedAt
-		}
+	isContact, attributed := false, false
+	c, cerr := s.contactRepo.GetByEmailAndOrganization(ctx, entry.OrganizationID, sender)
+	if cerr != nil {
+		return "", cerr
+	}
+	switch {
+	case c != nil:
+		isContact, contactSince = true, c.CreatedAt
+	case entry.CampaignID != nil:
+		attributed = true
 	}
 	var firstWritten *time.Time
 	writtenLoaded := false

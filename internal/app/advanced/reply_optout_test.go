@@ -378,13 +378,18 @@ func TestRecheckLiftsOptOutsOnlyMailFromBeforeTheContactSupports(t *testing.T) {
 	}
 	historical, recent, mailed := entry("old@example.org"), entry("new@example.org"), entry("mailed@example.org")
 	mailedLater := entry("later@example.org")
-	repo.entries = []models.SuppressedRecipient{historical, recent, mailed, mailedLater}
+	// Attributed to a campaign, but the contact it names came later.
+	attributed := entry("attributed@example.org")
+	campaignID := uuid.New()
+	attributed.CampaignID = &campaignID
+	repo.entries = []models.SuppressedRecipient{historical, recent, mailed, mailedLater, attributed}
 	svc.uniboxRepo = optOutUnibox{byAddress: map[string][]repository.InboundMessage{
 		"old@example.org":    {msg("Old <old@example.org>", created.Add(-90*24*time.Hour))},
 		"new@example.org":    {msg("New <new@example.org>", created.Add(time.Hour))},
 		"mailed@example.org": {msg("Mailed <mailed@example.org>", created.Add(-90*24*time.Hour))},
 		// We first wrote to this address after its message arrived.
-		"later@example.org": {msg("Later <later@example.org>", created.Add(-90*24*time.Hour))},
+		"later@example.org":      {msg("Later <later@example.org>", created.Add(-90*24*time.Hour))},
+		"attributed@example.org": {msg("Attributed <attributed@example.org>", created.Add(-90*24*time.Hour))},
 	}, written: map[string]bool{"mailed@example.org": true}, writtenAt: map[string]time.Time{"later@example.org": created.Add(-30 * 24 * time.Hour)}}
 
 	if _, _, err := svc.RecheckReplyOptOuts(context.Background(), uuid.Nil, 100); err != nil {
@@ -394,8 +399,8 @@ func TestRecheckLiftsOptOutsOnlyMailFromBeforeTheContactSupports(t *testing.T) {
 	for _, id := range repo.deleted {
 		lifted[id] = true
 	}
-	if len(lifted) != 2 || !lifted[historical.ID] || !lifted[mailedLater.ID] {
-		t.Fatalf("lifted %v, want %v and %v", repo.deleted, historical.ID, mailedLater.ID)
+	if len(lifted) != 3 || !lifted[historical.ID] || !lifted[mailedLater.ID] || !lifted[attributed.ID] {
+		t.Fatalf("lifted %v, want %v, %v and %v", repo.deleted, historical.ID, mailedLater.ID, attributed.ID)
 	}
 	if repo.checked[recent.ID] != replyOptOutKept || repo.checked[mailed.ID] != replyOptOutKept {
 		t.Errorf("outcomes = %q / %q, want both kept", repo.checked[recent.ID], repo.checked[mailed.ID])
