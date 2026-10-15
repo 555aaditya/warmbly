@@ -2,6 +2,7 @@ package cloudlink
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -68,6 +69,141 @@ func (r *enrollmentFaultRepo) ListForOrg(ctx context.Context, _ uuid.UUID, _ *uu
 }
 
 type enrollmentEmails struct{ stubEmails }
+
+type independentRetryRepo struct {
+	*listedStandingRepo
+	order []uuid.UUID
+}
+
+func (r *independentRetryRepo) List(context.Context) ([]models.CloudLinkMailbox, error) {
+	rows := make([]models.CloudLinkMailbox, 0, len(r.order))
+	for _, id := range r.order {
+		rows = append(rows, *r.mailboxes[id])
+	}
+	return rows, nil
+}
+
+func (r *independentRetryRepo) BeginEnrollment(_ context.Context, account, remote, instance uuid.UUID) error {
+	m := r.mailboxes[account]
+	if m == nil || m.RemoteID != remote || m.InstanceID != instance || m.EnrollmentState == "pending_remove" {
+		return errors.New("enrollment identity changed")
+	}
+	m.EnrollmentState = "pending_enroll"
+	return nil
+}
+
+func (r *independentRetryRepo) Enroll(_ context.Context, account, _, _ uuid.UUID, _ bool) (*models.CloudLinkMailbox, error) {
+	m := r.mailboxes[account]
+	m.EnrollmentState = "active"
+	return m, nil
+}
+
+func (r *independentRetryRepo) BeginRemoval(_ context.Context, id uuid.UUID) error {
+	r.mailboxes[id].EnrollmentState = "pending_remove"
+	return nil
+}
+
+type independentRetryEmails struct {
+	repository.EmailRepository
+	accounts map[uuid.UUID]*models.Email
+}
+
+func (e independentRetryEmails) GetByID(_ context.Context, id uuid.UUID) (*models.Email, *errx.Error) {
+	return e.accounts[id], nil
+}
+
+func (e independentRetryEmails) GetAllActiveInScope(context.Context, repository.AccountScope) ([]models.Email, *errx.Error) {
+	var out []models.Email
+	for _, a := range e.accounts {
+		out = append(out, *a)
+	}
+	return out, nil
+}
+
+func (e independentRetryEmails) GetSMTPCredentials(context.Context, uuid.UUID) (*repository.SMTPCredentials, *errx.Error) {
+	return &repository.SMTPCredentials{}, nil
+}
+
+func TestStandingSyncContinuesAfterIndependentEnrollmentAndRemovalConflicts(t *testing.T) {
+	org, instance := uuid.New(), uuid.New()
+	conflict, removed, success, active := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	ids := []uuid.UUID{conflict, removed, success, active}
+	attempts := map[uuid.UUID]int{}
+	var standingReads int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Header.Get("Authorization") != "Bearer owning" {
+			t.Error("retry used a different link")
+		}
+		switch req.Method {
+		case http.MethodPost:
+			var body models.PoolLinkEnrollRequest
+			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			attempts[body.RemoteID]++
+			if body.RemoteID == conflict {
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(`{"code":"pool_link_mailbox_conflict","message":"The address exists in this Cloud workspace."}`))
+				return
+			}
+			if body.RemoteID != success {
+				t.Error("enrolled an unrelated or removing mailbox")
+			}
+			_ = json.NewEncoder(w).Encode(models.PoolLinkMailboxState{RemoteID: success, Health: &models.WarmupHealthInfo{State: "healthy"}})
+		case http.MethodDelete:
+			if req.URL.Path != "/v1/pool-link/instance/mailboxes/"+removed.String() {
+				t.Error("removed a different mailbox")
+			}
+			attempts[removed]++
+			w.WriteHeader(http.StatusConflict)
+		case http.MethodGet:
+			if req.URL.Path == "/v1/pool-link/instance/standing" {
+				standingReads++
+				var states []models.PoolLinkMailboxStanding
+				for _, id := range ids {
+					h := &models.WarmupHealthInfo{State: "healthy"}
+					if id == active {
+						h = &models.WarmupHealthInfo{State: "quarantined", Reason: "complaints"}
+					}
+					states = append(states, models.PoolLinkMailboxStanding{RemoteID: id, Health: h})
+				}
+				_ = json.NewEncoder(w).Encode(states)
+				return
+			}
+			_ = json.NewEncoder(w).Encode([]models.PoolLinkMailboxState{{RemoteID: success, Health: &models.WarmupHealthInfo{State: "healthy"}}})
+		}
+	}))
+	defer srv.Close()
+	l := &models.CloudLink{InstanceID: instance, OrganizationID: &org, CloudURL: srv.URL, Token: "owning"}
+	r := &independentRetryRepo{listedStandingRepo: &listedStandingRepo{workspaceLinkRepo: &workspaceLinkRepo{
+		links: map[uuid.UUID]*models.CloudLink{instance: l}, mailboxes: map[uuid.UUID]*models.CloudLinkMailbox{},
+	}}, order: ids}
+	emails := independentRetryEmails{accounts: map[uuid.UUID]*models.Email{}}
+	old := time.Now().Add(-time.Hour)
+	for _, id := range ids {
+		r.mailboxes[id] = &models.CloudLinkMailbox{EmailAccountID: id, RemoteID: id, InstanceID: instance, EnrollmentState: "pending_enroll", Standing: &models.WarmupHealthInfo{State: "healthy"}, StandingObservedAt: &old}
+		emails.accounts[id] = &models.Email{ID: id, OrganizationID: &org, Status: "active", Provider: string(models.InboxProviderSMTPIMAP)}
+	}
+	r.mailboxes[removed].EnrollmentState = "pending_remove"
+	r.mailboxes[active].EnrollmentState = "active"
+	s := &service{repo: r, emails: emails}
+	changes, xerr := s.SyncStanding(context.Background())
+	if xerr == nil || standingReads != 1 || attempts[conflict] != 1 || attempts[removed] != 1 || attempts[success] != 1 {
+		t.Fatalf("one refusal stopped independent retries or status reads: attempts=%v reads=%d error=%v", attempts, standingReads, xerr)
+	}
+	if len(changes) != 1 || changes[0].EmailAccountID != active || changes[0].Current != models.WarmupHealthQuarantined {
+		t.Fatalf("failed retry lost an independently persisted transition: %+v", changes)
+	}
+	if r.mailboxes[success].EnrollmentState != "active" || r.mailboxes[active].StandingObservedAt == nil || !r.mailboxes[active].StandingObservedAt.After(old) {
+		t.Fatal("healthy enrollment or existing standing did not recover")
+	}
+	for _, id := range []uuid.UUID{conflict, removed} {
+		m := r.mailboxes[id]
+		if m.EnrollmentState == "active" || m.EffectiveStanding(time.Now()).State != "blocked" {
+			t.Fatal("fresh standing admitted a mailbox with pending work")
+		}
+	}
+}
 
 func (e enrollmentEmails) GetSMTPCredentials(context.Context, uuid.UUID) (*repository.SMTPCredentials, *errx.Error) {
 	return &repository.SMTPCredentials{}, nil

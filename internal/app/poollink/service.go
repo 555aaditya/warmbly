@@ -37,6 +37,7 @@ var (
 	ErrInstanceRevoked   = errx.NewWithIdentifier(errx.Unauthorized, "pool_link_revoked", "This instance's link has been revoked. Reconnect from the instance settings.")
 	ErrMailboxLimit      = errx.NewWithIdentifier(errx.PaymentRequired, "pool_link_mailbox_limit", "This workspace has reached the free allowance of linked mailboxes. Upgrade to the pool plan for unlimited mailboxes.")
 	ErrMailboxNotFound   = errx.NewWithIdentifier(errx.NotFound, "pool_link_mailbox_not_found", "That mailbox is not enrolled.")
+	ErrMailboxConflict   = errx.NewWithIdentifier(errx.Conflict, "pool_link_mailbox_conflict", "This address already exists in the linked Cloud workspace, but is not enrolled for this local mailbox. Contact Warmbly support to check the association. Do not delete or re-enroll the mailbox.")
 	ErrWarmupNotEntitled = errx.NewWithIdentifier(errx.Forbidden, "pool_link_warmup_unavailable", "Warmup is not available on this workspace.")
 	ErrBadCredential     = errx.NewWithIdentifier(errx.BadRequest, "pool_link_credential", "A credential matching the provider is required.")
 	ErrBadRequest        = errx.NewWithIdentifier(errx.BadRequest, "pool_link_request", "Instance name is required.")
@@ -506,6 +507,9 @@ func (s *service) Enroll(ctx context.Context, inst *models.PoolLinkInstance, req
 		return nil, ErrBadCredential
 	}
 	if xerr != nil {
+		if errors.Is(xerr, errx.ErrEmailOnboardAlreadyExists) {
+			return nil, ErrMailboxConflict
+		}
 		return nil, xerr
 	}
 

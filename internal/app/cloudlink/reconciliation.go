@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
@@ -92,38 +93,40 @@ func (s *service) releaseEnrollment(ctx context.Context, l *models.CloudLink, m 
 }
 
 func (s *service) reconcileEnrollments(ctx context.Context, l *models.CloudLink, rows []models.CloudLinkMailbox) *errx.Error {
+	var lastError *errx.Error
 	for _, m := range rows {
-		switch m.EnrollmentState {
-		case "pending_remove":
-			if m.Managed {
-				acc, xerr := s.emails.GetByID(ctx, m.EmailAccountID)
-				if xerr != nil {
-					return xerr
-				}
-				if acc.OrganizationID == nil {
-					return errx.InternalError()
-				}
-				if xerr := s.removeManaged(ctx, acc.OrganizationID.String(), &m); xerr != nil {
-					return xerr
-				}
-			} else if xerr := s.releaseEnrollment(ctx, l, m); xerr != nil {
-				return xerr
-			}
-		case "pending_enroll":
-			acc, xerr := s.emails.GetByID(ctx, m.EmailAccountID)
-			if xerr != nil {
-				return xerr
-			}
-			if acc.OrganizationID == nil || acc.Status != "active" {
-				if xerr := s.releaseEnrollment(ctx, l, m); xerr != nil {
-					return xerr
-				}
-				continue
-			}
-			if _, xerr := s.Enroll(ctx, *acc.OrganizationID, m.EmailAccountID); xerr != nil {
-				return xerr
-			}
+		if xerr := s.reconcileEnrollment(ctx, l, m); xerr != nil {
+			log.Warn().Str("instance_id", l.InstanceID.String()).Str("account_id", m.EmailAccountID.String()).Str("code", xerr.Identifier).Msg("cloud link: mailbox reconciliation failed")
+			lastError = xerr
 		}
+	}
+	return lastError
+}
+
+func (s *service) reconcileEnrollment(ctx context.Context, l *models.CloudLink, m models.CloudLinkMailbox) *errx.Error {
+	switch m.EnrollmentState {
+	case "pending_remove":
+		if !m.Managed {
+			return s.releaseEnrollment(ctx, l, m)
+		}
+		acc, xerr := s.emails.GetByID(ctx, m.EmailAccountID)
+		if xerr != nil {
+			return xerr
+		}
+		if acc.OrganizationID == nil {
+			return errx.InternalError()
+		}
+		return s.removeManaged(ctx, acc.OrganizationID.String(), &m)
+	case "pending_enroll":
+		acc, xerr := s.emails.GetByID(ctx, m.EmailAccountID)
+		if xerr != nil {
+			return xerr
+		}
+		if acc.OrganizationID == nil || acc.Status != "active" {
+			return s.releaseEnrollment(ctx, l, m)
+		}
+		_, xerr = s.Enroll(ctx, *acc.OrganizationID, m.EmailAccountID)
+		return xerr
 	}
 	return nil
 }

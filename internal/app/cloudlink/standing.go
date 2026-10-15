@@ -92,11 +92,10 @@ func (s *service) SyncStanding(ctx context.Context) ([]models.CloudLinkStandingC
 	for i := range links {
 		l := &links[i]
 		part, xerr := s.reconcileLinkStanding(ctx, l, groups[l.InstanceID])
+		changes = append(changes, part...)
 		if xerr != nil {
 			lastError = xerr
-			continue
 		}
-		changes = append(changes, part...)
 	}
 	return changes, lastError
 }
@@ -112,18 +111,20 @@ func (s *service) reconcileLinkStanding(ctx context.Context, l *models.CloudLink
 	if xerr := s.reconcileManagedConsents(ctx, l); xerr != nil {
 		return nil, xerr
 	}
-	if xerr := s.reconcileEnrollments(ctx, l, enrolled); xerr != nil {
-		return nil, xerr
-	}
+	enrollmentError := s.reconcileEnrollments(ctx, l, enrolled)
 	rows, err := s.repo.List(ctx)
 	if err != nil {
 		return nil, errx.InternalError()
 	}
 	enrolled = mailboxGroups(rows)[l.InstanceID]
 	if len(enrolled) == 0 {
-		return nil, nil
+		return nil, enrollmentError
 	}
-	return s.syncStanding(ctx, l, enrolled)
+	changes, xerr := s.syncStanding(ctx, l, enrolled)
+	if xerr != nil {
+		return changes, xerr
+	}
+	return changes, enrollmentError
 }
 
 func (s *service) syncStanding(ctx context.Context, l *models.CloudLink, enrolled []models.CloudLinkMailbox) ([]models.CloudLinkStandingChange, *errx.Error) {

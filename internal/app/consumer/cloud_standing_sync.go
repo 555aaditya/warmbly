@@ -25,22 +25,25 @@ func (s *JobsService) StartCloudStandingSync(ctx context.Context, interval time.
 		return
 	}
 	jobrun.Loop(ctx, "cloud_standing_sync", interval, true, func(ctx context.Context) error {
-		runCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		defer cancel()
-		changes, xerr := syncer.SyncStanding(runCtx)
-		if xerr != nil {
-			// The last recorded standing stays in force; the failed run shows on the job panel.
-			return xerr
-		}
-		for _, c := range changes {
-			s.markRiskBandFromWarmupHealth(runCtx, c.EmailAccountID, &models.WarmupParticipantHealth{HealthState: c.Current})
-			if s.WarmupService != nil {
-				s.WarmupService.PublishHealthTransition(runCtx, c.EmailAccountID, c.Previous, c.Current, c.Reason)
-			}
-		}
-		if len(changes) > 0 {
-			log.Info().Int("transitions", len(changes)).Msg("cloud standing sync: warmup standing changed")
-		}
-		return nil
+		return s.syncCloudStanding(ctx, syncer)
 	})
+}
+
+func (s *JobsService) syncCloudStanding(ctx context.Context, syncer CloudStandingSyncer) error {
+	runCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	changes, xerr := syncer.SyncStanding(runCtx)
+	for _, c := range changes {
+		s.markRiskBandFromWarmupHealth(runCtx, c.EmailAccountID, &models.WarmupParticipantHealth{HealthState: c.Current})
+		if s.WarmupService != nil {
+			s.WarmupService.PublishHealthTransition(runCtx, c.EmailAccountID, c.Previous, c.Current, c.Reason)
+		}
+	}
+	if len(changes) > 0 {
+		log.Info().Int("transitions", len(changes)).Msg("cloud standing sync: warmup standing changed")
+	}
+	if xerr != nil {
+		return xerr
+	}
+	return nil
 }

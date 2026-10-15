@@ -23,7 +23,12 @@ func TestCloudURLAllowed(t *testing.T) {
 }
 
 func TestRemoteFailureShowsOnlyCloudVocabulary(t *testing.T) {
-	x := remoteFailure(409, "/codes", []byte(`{"code":"pool_link_denied","message":"The code was denied."}`))
+	message := "This address already exists in the linked Cloud workspace, but is not enrolled for this local mailbox. Contact Warmbly support to check the association. Do not delete or re-enroll the mailbox."
+	x := remoteFailure(409, "/instance/mailboxes", []byte(`{"code":"pool_link_mailbox_conflict","message":"`+message+`"}`))
+	if x.Identifier != "pool_link_mailbox_conflict" || x.Message != message {
+		t.Errorf("mailbox conflict lost its explanation: got %q %q", x.Identifier, x.Message)
+	}
+	x = remoteFailure(409, "/codes", []byte(`{"code":"pool_link_denied","message":"The code was denied."}`))
 	if x.Identifier != "pool_link_denied" || x.Message != "The code was denied." {
 		t.Errorf("pool-link refusal: got %q %q", x.Identifier, x.Message)
 	}
