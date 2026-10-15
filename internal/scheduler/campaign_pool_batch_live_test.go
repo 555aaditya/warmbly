@@ -63,9 +63,9 @@ func TestLiveCampaignPoolReadsStayBatched(t *testing.T) {
 			handle, pool := liveDB(t)
 			f := newLiveFixture(t, pool, "UTC")
 			if _, err := pool.Exec(t.Context(), `INSERT INTO email_accounts
-				(user_id, organization_id, email, name, signature_plain, signature_html,
+				(id, user_id, organization_id, email, name, signature_plain, signature_html,
 				 provider, status, campaign_limit, min_wait_time, timezone)
-				SELECT $1, $2, 'batch-' || gen_random_uuid() || '@test.local', 'Batch', '', '',
+				SELECT gen_random_uuid(), $1, $2, 'batch-' || gen_random_uuid() || '@test.local', 'Batch', '', '',
 				       'smtp_imap', 'active', 50, 0, 'UTC' FROM generate_series(1, $3::int)`,
 				f.user, f.org, size-1); err != nil {
 				t.Fatal(err)
