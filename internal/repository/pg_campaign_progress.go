@@ -1432,24 +1432,19 @@ func (r *campaignProgressRepository) FindRoutedPairs(ctx context.Context, campai
 		dir = "DESC"
 	}
 	orderPrefix := ""
-	newLeadJoin := ""
 	if prioritizeNewLeads {
-		// New leads (no last-sent step) first. The cheap last-step lookup is the
-		// only join phase one needs, and only for this ordering.
-		orderPrefix = "(lp.sequence_id IS NULL) DESC, "
-		newLeadJoin = `
-			LEFT JOIN LATERAL (
-				SELECT sequence_id FROM campaign_contact_progress p
-				WHERE p.campaign_id = $1 AND p.contact_id = cl.contact_id AND p.sent_at IS NOT NULL
-				ORDER BY p.sent_at DESC LIMIT 1
-			) lp ON true`
+		// Priority needs existence, not the last sent step or its per-lead sort.
+		orderPrefix = `NOT EXISTS (
+			SELECT 1 FROM campaign_contact_progress p
+			WHERE p.campaign_id = $1 AND p.contact_id = cl.contact_id AND p.sent_at IS NOT NULL
+		) DESC, `
 	}
 
 	// A unique, NOT NULL tiebreaker makes the order total and deterministic, so
 	// chunk boundaries land in the same place every pass and a tie (same
 	// created_at, say) resolves the same way rather than arbitrarily.
 	orderExpr := orderPrefix + contactOrder + ` ` + dir + `, cl.contact_id`
-	ordered, err := r.orderedCandidateIDs(ctx, orderExpr, newLeadJoin, p1args)
+	ordered, err := r.orderedCandidateIDs(ctx, orderExpr, p1args)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -1552,11 +1547,11 @@ func (r *campaignProgressRepository) FindRoutedPairs(ctx context.Context, campai
 // exclusion gates are applied when each lead is hydrated, so an excluded lead
 // never comes back from hydration and the surviving candidates keep the same
 // relative order the single-query scan gave them.
-func (r *campaignProgressRepository) orderedCandidateIDs(ctx context.Context, orderExpr, newLeadJoin string, args []any) ([]uuid.UUID, error) {
+func (r *campaignProgressRepository) orderedCandidateIDs(ctx context.Context, orderExpr string, args []any) ([]uuid.UUID, error) {
 	query := `
 		SELECT cl.contact_id
 		FROM campaign_leads cl
-		JOIN contacts c ON c.id = cl.contact_id` + newLeadJoin + `
+		JOIN contacts c ON c.id = cl.contact_id
 		WHERE cl.campaign_id = $1
 		ORDER BY ` + orderExpr
 	rows, err := resultDB(ctx, r.db).Query(ctx, query, args...)
