@@ -5,6 +5,8 @@ description: Subscribe to live Warmbly events over a WebSocket connection.
 
 Warmbly pushes dashboard events (campaign sends, opens, clicks, replies, inbox arrivals, audit entries, and more) over a WebSocket. The same socket that powers the live dashboard is available to developers. Events are ordered and carry a monotonic `seq`, and a reconnecting client can resume and replay what it missed.
 
+Realtime rate limits and the per-user connection cap apply to the user, not an individual workspace. If you own multiple workspace subscriptions, each limit uses the highest value across those subscriptions, not their sum. Enterprise custom limits override the corresponding plan limits for that subscription. Limits are cached for up to five minutes.
+
 The gateway has a machine-readable AsyncAPI 3.1 description you can generate clients or docs from:
 
 ```

@@ -14,6 +14,8 @@ defmodule Realtime.Subscription do
   alias Realtime.Redis
   alias Realtime.ErrorReporter
 
+  @repo Application.compile_env(:realtime, :subscription_repo, Realtime.Repo)
+
   import Ecto.Query
 
   # Cache TTL in seconds (5 minutes)
@@ -120,14 +122,12 @@ defmodule Realtime.Subscription do
     WHERE s.user_id = $1
     """
 
-    case Repo.query(query, [Ecto.UUID.dump!(user_id)]) do
-      {:ok, %{rows: [[ws_message, ws_join, ws_event, max_conn]]}} ->
-        %{
-          limit_ws_message_pm: ws_message || 120,
-          limit_ws_join_pm: ws_join || 30,
-          limit_ws_event_pm: ws_event || 60,
-          max_connections: max_conn || 10
-        }
+    case @repo.query(query, [Ecto.UUID.dump!(user_id)]) do
+      {:ok, %{rows: [first | rest]}} ->
+        # A user-level socket spans workspaces; keep the highest limit, not their sum.
+        Enum.reduce(rest, limits_from_row(first), fn row, limits ->
+          Map.merge(limits, limits_from_row(row), fn _key, a, b -> max(a, b) end)
+        end)
 
       {:ok, %{rows: []}} ->
         Logger.debug("No subscription found for user #{user_id}, using defaults")
@@ -142,6 +142,15 @@ defmodule Realtime.Subscription do
       Logger.error("Database error fetching limits: #{inspect(e)}")
       ErrorReporter.capture_exception(e, stacktrace: __STACKTRACE__)
       @default_limits
+  end
+
+  defp limits_from_row([ws_message, ws_join, ws_event, max_conn]) do
+    %{
+      limit_ws_message_pm: ws_message || @default_limits.limit_ws_message_pm,
+      limit_ws_join_pm: ws_join || @default_limits.limit_ws_join_pm,
+      limit_ws_event_pm: ws_event || @default_limits.limit_ws_event_pm,
+      max_connections: max_conn || @default_limits.max_connections
+    }
   end
 
   defp get_cached_limits(cache_key) do
