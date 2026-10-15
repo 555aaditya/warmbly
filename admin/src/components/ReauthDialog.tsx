@@ -7,7 +7,7 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { reauth } from "@/lib/api/client/auth";
+import { reauth, reauthMethods } from "@/lib/api/client/auth";
 import { APIError } from "@/lib/api/client";
 
 interface ReauthDetail {
@@ -22,6 +22,8 @@ export function ReauthDialog() {
     const [code, setCode] = useState("");
     const [error, setError] = useState("");
     const [busy, setBusy] = useState(false);
+    // Null while loading or when the lookup failed, which offers both fields.
+    const [methods, setMethods] = useState<{ password: boolean; totp: boolean } | null>(null);
 
     useEffect(() => {
         const handler = (e: Event) => {
@@ -31,7 +33,9 @@ export function ReauthDialog() {
             setBusy(false);
             const detail = (e as CustomEvent<ReauthDetail>).detail;
             detail.ack?.();
+            setMethods(null);
             setPending(detail);
+            reauthMethods().then(setMethods, () => setMethods(null));
         };
         window.addEventListener("reauth-required", handler);
         return () => window.removeEventListener("reauth-required", handler);
@@ -62,6 +66,17 @@ export function ReauthDialog() {
         }
     }
 
+    const showPassword = methods === null || methods.password;
+    const showCode = methods === null || methods.totp;
+    const description =
+        showPassword && showCode
+            ? "This change needs a fresh check. Enter your password, or a code from your authenticator."
+            : showPassword
+              ? "This change needs a fresh check. Enter your password."
+              : showCode
+                ? "This change needs a fresh check. Enter a code from your authenticator app."
+                : "This account has no password or authenticator code to confirm with here. Sign in to the admin panel again and repeat this within five minutes.";
+
     return (
         <DialogPrimitive.Root open={pending !== null} onOpenChange={(open) => !open && cancel()}>
             <DialogPrimitive.Portal>
@@ -82,37 +97,47 @@ export function ReauthDialog() {
                                     Confirm it is you
                                 </DialogPrimitive.Title>
                                 <DialogPrimitive.Description className="text-[13px] leading-relaxed text-muted-foreground">
-                                    This change needs a fresh check. Enter your password, or a code from your
-                                    authenticator.
+                                    {description}
                                 </DialogPrimitive.Description>
                             </div>
                         </div>
-                        <div className="grid gap-2.5">
-                            <Input
-                                type="password"
-                                value={password}
-                                onChange={(e) => setPassword(e.target.value)}
-                                placeholder="Password"
-                                autoComplete="current-password"
-                                autoFocus
-                            />
-                            <Input
-                                type="text"
-                                value={code}
-                                onChange={(e) => setCode(e.target.value)}
-                                placeholder="Two-factor or recovery code"
-                                autoComplete="one-time-code"
-                                data-ph-mask=""
-                            />
-                        </div>
+                        {showPassword || showCode ? (
+                            <div className="grid gap-2.5">
+                                {showPassword && (
+                                    <Input
+                                        type="password"
+                                        value={password}
+                                        onChange={(e) => setPassword(e.target.value)}
+                                        placeholder="Password"
+                                        aria-label="Password"
+                                        autoComplete="current-password"
+                                        autoFocus
+                                    />
+                                )}
+                                {showCode && (
+                                    <Input
+                                        type="text"
+                                        value={code}
+                                        onChange={(e) => setCode(e.target.value)}
+                                        placeholder="Two-factor or recovery code"
+                                        aria-label="Two-factor or recovery code"
+                                        autoComplete="one-time-code"
+                                        autoFocus={!showPassword}
+                                        data-ph-mask=""
+                                    />
+                                )}
+                            </div>
+                        ) : null}
                         {error && <p className="text-sm text-[var(--admin-danger)]">{error}</p>}
                         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                             <Button type="button" variant="outline" onClick={cancel}>
                                 Cancel
                             </Button>
-                            <Button type="submit" disabled={busy || (!password && !code)}>
-                                {busy ? "Checking…" : "Confirm"}
-                            </Button>
+                            {(showPassword || showCode) && (
+                                <Button type="submit" disabled={busy || (!password && !code)}>
+                                    {busy ? "Checking…" : "Confirm"}
+                                </Button>
+                            )}
                         </div>
                     </form>
                 </DialogPrimitive.Content>

@@ -19,5 +19,6 @@
 /cli  /  200
 /cloud-oauth/done  /  200
 /oauth-return  /  200
+/reauth/complete  /  200
 /slack/link  /  200
 /setup  /  200

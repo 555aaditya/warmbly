@@ -127,6 +127,44 @@ struct ReauthBody: Encodable {
     var code: String?
 }
 
+/// `GET /auth/reauth/methods`: the ways this account can confirm a recent sign-in.
+struct ReauthMethods: Decodable, Sendable {
+    var password: Bool
+    var totp: Bool
+    var passkey: Bool
+    /// Linked identities the server can verify a native ID token for ("apple", "google").
+    var nativeProviders: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case password, totp, passkey
+        case nativeProviders = "native_providers"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        password = try c.decodeIfPresent(Bool.self, forKey: .password) ?? false
+        totp = try c.decodeIfPresent(Bool.self, forKey: .totp) ?? false
+        passkey = try c.decodeIfPresent(Bool.self, forKey: .passkey) ?? false
+        nativeProviders = try c.decodeIfPresent([String].self, forKey: .nativeProviders) ?? []
+    }
+}
+
+/// `POST /auth/reauth/native/begin`: the single-use nonce the provider signs into its ID token.
+struct ReauthNativeBegin: Decodable, Sendable {
+    var nonce: String
+}
+
+/// `POST /auth/reauth/native` body.
+struct ReauthNativeBody: Encodable {
+    var provider: String
+    var idToken: String
+
+    enum CodingKeys: String, CodingKey {
+        case provider
+        case idToken = "id_token"
+    }
+}
+
 // MARK: - Inbox vendors (`/emails/vendors`)
 
 struct VendorField: Decodable, Sendable, Hashable {

@@ -83,6 +83,12 @@ var (
 	ErrSSOLinkExpired = NewWithIdentifier(BadRequest, "sso_link_expired",
 		"That sign-in request expired or had too many attempts. Start the sign-in again.")
 
+	// Re-authentication through a linked identity.
+	ErrReauthIdentityMismatch = NewWithIdentifier(BadRequest, "reauth_identity_mismatch",
+		"That account is not the one linked to this Warmbly account. Continue with the account you sign in with.")
+	ErrReauthExpired = NewWithIdentifier(BadRequest, "reauth_expired",
+		"That confirmation expired or was already used. Try again.")
+
 	ErrExternalCode     = New(BadRequest, "Invalid or expired code, please try again.")
 	ErrExternalEmail    = New(BadRequest, "Invalid or unverified email address.")
 	ErrExternalProvider = New(BadRequest, "This sign-in method isn't available on this server.")

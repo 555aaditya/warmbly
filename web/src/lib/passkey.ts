@@ -20,6 +20,7 @@ import passkeyLoginBegin from "@/lib/api/client/auth/passkey/loginBegin";
 import passkeyLoginFinish from "@/lib/api/client/auth/passkey/loginFinish";
 import passkeyRegisterBegin from "@/lib/api/client/auth/passkey/registerBegin";
 import passkeyRegisterFinish from "@/lib/api/client/auth/passkey/registerFinish";
+import { finishPasskeyReauth, type ReauthPasskeyChallenge } from "@/lib/api/client/auth/reauth/passkey";
 import type Token from "@/lib/api/models/auth/Token";
 import type Passkey from "@/lib/api/models/auth/Passkey";
 import type PasskeyLoginBegin from "@/lib/api/models/auth/PasskeyLoginBegin";
@@ -269,6 +270,30 @@ export async function finishPasskeyLogin(
 /** Run a discoverable passkey sign-in from scratch. */
 export async function passkeyLogin(opts?: { conditional?: boolean; signal?: AbortSignal }): Promise<Token> {
     return await finishPasskeyLogin(await beginPasskeyLogin(opts?.signal), opts);
+}
+
+/**
+ * Confirms the signed-in user with one of their own passkeys. Pass a challenge
+ * fetched before the click, for the same Safari reason as beginPasskeyLogin.
+ */
+export async function confirmWithPasskey(challenge: ReauthPasskeyChallenge): Promise<void> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+        const credential = await Promise.race([
+            startExplicitAuthentication(challenge.options.publicKey, 60000),
+            new Promise<never>((_, reject) => {
+                timeout = setTimeout(() => {
+                    cancelPasskeyCeremony();
+                    reject(new PasskeyCancelled("timeout"));
+                }, 60000);
+            }),
+        ]);
+        await finishPasskeyReauth(credential);
+    } catch (e) {
+        throw mapError(e, "authentication");
+    } finally {
+        if (timeout) clearTimeout(timeout);
+    }
 }
 
 /** Enroll a new passkey for the signed-in user. */

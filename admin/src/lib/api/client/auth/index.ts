@@ -73,6 +73,16 @@ export function logout(): Promise<void> {
     });
 }
 
+// Which of password and authenticator code this account can confirm with.
+export function reauthMethods(): Promise<{ password: boolean; totp: boolean }> {
+    return Request<{ password: boolean; totp: boolean }>({
+        method: "GET",
+        url: "/v1/auth/reauth/methods",
+        authorization: true,
+        skipReauthPrompt: true,
+    });
+}
+
 // Re-proves the operator behind the session; the changes gated on a recent
 // confirmation (join tokens, admin grants, workspace archives) wait for it.
 export function reauth(input: { password?: string; code?: string }): Promise<{ valid_for_seconds: number }> {

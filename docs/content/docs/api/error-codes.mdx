@@ -547,13 +547,15 @@ Signup and invitation refusals carry their own `code`, so a client can branch on
 |--------|--------|---------|
 | `reauth_required` | 403 | The action needs a proof of identity newer than the session. Confirm with `POST /v1/auth/reauth`, then retry |
 | `reauth_limited` | 400 | Too many failed confirmations for this account within the hour. Wait, or sign out and sign in again: a sign-in counts as a confirmation for five minutes |
-| `reauth_no_factor` | 400 | The account has neither a password nor two-factor authentication, so there is nothing to confirm with. A sign-in counts as a confirmation for five minutes, so sign out and sign in again, then repeat the action; turning on two-factor authentication gives the account a way to confirm without signing in again |
+| `reauth_no_factor` | 400 | `POST /auth/reauth` was sent a password or code for an account that has neither. Confirm with a passkey or the linked sign-in provider listed by `GET /auth/reauth/methods`; an account with none of those signs out and in again (a sign-in counts as a confirmation for five minutes) |
+| `reauth_identity_mismatch` | 400 | The Google, Apple or single sign-on account verified during a confirmation is not the one linked to this Warmbly account. Continue with the account you sign in with |
+| `reauth_expired` | 400 | The confirmation's code or nonce expired or was already used. Start the confirmation again |
 | `admin_mfa_required` | 403 | An admin route was reached by a session that did not present a second factor. Turn on 2FA or add a passkey, then sign in again |
 | `passkey_user_verification_required` | 400 | A passkey sign-in came from an authenticator that did not verify the user with a PIN or biometric. Set a PIN on the security key, or sign in another way |
 | `two_fa_invalid_code` | 400 | The authenticator or recovery code did not match. Wait for a fresh code and try again; the login challenge allows five attempts per pending session |
 | `password_changed_sign_in_again` | 409 | `POST /auth/me/password` stored the new password but could not issue the calling device a new session. Every earlier token is invalid; discard them and sign in again with the new password |
 
-`reauth_required` guards the changes that hand out a durable credential, reveal a signing secret, change who can get in, cannot be undone, or reach a whole domain's mail. The full list is under [actions that need a recent confirmation](/api/endpoints/#actions-that-need-a-recent-confirmation). Confirm with a password or a current two-factor code:
+`reauth_required` guards the changes that hand out a durable credential, reveal a signing secret, change who can get in, cannot be undone, or reach a whole domain's mail. The full list is under [actions that need a recent confirmation](/api/endpoints/#actions-that-need-a-recent-confirmation). List the ways the account can confirm with `GET /v1/auth/reauth/methods` (a passkey and a linked Google, Apple or single sign-on identity are among them; see [endpoints](/api/endpoints/#actions-that-need-a-recent-confirmation)). With a password or a current two-factor code:
 
 ```bash
 curl -X POST "https://api.warmbly.com/v1/auth/reauth" \
@@ -568,7 +570,7 @@ curl -X POST "https://api.warmbly.com/v1/auth/reauth" \
 
 The confirmation is recorded on the session and lasts for the window returned, so a run of related changes only asks once.
 
-Turning on two-factor authentication (`POST /auth/2fa/enroll/start` and `/confirm`) is guarded too, since a confirmed authenticator is itself a way to confirm. An account with a password confirms as above. An account with neither a password nor 2FA (created through Google, Apple or single sign-on) has nothing to confirm with, so like every confirmed action it is allowed for five minutes after a sign-in; an older session gets `reauth_no_factor` and the fix is to sign out and sign in again. API keys and OAuth tokens have no session to confirm, so these routes are reachable only with a signed-in session; that is deliberate for key creation, which otherwise lets one leaked key mint more.
+Turning on two-factor authentication (`POST /auth/2fa/enroll/start` and `/confirm`) is guarded too, since a confirmed authenticator is itself a way to confirm. An account with a password confirms as above. An account with neither a password nor 2FA (created through Google, Apple or single sign-on) confirms with its passkey or linked identity. One with none of those is allowed for five minutes after a sign-in like every confirmed action; an older session gets `reauth_no_factor` and the fix is to sign out and sign in again. API keys and OAuth tokens have no session to confirm, so these routes are reachable only with a signed-in session; that is deliberate for key creation, which otherwise lets one leaked key mint more.
 
 ```json
 {

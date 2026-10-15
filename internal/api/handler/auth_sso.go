@@ -102,7 +102,16 @@ func (h *Handler) ssoCallback(c *gin.Context, in auth.SSOCallback) {
 	// A provider-side refusal arrives as error=, not as a failed exchange.
 	// A closed consent screen is not a failure, so it returns quietly.
 	if e := formOrQuery(c, "error"); e != "" {
-		if e == "access_denied" || e == "user_cancelled_authorize" {
+		cancelled := e == "access_denied" || e == "user_cancelled_authorize"
+		if auth.IsReauthState(in.State) {
+			if cancelled {
+				c.Redirect(http.StatusFound, base+"/reauth/complete?cancelled=1")
+				return
+			}
+			c.Redirect(http.StatusFound, base+"/reauth/complete?error="+url.QueryEscape(e))
+			return
+		}
+		if cancelled {
 			c.Redirect(http.StatusFound, base+"/auth/login")
 			return
 		}
@@ -113,13 +122,23 @@ func (h *Handler) ssoCallback(c *gin.Context, in auth.SSOCallback) {
 	in.IPAddress = c.ClientIP()
 	in.UserAgent = c.Request.UserAgent()
 
-	handoff, err := h.AuthService.SSOCallbackComplete(c.Request.Context(), in)
+	res, err := h.AuthService.SSOCallbackComplete(c.Request.Context(), in)
+	// A re-authentication runs in a window the dashboard opened, so it lands
+	// on the page that reports back to that window, never on sign-in.
+	if res != nil && res.Reauth {
+		if err != nil {
+			c.Redirect(http.StatusFound, base+"/reauth/complete?error="+url.QueryEscape(err.Message))
+			return
+		}
+		c.Redirect(http.StatusFound, base+"/reauth/complete?code="+url.QueryEscape(res.Code))
+		return
+	}
 	if err != nil {
 		c.Redirect(http.StatusFound, base+"/auth/login?sso_error="+url.QueryEscape(err.Message))
 		return
 	}
 
-	c.Redirect(http.StatusFound, base+"/auth/sso?code="+url.QueryEscape(handoff))
+	c.Redirect(http.StatusFound, base+"/auth/sso?code="+url.QueryEscape(res.Code))
 }
 
 // formOrQuery reads a parameter from either the posted form or the query
