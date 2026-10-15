@@ -154,6 +154,14 @@ An exclusion is honoured even when it leaves nothing: if every available partner
 
 A struggling host is downweighted, never excluded: a sender that stops mailing a host entirely can never discover that it recovered there. A host is only judged once at least five of your warmup emails have verifiably arrived there in the window, so one bad delivery out of two is treated as noise rather than a pattern. You can see the numbers this reads under **Deliverability > Warmup inbox placement**, by expanding a provider to its hosts.
 
+### Mailboxes the pool cannot reach
+
+A warmup email only counts once the recipient's own sync finds it. Every partner is also weighted by how much of the pool's warmup mail to it arrived over the last seven days, so a partner whose mail half arrives is drawn about half as often.
+
+A partner that received at least `5` warmup emails from at least `2` different workspaces in that week, and verifiably received none of them, is not offered to anyone. That is a mailbox whose domain has no working mail server, an address that no longer exists, or a server that refuses the mail, and every send to it would only come back to you as a bounce. Emails sent in the last 6 hours are not counted yet, so a slow sync is never mistaken for a dead inbox, and losses from a single workspace never take a partner out, so one sender's problem is not blamed on the recipient.
+
+Nothing is permanent about it. One warmup email that arrives brings the mailbox straight back, and as the week's evidence ages out it is offered again on its own. If it is your mailbox, the [Advisor](/guides/advisor/) says so and what to check, starting with the domain's MX records.
+
 ### Seeing the diversity you are getting
 
 The drawer shows confirmed partners/domains/workspaces and verified arrivals over seven days, locally or through Cloud. Pending and failed attempts do not count as confirmed sending. Narrow coverage is a diagnostic limitation, not a reputation verdict.
@@ -240,7 +248,7 @@ Configured diagnostic turns continue disclosed scenarios, not organic relationsh
 
 Replies thread properly with a real `Re:` subject and `In-Reply-To` header, and candidates must be between 45 minutes and seven days old, so nothing is answered instantly or revived indefinitely.
 
-Receiving warmup mail can also prompt an answer directly. When a verified warmup email arrives, the recipient sometimes points its next scheduled send back at whoever wrote, 25 minutes to 5 hours later and inside its own warmup hours. That is a re-pointing, not extra work: each mailbox has one warmup send queued at a time, so a reply-back moves that send earlier and aims it, and can never push a send the mailbox had already planned sooner. The chance is the recipient's own reply rate, drawn once when the reply is scheduled rather than again when it sends, and it stops before a thread reaches its message cap so replies cannot answer replies indefinitely.
+Receiving warmup mail can also prompt an answer directly. When a verified warmup email arrives, the recipient sometimes points its next scheduled send back at whoever wrote, 25 minutes to 5 hours later and inside its own warmup hours. That is a re-pointing, not extra work: each mailbox has one warmup send queued at a time, so a reply-back moves that send earlier and aims it, and can never push a send the mailbox had already planned sooner. The chance is the recipient's own reply rate, drawn once when the reply is scheduled rather than again when it sends, and it stops before a thread reaches its message cap so replies cannot answer replies indefinitely. A reply crosses the free and paid tiers like the mail it answers: a paid mailbox answers a free partner that wrote to it, and a free mailbox answers a paid one while it is healthy and its workspace is in good standing.
 
 Scheduling respects windows, provider feedback, shared limits and spacing. Jitter distributes load, not human identities. Receiving participation allows probabilistic spam rescue, reads, importance and stars or flags on verified warmup messages. Filing and selected spam rescues are requested immediately; reads, importance and stars are durably scheduled after a randomized dwell. Current receiving permission and worker assignment are checked again at execution time. These actions are automation, not human feedback or a guaranteed reputation improvement.
 

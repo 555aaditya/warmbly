@@ -167,3 +167,66 @@ func TestLiveWarmupPartnerWeekCacheRefreshesDetachedAndServesStale(t *testing.T)
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// lost records n handed-off warmup sends from sender to recipient, made age
+// ago, that the recipient's sync never verified.
+func (f *partnerOrgFixture) lost(t *testing.T, sender, recipient uuid.UUID, n int, age time.Duration) {
+	t.Helper()
+	for range n {
+		taskID := uuid.New()
+		f.exec(`INSERT INTO tasks (id, task_type, email_account_id, status, message_id)
+		        VALUES ($1, 'warmup', $2, 'completed', '')`, taskID, sender)
+		f.exec(`INSERT INTO warmup_tokens (token, task_id, sender_account_id, recipient_account_id, sent_message_id, created_at)
+		        VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)`,
+			taskID, sender, recipient, "<"+taskID.String()+"@test.local>", time.Now().Add(-age))
+	}
+}
+
+// A recipient that verified none of the pool's mail from two workspaces leaves
+// the set on both read paths, and one verified arrival brings it back. Losses
+// from a single workspace, or too young to judge, take nobody out.
+func TestLiveWarmupPartnerCandidatesDropAnUnreachableRecipient(t *testing.T) {
+	f := newPartnerOrgFixture(t)
+	ctx := context.Background()
+	exact := &warmupRepository{db: f.pool}
+	t.Cleanup(func() {
+		f.exec(`DELETE FROM warmup_tokens WHERE recipient_account_id = $1`, f.sibling)
+		f.exec(`DELETE FROM tasks WHERE email_account_id IN ($1, $2)`, f.sender, f.outside)
+	})
+	offered := func(stage string, want bool) models.WarmupPartnerCandidate {
+		t.Helper()
+		for _, repo := range []*warmupRepository{exact, {db: f.pool, partnerWeeks7d: newPartnerWeekCache(0)}} {
+			cands, err := repo.WarmupPartnerCandidates(ctx, "premium", f.sender)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c, ok := candidateByID(cands, f.sibling)
+			if ok != want {
+				t.Fatalf("%s: recipient offered = %v, want %v (cached=%v)", stage, ok, want, repo.partnerWeeks7d != nil)
+			}
+			if ok {
+				return c
+			}
+		}
+		return models.WarmupPartnerCandidate{}
+	}
+	grace := time.Duration(config.WarmupRecipientArrivalGraceHours) * time.Hour
+
+	sample := config.WarmupRecipientUnreachableMinDelivered
+	f.lost(t, f.sender, f.sibling, sample, grace+time.Hour)
+	if c := offered("losses from one workspace", true); c.ArrivalRate() >= 1 {
+		t.Fatalf("one workspace's losses still weigh the draw: %+v", c)
+	}
+	f.lost(t, f.outside, f.sibling, 3, grace/2)
+	offered("a second workspace's losses inside the grace", true)
+	f.lost(t, f.outside, f.sibling, 1, grace+time.Hour)
+	offered("losses from two workspaces", false)
+
+	f.exec(`UPDATE warmup_tokens SET consumed_at = NOW()
+	        WHERE token = (SELECT token FROM warmup_tokens WHERE recipient_account_id = $1 AND sender_account_id = $2 ORDER BY created_at DESC LIMIT 1)`,
+		f.sibling, f.outside)
+	c := offered("one verified arrival inside the grace", true)
+	if c.Delivered7d != sample+2 || c.Arrived7d != 1 {
+		t.Fatalf("delivered/arrived = %d/%d, want %d/1", c.Delivered7d, c.Arrived7d, sample+2)
+	}
+}

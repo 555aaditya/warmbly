@@ -61,7 +61,8 @@ func (r *advisorRepository) loadMailboxes(ctx context.Context, orgID uuid.UUID) 
 			COALESCE(p.blocked_until > NOW(), false) AS pool_blocked,
 			COALESCE(err.n, 0),
 			COALESCE(camp.active, false),
-			ea.send_lifecycle
+			ea.send_lifecycle,
+			inb.delivered, inb.arrived, inb.lost_by
 		FROM email_accounts ea
 		LEFT JOIN LATERAL (
 			SELECT
@@ -101,6 +102,10 @@ func (r *advisorRepository) loadMailboxes(ctx context.Context, orgID uuid.UUID) 
 			  AND eae.resolved_at IS NULL
 			  AND eae.created_at > NOW() - INTERVAL '7 days'
 		) err ON true
+		LEFT JOIN LATERAL (
+			SELECT ` + warmupInboundColumns + ` ` + warmupInboundSQL + `
+			  AND wt.recipient_account_id = ea.id
+		) inb ON true
 		LEFT JOIN LATERAL (
 			-- A mailbox counts as "in an active campaign" when a running
 			-- campaign either lists it explicitly or matches one of its tags.
@@ -146,6 +151,7 @@ func (r *advisorRepository) loadMailboxes(ctx context.Context, orgID uuid.UUID) 
 			&m.PoolHealth, &m.PoolHealthScore, &m.PoolHealthReason, &m.PoolBlocked,
 			&m.UnresolvedErrs, &m.InActiveCampaign,
 			&m.SendLifecycle,
+			&m.WarmupDelivered7d, &m.WarmupArrived7d, &m.WarmupLostBy7d,
 		); err != nil {
 			return nil, err
 		}

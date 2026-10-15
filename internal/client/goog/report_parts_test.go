@@ -59,6 +59,29 @@ func TestExtractBodyKeepsDeliveryStatusParts(t *testing.T) {
 	}
 }
 
+// RFC 6533 names the same parts message/global-*, for internationalized mail.
+func TestExtractBodyKeepsGlobalDeliveryStatusParts(t *testing.T) {
+	parts := []*gmail.MessagePart{{
+		MimeType: "multipart/report",
+		Parts: []*gmail.MessagePart{
+			{MimeType: "text/plain", Body: &gmail.MessagePartBody{Data: b64("Delivery has failed.")}},
+			{MimeType: "message/global-delivery-status", Body: &gmail.MessagePartBody{
+				Data: b64("Final-Recipient: utf-8; gone@acme.com\nAction: failed\nStatus: 5.1.1\n"),
+			}},
+			{MimeType: "message/global-headers", Body: &gmail.MessagePartBody{
+				Data: b64("Message-ID: <the-send@ourdomain.com>\n"),
+			}},
+		},
+	}}
+
+	plain, _ := extractBody(parts)
+	for _, want := range []string{"Status: 5.1.1", "gone@acme.com", "the-send@ourdomain.com"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("body is missing %q:\n%s", want, plain)
+		}
+	}
+}
+
 // Ordinary mail must be unaffected: an alternative body still yields exactly
 // its two parts, with no report text spliced in.
 func TestExtractBodyOrdinaryMailIsUnchanged(t *testing.T) {

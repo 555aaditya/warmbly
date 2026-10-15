@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/config"
 )
 
 // WarmupPoolType separates free and paid warmup participation.
@@ -249,6 +250,11 @@ type WarmupPartnerCandidate struct {
 	Received7d int
 	// Junked7d is how many of those arrivals its own filter put in spam.
 	Junked7d int
+	// Delivered7d is the pool's warmup mail handed off to this candidate over
+	// seven days (past the arrival grace), and Arrived7d how much of it the
+	// candidate's own sync verified.
+	Delivered7d int
+	Arrived7d   int
 }
 
 // Borrowed reports whether the candidate was drawn from the tier the sender's
@@ -278,6 +284,27 @@ func (c WarmupPartnerCandidate) FilterJunkRate() float64 {
 		return 0
 	}
 	return min(1, float64(c.Junked7d)/float64(c.Received7d))
+}
+
+// WarmupRecipientUnreachable reports a recipient whose sync verified none of a
+// sample of handed-off warmup mail from more than one sender workspace, so
+// neither one broken sender nor one slow sync can take it out of the pool.
+func WarmupRecipientUnreachable(delivered, arrived, lostBy int) bool {
+	return arrived == 0 && delivered >= config.WarmupRecipientUnreachableMinDelivered &&
+		lostBy >= config.WarmupRecipientUnreachableMinSenderOrgs
+}
+
+// warmupArrivalFloor keeps a lossy recipient drawable, so it can show it recovered.
+const warmupArrivalFloor = 0.05
+
+// ArrivalRate is the share of warmup mail handed off to this candidate that
+// verifiably arrived (warmupArrivalFloor..1), which is the chance a send to it
+// does any good. 1 below the sample.
+func (c WarmupPartnerCandidate) ArrivalRate() float64 {
+	if c.Delivered7d < config.WarmupRecipientUnreachableMinDelivered {
+		return 1
+	}
+	return max(warmupArrivalFloor, min(1, float64(c.Arrived7d)/float64(c.Delivered7d)))
 }
 
 type WarmupHealthState string

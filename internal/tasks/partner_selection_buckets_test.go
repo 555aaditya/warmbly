@@ -424,3 +424,24 @@ func TestFilterPenaltyDrawsAJunkingRecipientLess(t *testing.T) {
 		t.Fatalf("picks = strict %d, fine %d; want the junking host drawn far less but still drawn", picks[strict], picks[fine])
 	}
 }
+
+// A recipient half of whose mail never arrives is drawn about half as often as
+// one that receives everything; one with no reading is neutral.
+func TestArrivalWeightDrawsALossyRecipientLess(t *testing.T) {
+	lossy, fine := uuid.New(), uuid.New()
+	sig := partnerSignals{arrival: map[uuid.UUID]float64{lossy: 0.5}}
+	if got := sig.arrivalWeight(lossy); got != 0.5 {
+		t.Fatalf("lossy weight = %v, want 0.5", got)
+	}
+	if got := sig.arrivalWeight(fine); got != 1 {
+		t.Fatalf("unknown recipient weight = %v, want 1", got)
+	}
+	picks := map[uuid.UUID]int{}
+	for range 3000 {
+		picks[pickWeightedPartner([]uuid.UUID{lossy, fine}, sig)]++
+	}
+	// Weight 1 against 2: a third of the draws, give or take.
+	if picks[lossy] < 800 || picks[lossy] > 1200 {
+		t.Fatalf("lossy recipient drawn %d/3000, want about 1000", picks[lossy])
+	}
+}

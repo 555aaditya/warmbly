@@ -537,6 +537,7 @@ func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (
 	ruleWeight := make(map[uuid.UUID]float64, len(candidates))
 	starvation := make(map[uuid.UUID]float64, len(candidates))
 	filterJunk := make(map[uuid.UUID]float64)
+	arrival := make(map[uuid.UUID]float64)
 	poolOf := make(map[uuid.UUID]string, len(candidates))
 	excluded := 0
 	for _, c := range candidates {
@@ -555,6 +556,9 @@ func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (
 		starvation[c.ID] = c.Starvation()
 		if junk := c.FilterJunkRate(); junk > 0 {
 			filterJunk[c.ID] = junk
+		}
+		if rate := c.ArrivalRate(); rate < 1 {
+			arrival[c.ID] = rate
 		}
 		poolOf[c.ID] = c.PoolType
 		eligible = append(eligible, c)
@@ -643,6 +647,7 @@ func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (
 		ruleWeight:      ruleWeight,
 		starvation:      starvation,
 		filterJunk:      filterJunk,
+		arrival:         arrival,
 	}
 
 	// A pick that fails the gate is dropped and the draw repeats; an emptied
@@ -741,6 +746,18 @@ type partnerSignals struct {
 	// filterJunk is how much warmup mail a small-host candidate's own filter
 	// junks (0..1); absent when nothing is known or the host is a major one.
 	filterJunk map[uuid.UUID]float64
+	// arrival is the share of the pool's mail to a candidate that verifiably
+	// arrived; absent below the sample or when nothing was lost.
+	arrival map[uuid.UUID]float64
+}
+
+// arrivalWeight draws a recipient in proportion to the chance the mail
+// arrives. 1.0 when nothing is known.
+func (sig partnerSignals) arrivalWeight(partnerID uuid.UUID) float64 {
+	if rate, ok := sig.arrival[partnerID]; ok {
+		return rate
+	}
+	return 1.0
 }
 
 // filterPenalty draws a recipient whose own filter junks warmup mail less
@@ -781,6 +798,7 @@ func (sig partnerSignals) hostPenalty(partnerID uuid.UUID) float64 {
 //   - this sender's recent junk rate at the partner's mail host (feedback)
 //   - how far behind the partner is on what it sent (reciprocity)
 //   - how much a small-host partner's own filter junks (recipient quality)
+//   - how much of the pool's mail to the partner arrives (reachability)
 //   - customer-defined routing rule multipliers (preference)
 //
 // Every candidate here is one the customer allows; an excluded pair was
@@ -789,7 +807,7 @@ func pickWeightedPartner(candidates []uuid.UUID, sig partnerSignals) uuid.UUID {
 	if len(candidates) == 1 {
 		return candidates[0]
 	}
-	if len(sig.hostsByID) == 0 && len(sig.domainsByID) == 0 && len(sig.ruleWeight) == 0 && len(sig.placementByHost) == 0 && len(sig.starvation) == 0 && len(sig.filterJunk) == 0 {
+	if len(sig.hostsByID) == 0 && len(sig.domainsByID) == 0 && len(sig.ruleWeight) == 0 && len(sig.placementByHost) == 0 && len(sig.starvation) == 0 && len(sig.filterJunk) == 0 && len(sig.arrival) == 0 {
 		return candidates[rand.Intn(len(candidates))]
 	}
 
@@ -818,6 +836,9 @@ func pickWeightedPartner(candidates []uuid.UUID, sig partnerSignals) uuid.UUID {
 
 		// A recipient whose own filter junks what it is sent.
 		w *= sig.filterPenalty(id)
+
+		// A recipient the pool's mail does not reliably reach.
+		w *= sig.arrivalWeight(id)
 
 		// Routing rule multiplier (premium pool only, when configured).
 		if rw, ok := sig.ruleWeight[id]; ok {
@@ -1279,9 +1300,10 @@ func (s *tasksService) warmupRoutingRules(ctx context.Context, account *Email, p
 }
 
 // replyMayCrossTiers: a paid mailbox may always answer a borrowed partner; a
-// free one may answer a paid mailbox only from a workspace whose standing is
-// known to be good. Unlike the other risk reads this fails closed: the
-// downside is one unanswered warmup thread, not free mail in a paying inbox.
+// free one may answer a paid mailbox only while it is healthy, from a
+// workspace whose standing is known to be good. Unlike the other risk reads
+// this fails closed: the downside is one unanswered warmup thread, not free
+// mail in a paying inbox.
 func (s *tasksService) replyMayCrossTiers(ctx context.Context, account *Email, poolType string) bool {
 	if poolType == "premium" {
 		return true
@@ -1294,7 +1316,13 @@ func (s *tasksService) replyMayCrossTiers(ctx context.Context, account *Email, p
 		return false
 	}
 	state, known := states[*account.OrganizationID]
-	return known && !state.ForcesFreeWarmupPool()
+	if !known || state.ForcesFreeWarmupPool() || s.warmupRepo == nil {
+		return false
+	}
+	// The same bar the return-visit cohort holds the sender to, or the dispatch
+	// check defers the reply until its token expires.
+	own, err := s.warmupRepo.GetParticipantHealth(ctx, account.ID, poolType)
+	return err == nil && own != nil && own.HealthState == models.WarmupHealthHealthy && own.BlockedAt == nil
 }
 
 // orgSuspendedOrRestricted reports whether the workspace's posture bars the
