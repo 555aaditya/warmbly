@@ -57,6 +57,17 @@ func (g *pinnedGate) CanParticipate(_ context.Context, id uuid.UUID, poolType st
 	return true, "", nil
 }
 
+// standingRepo serves the sender's own pool row; the rest of the interface panics.
+type standingRepo struct {
+	repository.WarmupRepository
+
+	state models.WarmupHealthState
+}
+
+func (r standingRepo) GetParticipantHealth(_ context.Context, _ uuid.UUID, pool string) (*models.WarmupParticipantHealth, error) {
+	return &models.WarmupParticipantHealth{PoolType: pool, HealthState: r.state}, nil
+}
+
 type riskRepo struct {
 	repository.OrgRiskRepository
 
@@ -86,13 +97,15 @@ func TestDirectedWarmupPartnerReplyAcrossTiers(t *testing.T) {
 		risk       repository.OrgRiskRepository
 		want       bool
 		asked      []string
+		standing   models.WarmupHealthState
 	}{
-		{"a paid mailbox answers a borrowed free partner", "premium", "free", riskRepo{state: models.OrgRiskTrusted}, true, []string{"premium", "free"}},
-		{"a free mailbox answers the paid one that borrowed it", "free", "premium", riskRepo{state: models.OrgRiskTrusted}, true, []string{"free", "premium"}},
-		{"a restricted workspace may not answer into a paying inbox", "free", "premium", riskRepo{state: models.OrgRiskRestricted}, false, []string{"free"}},
-		{"an unreadable standing fails closed", "free", "premium", riskRepo{err: errors.New("db down")}, false, []string{"free"}},
-		{"no risk repository at all fails closed", "free", "premium", nil, false, []string{"free"}},
-		{"a same-tier target is gated once", "premium", "premium", riskRepo{state: models.OrgRiskTrusted}, true, []string{"premium"}},
+		{"a paid mailbox answers a borrowed free partner", "premium", "free", riskRepo{state: models.OrgRiskTrusted}, true, []string{"premium", "free"}, models.WarmupHealthHealthy},
+		{"a free mailbox answers the paid one that borrowed it", "free", "premium", riskRepo{state: models.OrgRiskTrusted}, true, []string{"free", "premium"}, models.WarmupHealthHealthy},
+		{"a free mailbox on watch leaves a paying inbox unanswered", "free", "premium", riskRepo{state: models.OrgRiskTrusted}, false, []string{"free"}, models.WarmupHealthWatch},
+		{"a restricted workspace may not answer into a paying inbox", "free", "premium", riskRepo{state: models.OrgRiskRestricted}, false, []string{"free"}, models.WarmupHealthHealthy},
+		{"an unreadable standing fails closed", "free", "premium", riskRepo{err: errors.New("db down")}, false, []string{"free"}, models.WarmupHealthHealthy},
+		{"no risk repository at all fails closed", "free", "premium", nil, false, []string{"free"}, models.WarmupHealthHealthy},
+		{"a same-tier target is gated once", "premium", "premium", riskRepo{state: models.OrgRiskTrusted}, true, []string{"premium"}, models.WarmupHealthHealthy},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -101,6 +114,7 @@ func TestDirectedWarmupPartnerReplyAcrossTiers(t *testing.T) {
 			s := &tasksService{
 				taskRepo:     &directedTaskRepo{target: target},
 				emailRepo:    directedEmailRepo{},
+				warmupRepo:   standingRepo{state: tc.standing},
 				warmupHealth: gate,
 				orgRiskRepo:  tc.risk,
 			}

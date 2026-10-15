@@ -261,15 +261,17 @@ func (s *service) CanParticipate(ctx context.Context, accountID uuid.UUID, poolT
 	if err != nil {
 		return false, "", errx.InternalError()
 	}
-	if !eligible {
-		return false, "pool_authority_unavailable", nil
-	}
 	health, err := s.repo.GetParticipantHealth(ctx, accountID, poolType)
 	if err != nil {
 		return false, "", errx.InternalError()
 	}
+	// "not_in_pool" is what sends a reply-back to the other tier's gate, so it
+	// must not be masked by the eligibility refusal.
 	if health == nil {
 		return false, "not_in_pool", nil
+	}
+	if !eligible {
+		return false, "pool_authority_unavailable", nil
 	}
 
 	now := s.now().UTC()
