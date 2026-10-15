@@ -78,6 +78,46 @@ func TestGatewayOAuthEnrollmentDoesNotInheritCloudWorkday(t *testing.T) {
 
 type freeConnectionGate struct{ feature.FeatureGateService }
 
+type conflictingEnrollmentAccounts struct {
+	existingConnectionAccounts
+	xerr *errx.Error
+}
+
+func (r *conflictingEnrollmentAccounts) NewSMTPIMAPAccount(context.Context, string, models.NewSMTPIMAPAccount) (*models.Email, *errx.Error) {
+	return nil, r.xerr
+}
+
+func (r *conflictingEnrollmentAccounts) NewOauthAccount(context.Context, string, models.NewOauthAccount) (*models.Email, *errx.Error) {
+	return nil, r.xerr
+}
+
+func TestEnrollmentExplainsAnExistingUnassociatedCloudMailbox(t *testing.T) {
+	t.Setenv("BILLING_PROVIDER", "none")
+	for _, provider := range []models.InboxProvider{models.InboxProviderSMTPIMAP, models.InboxProviderGoogle, models.InboxProviderOutlook} {
+		t.Run(string(provider), func(t *testing.T) {
+			for _, failure := range []*errx.Error{errx.ErrEmailOnboardAlreadyExists, errx.InternalError()} {
+				org, owner := uuid.New(), uuid.New()
+				r := &adoptLinkRepo{}
+				accounts := &conflictingEnrollmentAccounts{xerr: failure}
+				emails := &adoptEmails{org: org}
+				s := &service{repo: r, emails: accounts, emailSvc: emails}
+				inst := &models.PoolLinkInstance{ID: uuid.New(), OrganizationID: org, CreatedBy: &owner}
+				tls := &models.Service{Host: "mail.example.test", Port: 993, Security: models.MailSecurityTLS}
+				req := models.PoolLinkEnrollRequest{RemoteID: uuid.New(), Email: "sender@example.test", Provider: provider,
+					OAuth: &models.PoolLinkOAuthCredential{RefreshToken: "synthetic"}, SMTPIMAP: &models.SmtpImap{SMTP: tls, IMAP: tls}}
+				got, xerr := s.Enroll(context.Background(), inst, req)
+				want := failure
+				if failure == errx.ErrEmailOnboardAlreadyExists {
+					want = ErrMailboxConflict
+				}
+				if got != nil || xerr != want || r.enrolled != nil || emails.started {
+					t.Fatalf("conflict must not attach or start an existing mailbox: %+v, %v", got, xerr)
+				}
+			}
+		})
+	}
+}
+
 func (freeConnectionGate) HasPremiumWarmup(context.Context, uuid.UUID) (bool, *errx.Error) {
 	return false, nil
 }
