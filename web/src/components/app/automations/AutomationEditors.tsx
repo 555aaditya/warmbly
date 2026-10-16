@@ -268,7 +268,7 @@ export function ConditionEditor({
                 </div>
             ) : needsValue && isConfidence ? (
                 <div>
-                    <Label>At least</Label>
+                    <Label>{op === "gte" ? "At least" : op === "lte" ? "At most" : "Value"}</Label>
                     <NumberInput
                         value={Math.round(Number(condition.value ?? 0) * 100)}
                         onChange={(v) => set({ value: Math.max(0, Math.min(100, v)) / 100 })}

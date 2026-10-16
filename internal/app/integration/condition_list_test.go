@@ -56,3 +56,24 @@ func TestExpressionListHelpers(t *testing.T) {
 		t.Fatalf("join = %q", got)
 	}
 }
+
+func TestReplyVerdictPresenceUsesReviewFlag(t *testing.T) {
+	cond := models.AutomationCondition{Field: models.AutoCondField, Key: "ai_needs_review", Operator: models.AutoOpExists}
+	for _, tc := range []struct {
+		name string
+		data map[string]any
+		want bool
+	}{
+		{name: "no verdict", data: map[string]any{}},
+		{name: "judged with empty labels and intent", data: map[string]any{
+			"ai_needs_review": false, "ai_labels": []string{}, "ai_kind": "", "ai_intent": "",
+		}, want: true},
+		{name: "judged and needs review", data: map[string]any{"ai_needs_review": true}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := evaluateAutomationCondition(cond, tc.data, "seed"); got != tc.want {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

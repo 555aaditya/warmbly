@@ -158,7 +158,7 @@ With [inbox tagging](/guides/inbox-tagging/) on, **Reply received** also carries
 | `ai_relevance` | The 0 to 100 relevance score |
 | `ai_needs_review` | Tagging flagged the message for a person to check |
 
-A reply tagging never judged (tagging off, or a message it skipped) carries none of these keys, so `is present` tells the two apart. `intent` and `confidence` are still the workspace keyword list's reading, unchanged. To be told about every interested lead, branch on `ai_labels` containing `Interested`, `Meeting`, `Pricing` or `Question`, or use one expression:
+A reply tagging never judged (tagging off, or a message it skipped) carries none of these keys. Test `ai_needs_review` with `is present` to tell a judged reply from one with no verdict: this key is present even when its value is `false`. Do not use `ai_labels`, `ai_kind` or `ai_intent` for this check, because a judged reply can have an empty list or an empty string. `intent` and `confidence` are still the workspace keyword list's reading, unchanged. To be told about every interested lead, branch on `ai_labels` containing `Interested`, `Meeting`, `Pricing` or `Question`, or use one expression:
 
 ```
 or (has .ai_labels "Interested") (has .ai_labels "Meeting") (has .ai_labels "Pricing")

@@ -574,8 +574,8 @@ export function conditionLabel(c?: AutomationCondition): string {
         const op = c.operator;
         if (op === "exists") return `${prettyKey(key)} is present`;
         if (op === "is_true") return `${prettyKey(key)} is true`;
-        if (isConfidenceKey(key)) return `${prettyKey(key)} ≥ ${Math.round(Number(c.value ?? 0) * 100)}%`;
         const opLbl = OPERATOR_LABELS[op] ?? op;
+        if (isConfidenceKey(key)) return `${prettyKey(key)} ${opLbl} ${Math.round(Number(c.value ?? 0) * 100)}%`;
         const valLbl =
             (key === "ai_intent" ? REPLY_INTENTS.find((o) => o.value === c.value)?.label : undefined) ??
             (key === "ai_kind" ? INBOX_TAG_KINDS.find((o) => o.value === c.value)?.label : undefined) ??
