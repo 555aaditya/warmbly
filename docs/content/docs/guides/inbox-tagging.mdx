@@ -242,9 +242,10 @@ Tagging languages are part of the workspace settings, so they travel with a [wor
 
 ## What else reads the verdict
 
-Two other features reuse a stored verdict rather than paying for a second judgment:
+Three other features reuse a stored verdict rather than paying for a second judgment:
 
 - **Campaign reply handling.** The reply classifier that drives `stop_on_reply` and the reply branches reads the stored kind and intent when one exists, so an interested reply routes as positive and a declined one as negative with the classifier's real confidence. The intent itself is also stored on the contact's progress, and a sequence can branch on it with the `reply_intent` condition (see [Campaigns](/guides/campaigns/)). Without tagging, the classifier asks TypeSafe one three-way question instead, and without a key it falls back to the platform LLM as before.
+- **Reply automations and webhooks.** The `campaign.reply_received` event carries the verdict as `ai_labels`, `ai_intent`, `ai_intent_confidence`, `ai_kind`, `ai_relevance` and `ai_needs_review`, held to the same confidence floor as the labels, so an automation can notify you about Interested or Meeting replies (see [Automations](/guides/automations/#filtering-replies-on-inbox-tagging)).
 - **The inbox agent.** A reply the verdict shows as closed (Not interested, Unsubscribe, Wrong person, Not now), a one-line acknowledgement, a legal threat or a message that needs a person to read it is not drafted, so no credits are spent answering it.
 
 </Fold>

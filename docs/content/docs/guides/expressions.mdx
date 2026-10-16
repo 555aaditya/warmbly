@@ -130,7 +130,7 @@ New reply from {{.contact_email}} on campaign {{.campaign_id}} ({{.intent}})
 
 | Trigger | Variables |
 | --- | --- |
-| Reply received | `contact_email`, `contact_id`, `campaign_id`, `intent`, `confidence`, `subject`, `snippet` |
+| Reply received | `contact_email`, `contact_id`, `campaign_id`, `intent`, `confidence`, `subject`, `snippet`, and with [inbox tagging](/guides/inbox-tagging/) on: `ai_labels`, `ai_intent`, `ai_intent_confidence`, `ai_kind`, `ai_relevance`, `ai_needs_review` |
 | Contact created | `contact_email`, `contact_id`, `first_name`, `last_name`, `company`, `phone`, `subscribed`, `source`, `source_detail`, `custom_fields` (a map: `{{.custom_fields.industry}}`), `campaign_ids`, `category_ids` |
 | Form submitted | `contact_email`, `contact_id`, `first_name`, `last_name`, `company`, `phone`, `form_id`, `form_name`, `submission_id`, `source_url`, `campaign_id`, `data` (every answer by its key: `{{.data.team_size}}`) |
 | Meeting booked / rescheduled | `invitee_name`, `invitee_email`, `event_name`, `scheduled_for`, `join_url`, `source`, `contact_id` |
@@ -184,6 +184,8 @@ The same helpers work in campaign emails, automation conditions, and action text
 | `num a` | Force a value to a number | `trim` | Remove surrounding spaces |
 | | | `contains` | Contains, case-insensitive |
 | | | `hasPrefix` `hasSuffix` | Starts or ends with, case-sensitive |
+| | | `has list item` | The list holds that whole item, case-insensitive |
+| | | `join list sep` | The list as one line of text |
 
 Division or modulo by zero returns 0 rather than erroring, so these never break an email.
 

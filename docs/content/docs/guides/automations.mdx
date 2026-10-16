@@ -111,7 +111,7 @@ Triggers, conditions, and actions only take effect after **Save**. **Test** save
 | Inbound webhook | An external system POSTs to this automation's unique URL |
 | Campaign action | A campaign sequence reaches a "Run automation" step |
 
-Each trigger carries its own event data (a reply carries contact email, reply intent, classifier confidence). Those are the values your conditions test and your action text inserts. Full per-trigger variable list: [Personalization & expressions](/guides/expressions/).
+Each trigger carries its own event data (a reply carries contact email, reply intent, classifier confidence, and the inbox tagging verdict when tagging is on). Those are the values your conditions test and your action text inserts. Full per-trigger variable list: [Personalization & expressions](/guides/expressions/).
 
 **Campaign action** never fires by itself; it runs only from a campaign step, still evaluating your conditions.
 
@@ -141,6 +141,30 @@ Pick a **field**, an **operator**, and a **value**. Fields depend on the trigger
 | Text | `is`, `is not`, `contains`, `is present` |
 | Number | `≥`, `≤`, `is`, `is present` |
 | Choice (enum) | `is`, `is not`, `is present` |
+| List | `contains`, `is present` |
+
+A list `contains` a value only when one item matches it whole, ignoring case, so a reply labelled "Not interested" does not pass `contains Interested`. A list with no items is not present.
+
+### Filtering replies on inbox tagging
+
+With [inbox tagging](/guides/inbox-tagging/) on, **Reply received** also carries the verdict tagging stored for that message, so a reply automation filters on the same labels the inbox shows:
+
+| Field | What it holds |
+| --- | --- |
+| `ai_labels` | The labels on the message (Interested, Meeting, Pricing, Question, Wrong person, and your own question labels) |
+| `ai_intent` | What a human reply wants: `agreed`, `scheduling`, `wants_pricing`, `wants_info`, `wrong_person`, `not_now`, `not_interested`, `opt_out`, and the rest. Empty when tagging could not read it confidently |
+| `ai_intent_confidence` | How sure tagging was of `ai_intent`, 0 to 1 |
+| `ai_kind` | What the message is: `human_reply`, `auto_reply_ooo`, `auto_reply_ticket`, `cold_inbound`, `internal`. Empty when tagging was not sure |
+| `ai_relevance` | The 0 to 100 relevance score |
+| `ai_needs_review` | Tagging flagged the message for a person to check |
+
+A reply tagging never judged (tagging off, or a message it skipped) carries none of these keys. Test `ai_needs_review` with `is present` to tell a judged reply from one with no verdict: this key is present even when its value is `false`. Do not use `ai_labels`, `ai_kind` or `ai_intent` for this check, because a judged reply can have an empty list or an empty string. `intent` and `confidence` are still the workspace keyword list's reading, unchanged. To be told about every interested lead, branch on `ai_labels` containing `Interested`, `Meeting`, `Pricing` or `Question`, or use one expression:
+
+```
+or (has .ai_labels "Interested") (has .ai_labels "Meeting") (has .ai_labels "Pricing")
+```
+
+The built-in Slack and Discord messages name the labels in their title when a reply has them.
 
 Three special conditions work with any trigger:
 

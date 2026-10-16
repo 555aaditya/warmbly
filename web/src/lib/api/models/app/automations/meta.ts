@@ -4,6 +4,7 @@
 
 import { EVENT_LABELS, REPLY_INTENT_OPTIONS } from "@/lib/api/models/app/integrations/Integration";
 import type { AutomationCondition } from "@/lib/api/models/app/automations/Automation";
+import { REPLY_INTENTS } from "@/lib/api/models/app/campaigns/sequences/Branching";
 
 // Warmbly events that can trigger an automation. Order = how they're listed.
 // "campaign.action" is the manual / campaign-launched trigger: it never fires on
@@ -192,7 +193,7 @@ export function triggerSupportsIntentFilter(ev: string): boolean {
 // always meaningful), plus a universal "Random split". Adding an event here +
 // to TRIGGER_VARIABLES is all it takes for new triggers to get full conditions.
 
-export type ConditionValueType = "string" | "number" | "bool" | "enum";
+export type ConditionValueType = "string" | "number" | "bool" | "enum" | "list";
 
 export interface TriggerFieldDef {
     key: string;
@@ -200,6 +201,8 @@ export interface TriggerFieldDef {
     type: ConditionValueType;
     options?: { value: string; label: string }[];
     defaultOperator: string;
+    // A list field's common values, offered as one-click picks; any value can still be typed.
+    suggestions?: string[];
 }
 
 // Sentinel field key for the random-split pseudo-condition.
@@ -224,6 +227,34 @@ const MEETING_FIELDS: TriggerFieldDef[] = [
     { key: "invitee_email", label: "Invitee email", type: "string", defaultOperator: "contains" },
     { key: "event_name", label: "Meeting name", type: "string", defaultOperator: "contains" },
     { key: "contact_id", label: "Matched contact", type: "string", defaultOperator: "exists" },
+];
+
+// The labels automatic inbox tagging writes, as titled in internal/app/inboxtag
+// (labelTitles). Custom question labels are workspace-specific, so they are typed.
+export const INBOX_TAG_LABELS = [
+    "Interested",
+    "Meeting",
+    "Pricing",
+    "Question",
+    "Update",
+    "Not now",
+    "Not interested",
+    "Wrong person",
+    "Unsubscribe",
+    "Legal threat",
+    "Out of office",
+    "Auto-reply",
+    "Sales pitch",
+    "Needs review",
+];
+
+// What inbox tagging decided a message is (internal/app/inboxtag kinds).
+export const INBOX_TAG_KINDS = [
+    { value: "human_reply", label: "Human reply" },
+    { value: "auto_reply_ooo", label: "Out of office" },
+    { value: "auto_reply_ticket", label: "Auto-reply" },
+    { value: "cold_inbound", label: "Sales pitch" },
+    { value: "internal", label: "Internal" },
 ];
 
 const DELIVERABILITY_FIELDS: TriggerFieldDef[] = [
@@ -261,8 +292,14 @@ export const TRIGGER_FIELDS: Record<string, TriggerFieldDef[]> = {
         { key: "contact_id", label: "Matched contact", type: "string", defaultOperator: "exists" },
     ],
     "campaign.reply_received": [
-        { key: "intent", label: "Reply intent", type: "enum", options: REPLY_INTENT_OPTIONS, defaultOperator: "equals" },
-        { key: "confidence", label: "Classifier confidence", type: "number", defaultOperator: "gte" },
+        { key: "intent", label: "Reply intent (keywords)", type: "enum", options: REPLY_INTENT_OPTIONS, defaultOperator: "equals" },
+        { key: "confidence", label: "Keyword confidence", type: "number", defaultOperator: "gte" },
+        { key: "ai_labels", label: "Inbox tagging labels", type: "list", suggestions: INBOX_TAG_LABELS, defaultOperator: "contains" },
+        { key: "ai_intent", label: "Inbox tagging intent", type: "enum", options: REPLY_INTENTS, defaultOperator: "equals" },
+        { key: "ai_intent_confidence", label: "Inbox tagging intent confidence", type: "number", defaultOperator: "gte" },
+        { key: "ai_kind", label: "Inbox tagging kind", type: "enum", options: INBOX_TAG_KINDS, defaultOperator: "equals" },
+        { key: "ai_relevance", label: "Inbox tagging relevance", type: "number", defaultOperator: "gte" },
+        { key: "ai_needs_review", label: "Inbox tagging needs review", type: "bool", defaultOperator: "is_true" },
         { key: "contact_email", label: "Contact email", type: "string", defaultOperator: "contains" },
         { key: "subject", label: "Subject", type: "string", defaultOperator: "contains" },
         { key: "contact_id", label: "Matched contact", type: "string", defaultOperator: "exists" },
@@ -374,7 +411,9 @@ export function operatorsForType(type: ConditionValueType): { value: string; lab
               ? ["equals", "not_equals", "exists"]
               : type === "bool"
                 ? ["is_true", "exists"]
-                : ["equals", "not_equals", "contains", "exists"];
+                : type === "list"
+                  ? ["contains", "exists"]
+                  : ["equals", "not_equals", "contains", "exists"];
     return ops.map((o) => ({ value: o, label: OPERATOR_LABELS[o] ?? o }));
 }
 
@@ -398,7 +437,21 @@ export function defaultOperatorFor(field: string): string {
 export const TRIGGER_VARIABLES: Record<string, string[]> = {
     "contact.created": ["contact_email", "contact_id", "first_name", "last_name", "company", "phone", "source", "source_detail", "subscribed"],
     "form.submitted": ["contact_email", "contact_id", "first_name", "last_name", "company", "phone", "form_name", "form_id", "submission_id", "source_url", "campaign_id"],
-    "campaign.reply_received": ["contact_email", "contact_id", "campaign_id", "intent", "confidence", "subject", "snippet"],
+    "campaign.reply_received": [
+        "contact_email",
+        "contact_id",
+        "campaign_id",
+        "intent",
+        "confidence",
+        "subject",
+        "snippet",
+        "ai_labels",
+        "ai_intent",
+        "ai_intent_confidence",
+        "ai_kind",
+        "ai_relevance",
+        "ai_needs_review",
+    ],
     "meeting.booked": ["invitee_name", "invitee_email", "event_name", "scheduled_for", "join_url", "source", "contact_id"],
     "meeting.rescheduled": ["invitee_name", "invitee_email", "event_name", "scheduled_for", "join_url", "source", "contact_id"],
     "meeting.canceled": ["invitee_name", "invitee_email", "event_name", "scheduled_for", "source", "contact_id"],
@@ -437,6 +490,12 @@ export function sampleEventData(triggerEvent: string): Record<string, unknown> {
             base.confidence = 0.92;
             base.subject = "Re: quick question";
             base.snippet = "Sure, let's talk next week.";
+            base.ai_kind = "human_reply";
+            base.ai_intent = "scheduling";
+            base.ai_intent_confidence = 0.91;
+            base.ai_labels = ["Meeting", "Interested"];
+            base.ai_relevance = 82;
+            base.ai_needs_review = false;
             break;
         case "meeting.booked":
         case "meeting.rescheduled":
@@ -485,7 +544,12 @@ export function sampleEventData(triggerEvent: string): Record<string, unknown> {
     return base;
 }
 
-const prettyKey = (k: string) => k.replace(/_/g, " ");
+const prettyKey = (k: string) => k.replace(/^ai_/, "AI ").replace(/_/g, " ");
+
+// Condition keys whose value is a 0..1 confidence, edited and shown as a percent.
+export function isConfidenceKey(key: string): boolean {
+    return key === "confidence" || key === "ai_intent_confidence";
+}
 
 // A short human summary of a condition, used as the IF node label.
 export function conditionLabel(c?: AutomationCondition): string {
@@ -510,9 +574,11 @@ export function conditionLabel(c?: AutomationCondition): string {
         const op = c.operator;
         if (op === "exists") return `${prettyKey(key)} is present`;
         if (op === "is_true") return `${prettyKey(key)} is true`;
-        if (key === "confidence") return `confidence ≥ ${Math.round(Number(c.value ?? 0) * 100)}%`;
         const opLbl = OPERATOR_LABELS[op] ?? op;
+        if (isConfidenceKey(key)) return `${prettyKey(key)} ${opLbl} ${Math.round(Number(c.value ?? 0) * 100)}%`;
         const valLbl =
+            (key === "ai_intent" ? REPLY_INTENTS.find((o) => o.value === c.value)?.label : undefined) ??
+            (key === "ai_kind" ? INBOX_TAG_KINDS.find((o) => o.value === c.value)?.label : undefined) ??
             REPLY_INTENT_OPTIONS.find((o) => o.value === c.value)?.label ??
             WARMUP_STATES.find((o) => o.value === c.value)?.label ??
             (key === "source" ? CONTACT_SOURCES.find((o) => o.value === c.value)?.label : undefined) ??

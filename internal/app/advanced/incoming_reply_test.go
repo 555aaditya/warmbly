@@ -226,6 +226,10 @@ func (r *incomingReplyProgressRepo) GetLatestReplyClass(context.Context, uuid.UU
 	return "", nil
 }
 
+func (r *incomingReplyProgressRepo) RecordReplyIntent(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string) error {
+	return nil
+}
+
 func (r *incomingReplyProgressRepo) RecordReplyClassification(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string, string, float64) error {
 	r.classified++
 	return nil

@@ -1242,8 +1242,14 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 		BodyText: firstNonEmpty(msg.BodyText, msg.Snippet), InReplyTo: msg.InReplyTo,
 	}, nil)
 	var verdict replyclassify.Result
+	// tagged is the inbox-tagging verdict, carried on the reply event so an
+	// automation filters on the labels the inbox shows.
+	var tagged *repository.InboxTagResult
 	if s.inboxTags != nil && msg.MessageID != "" {
 		stored, tagErr := s.inboxTags.GetByMessageID(ctx, *account.OrganizationID, msg.MessageID)
+		if tagErr == nil {
+			tagged = stored
+		}
 		if tagErr == nil && stored != nil && stored.KindConfidence >= inboxtag.ConfFloor && stored.ReviewReason != "kind" {
 			if inboxtag.IsAutomatedKind(stored.Kind) {
 				kind = stored.Kind
@@ -1734,6 +1740,7 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 	if contactID != nil {
 		payload["contact_id"] = contactID.String()
 	}
+	addTagVerdict(payload, tagged)
 	s.emit(ctx, *account.OrganizationID, models.WebhookEventCampaignReplyReceived, payload)
 	if intent == models.ReplyIntentNegative {
 		// Negative/unsubscribe-leaning replies also fire the unsubscribe event
