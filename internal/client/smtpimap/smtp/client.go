@@ -26,11 +26,11 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// sendTimeout bounds one whole SMTP conversation: dial, greeting, AUTH, the
+// SendTimeout bounds one whole SMTP conversation: dial, greeting, AUTH, the
 // recipients, the message and the server's verdict. It is generous because a
 // large message to a slow relay is legitimate, and it exists so a peer that
 // stops answering cannot hold a send goroutine forever.
-const sendTimeout = 90 * time.Second
+const SendTimeout = 90 * time.Second
 
 // errNoSTARTTLS distinguishes a missing upgrade from a network failure.
 var errNoSTARTTLS = errors.New("the server does not offer STARTTLS")
@@ -332,7 +332,7 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 	// without closing the connection parked the send goroutine forever: the
 	// greeting, AUTH, each RCPT and the wait for the server's verdict at the
 	// end of DATA all block with nothing to fail them.
-	ctx, cancel := context.WithTimeout(ctx, sendTimeout)
+	ctx, cancel := context.WithTimeout(ctx, SendTimeout)
 	defer cancel()
 
 	resolved := models.ResolveSMTPSecurity(security, port)

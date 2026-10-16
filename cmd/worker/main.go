@@ -223,7 +223,9 @@ func main() {
 		lanes = 1
 	}
 	log.Printf("Worker command concurrency: %d ordered mailbox lanes", lanes)
-	if err := eventbus.SubscribeKeyed(ctx, bus, []string{workerTopic}, "worker-"+workerID.String(), lanes, workerService.ResolveCommandKey, workerService.Receive); err != nil {
+	// A send runs past the bus's default handler budget, so the command subscription carries its own.
+	commandCtx := eventbus.WithHandlerTimeout(ctx, worker.CommandBudget)
+	if err := eventbus.SubscribeKeyed(commandCtx, bus, []string{workerTopic}, "worker-"+workerID.String(), lanes, workerService.ResolveCommandKey, workerService.Receive); err != nil {
 		log.Println("event bus subscribe ended:", err)
 	}
 

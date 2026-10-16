@@ -690,7 +690,7 @@ var table = []Entry{
 	},
 	{
 		Key: "EVENTBUS_HANDLER_TIMEOUT", Group: GroupEventBus, RuntimeChangeable: ChangeBootOnly,
-		Effect:     "How long one consumer handler may run before the message is redelivered.",
+		Effect:     "How long one consumer handler may run before the message is redelivered. Worker commands carry a longer budget of their own.",
 		DocsAnchor: docsEventBus,
 		Resolve:    envValue("EVENTBUS_HANDLER_TIMEOUT"),
 	},

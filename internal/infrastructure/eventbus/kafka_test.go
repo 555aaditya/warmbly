@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	ckf "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/warmbly/warmbly/internal/infrastructure/kafka"
@@ -185,5 +186,15 @@ func TestKafkaTopicHelpersRoundTrip(t *testing.T) {
 	}
 	if Subject(kafka.TopicWorkerEvents) != "jobs.worker-events" {
 		t.Fatalf("worker-events topic translation drift: %q", Subject(kafka.TopicWorkerEvents))
+	}
+}
+
+// A serial consumer must not be evicted from its group while one handler runs its whole budget.
+func TestMaxPollIntervalCoversTheHandlerBudget(t *testing.T) {
+	if got := maxPollInterval(30 * time.Second); got != 5*time.Minute {
+		t.Fatalf("default budget poll interval = %s, want librdkafka's 5m", got)
+	}
+	if got := maxPollInterval(195 * time.Second); got < 2*195*time.Second {
+		t.Fatalf("poll interval %s does not cover a long handler and its retry", got)
 	}
 }
