@@ -18,6 +18,7 @@ export interface AccountError {
     message: string;
     action_required?: string;
     created_at: Date;
+    operation?: "send" | "sync" | "unknown";
 }
 
 export interface AccountDailyUsage {

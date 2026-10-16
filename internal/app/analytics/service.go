@@ -282,18 +282,80 @@ func (s *analyticsService) accountErrors(ctx context.Context, accountID uuid.UUI
 // toAccountErrors maps stored error rows into the API shape, never nil.
 func toAccountErrors(dbErrors []repository.EmailAccountError) []models.AccountError {
 	errs := make([]models.AccountError, 0, len(dbErrors))
+	type errorKey struct {
+		code, message, action string
+		operation             models.MailTransportOperation
+	}
+	seen := make(map[errorKey]int, len(dbErrors))
 	for _, e := range dbErrors {
-		errs = append(errs, models.AccountError{
+		message := e.Message
+		if e.UserMessage != nil && *e.UserMessage != "" {
+			message = *e.UserMessage
+		}
+		action := ""
+		if e.ActionRequired != nil {
+			action = *e.ActionRequired
+		}
+		key := errorKey{e.ErrorCode, message, action, e.Operation.Conservative()}
+		record := models.AccountError{
 			ID:             e.ID,
 			ErrorCode:      e.ErrorCode,
 			Severity:       e.Severity,
 			Title:          e.Title,
-			Message:        e.Message,
+			Message:        message,
 			ActionRequired: e.ActionRequired,
 			CreatedAt:      e.CreatedAt,
-		})
+			Operation:      key.operation,
+		}
+		if index, ok := seen[key]; ok {
+			previous := errs[index]
+			if record.CreatedAt.After(previous.CreatedAt) {
+				errs[index] = record
+			}
+			if accountErrorPenalty(record.Severity) > accountErrorPenalty(previous.Severity) {
+				errs[index].Severity = record.Severity
+			} else {
+				errs[index].Severity = previous.Severity
+			}
+			continue
+		}
+		seen[key] = len(errs)
+		errs = append(errs, record)
 	}
 	return errs
+}
+
+func connectionProviderName(provider string) string {
+	switch provider {
+	case "gmail":
+		return "Gmail"
+	case "outlook":
+		return "Microsoft Outlook"
+	default:
+		return "Mail server"
+	}
+}
+
+func describeAccountErrors(email *models.Email, errs []models.AccountError) {
+	for i := range errs {
+		e := &errs[i]
+		if e.ErrorCode != string(errx.MailErrorCodeServerUnreachable) && e.ErrorCode != string(errx.MailErrorCodeConnectionLost) {
+			continue
+		}
+		operation := "connection attempt failed"
+		switch e.Operation {
+		case models.MailTransportSend:
+			operation = "sending connection failed"
+		case models.MailTransportSync:
+			operation = "sync connection failed"
+		}
+		e.Title = connectionProviderName(email.Provider) + " " + operation
+		action := "Warmbly retries automatically while this mailbox is switched on. This is the last reported failure, not proof that it is still occurring. A successful retry for the affected operation confirms recovery. Reconnecting is only needed if a sign-in error is also reported."
+		if email.Status != "active" {
+			action = "This mailbox is switched off, so automatic retries are paused. Check any sign-in errors, then switch the mailbox back on to retry."
+		}
+		e.ActionRequired = &action
+	}
 }
 
 // assembleAccountStatus turns a mailbox and its already-fetched signals into
@@ -304,6 +366,7 @@ func (s *analyticsService) assembleAccountStatus(ctx context.Context, email *mod
 	if errs == nil {
 		errs = make([]models.AccountError, 0)
 	}
+	describeAccountErrors(email, errs)
 
 	// Calculate health, then fold in warmup-pool reputation so the single
 	// score the user sees reflects spam placement / complaints / throttling.
@@ -662,18 +725,37 @@ func calculateAccountHealth(email *models.Email, errors []models.AccountError) m
 		health.Issues = append(health.Issues, "Account is not active")
 	}
 
-	// Check for critical errors
+	penalties := make(map[string]int)
 	for _, e := range errors {
+		penalty := 0
 		if e.Severity == "CRITICAL" {
 			health.Status = "error"
-			health.Score -= 30
-			health.Issues = append(health.Issues, e.Title)
+			penalty = 30
 		} else if e.Severity == "WARNING" {
 			if health.Status == "healthy" {
 				health.Status = "warning"
 			}
-			health.Score -= 10
-			health.Issues = append(health.Issues, e.Title)
+			penalty = 10
+		}
+		key := e.ErrorCode
+		if key == "" {
+			key = e.Title
+		}
+		previous := penalties[key]
+		if penalty <= previous {
+			continue
+		}
+		penalties[key] = penalty
+		health.Score -= penalty - previous
+		if previous == 0 {
+			title := e.Title
+			if e.ErrorCode == string(errx.MailErrorCodeServerUnreachable) || e.ErrorCode == string(errx.MailErrorCodeConnectionLost) {
+				title = connectionProviderName(email.Provider) + " connection attempt failed"
+				if e.ErrorCode == string(errx.MailErrorCodeConnectionLost) {
+					title = connectionProviderName(email.Provider) + " connection was interrupted"
+				}
+			}
+			health.Issues = append(health.Issues, title)
 		}
 	}
 
@@ -683,6 +765,17 @@ func calculateAccountHealth(email *models.Email, errors []models.AccountError) m
 	}
 
 	return health
+}
+
+func accountErrorPenalty(severity string) int {
+	switch severity {
+	case "CRITICAL":
+		return 30
+	case "WARNING":
+		return 10
+	default:
+		return 0
+	}
 }
 
 // warmupTargetAndHold reports the target the SCHEDULER will act on, plus what

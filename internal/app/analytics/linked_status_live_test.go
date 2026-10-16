@@ -42,6 +42,8 @@ func TestLiveLinkedMailboxStatusBatchPreservesDetails(t *testing.T) {
 		provider := "gmail"
 		if i < 4 {
 			provider = "smtp_imap"
+		} else if i > 8 {
+			provider = "outlook"
 		}
 		exec(`INSERT INTO email_accounts (id, user_id, organization_id, email, name, signature_plain,
 		      signature_html, provider, status, campaign_limit, min_wait_time, timezone,
@@ -58,6 +60,12 @@ func TestLiveLinkedMailboxStatusBatchPreservesDetails(t *testing.T) {
 	// A restrictive row and a paused mailbox must retain the same detail in the list.
 	exec(`UPDATE warmup_pool_participants SET health_state='quarantined', blocked_until=NOW()+interval '2 days' WHERE email_account_id=$1`, ids[1])
 	exec(`UPDATE email_accounts SET warmup_paused_at=NOW() WHERE id=$1`, ids[2])
+	exec(`UPDATE email_accounts SET send_lifecycle='resting',send_lifecycle_since=NOW(),send_lifecycle_reason='recovering' WHERE id=$1`, ids[3])
+	exec(`UPDATE email_accounts SET send_lifecycle='reserve',send_lifecycle_since=NOW(),send_lifecycle_reason='owner hold' WHERE id=$1`, ids[4])
+	for _, operation := range []string{"send", "sync", "unknown"} {
+		exec(`INSERT INTO email_account_errors (id,email_account_id,user_id,error_code,severity,resolve_method,title,message,operation,observation_source)
+		      VALUES (gen_random_uuid(),$1,$2,'SERVER_UNREACHABLE','WARNING','RETRY','Connection Error','Connection attempt failed',$3,'worker')`, ids[3], f.user, operation)
+	}
 	counter := &statusQueryCounter{}
 	poolConfig := f.pool.Config()
 	poolConfig.ConnConfig.Tracer = counter
@@ -73,6 +81,7 @@ func TestLiveLinkedMailboxStatusBatchPreservesDetails(t *testing.T) {
 	handle := &db.DB{Pool: pool}
 	svc := NewService(repository.NewAnalyticsRepository(handle), repository.NewEmailRepostory(handle, enc),
 		repository.NewCampaignRepostory(handle), repository.NewEmailAccountErrorRepository(handle), repository.NewWarmupRepository(pool))
+	svc.(LifecycleAware).WireLifecycle(repository.NewSendLifecycleRepository(handle))
 	start := time.Now()
 	individual := make(map[uuid.UUID]models.EmailAccountStatus)
 	for _, id := range ids {
@@ -81,6 +90,15 @@ func TestLiveLinkedMailboxStatusBatchPreservesDetails(t *testing.T) {
 			t.Fatal(xerr)
 		}
 		individual[id] = *status
+	}
+	for id, state := range map[uuid.UUID]models.SendLifecycle{ids[3]: models.SendLifecycleResting, ids[4]: models.SendLifecycleReserve} {
+		status := individual[id]
+		if status.InCampaign || status.SendLifecycle == nil || status.SendLifecycle.State != state || status.WarmupStatus == nil || status.WarmupStatus.Paused || status.WarmupStatus.TargetVolume <= 0 {
+			t.Fatalf("cold hold without a local campaign must stay visible while warmup runs: %+v", status)
+		}
+	}
+	if status := individual[ids[3]]; status.Health.Score != 90 || len(status.Health.Issues) != 1 || len(status.Errors) != 3 {
+		t.Fatalf("one connection category must count once while retaining operation details: %+v", status)
 	}
 	oldQueries, oldDuration := counter.queries.Swap(0), time.Since(start)
 	start = time.Now()
@@ -91,7 +109,7 @@ func TestLiveLinkedMailboxStatusBatchPreservesDetails(t *testing.T) {
 	newQueries, newDuration := counter.queries.Swap(0), time.Since(start)
 	for _, status := range page.Data {
 		want := individual[status.ID]
-		if !reflect.DeepEqual(status.WarmupStatus, want.WarmupStatus) || !reflect.DeepEqual(status.WarmupHealth, want.WarmupHealth) || !reflect.DeepEqual(status.Errors, want.Errors) || !reflect.DeepEqual(status.DailyUsage, want.DailyUsage) {
+		if !reflect.DeepEqual(status.WarmupStatus, want.WarmupStatus) || !reflect.DeepEqual(status.WarmupHealth, want.WarmupHealth) || !reflect.DeepEqual(status.Errors, want.Errors) || !reflect.DeepEqual(status.Health, want.Health) || !reflect.DeepEqual(status.SendLifecycle, want.SendLifecycle) || !reflect.DeepEqual(status.DailyUsage, want.DailyUsage) {
 			t.Fatalf("%s: batched=%+v individual=%+v", status.ID, status, want)
 		}
 	}
