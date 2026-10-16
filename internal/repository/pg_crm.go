@@ -56,6 +56,8 @@ type CRMRepository interface {
 	TasksSummary(ctx context.Context, orgID uuid.UUID, filters models.SearchTasks) (*models.TasksSummary, error)
 	UpdateCRMTask(ctx context.Context, orgID, taskID uuid.UUID, data *models.UpdateCRMTask) (*models.CRMTask, error)
 	DeleteCRMTask(ctx context.Context, orgID, taskID uuid.UUID) error
+	// CancelUntouchedCRMTask cancels only the attributed task if nobody edited it.
+	CancelUntouchedCRMTask(ctx context.Context, orgID, contactID, taskID uuid.UUID) (bool, error)
 	BulkDeleteCRMTasks(ctx context.Context, orgID uuid.UUID, sel models.TaskSelection, cap int) (matched, affected int64, err error)
 	// SelectTaskIDs resolves a bulk selection to ids, at most cap+1 of them.
 	SelectTaskIDs(ctx context.Context, orgID uuid.UUID, sel models.TaskSelection, cap int) ([]uuid.UUID, error)
@@ -1885,6 +1887,17 @@ func (r *crmRepository) DeleteTaskType(ctx context.Context, orgID, typeID uuid.U
 		return errx.ErrNotFound
 	}
 	return nil
+}
+
+func (r *crmRepository) CancelUntouchedCRMTask(ctx context.Context, orgID, contactID, taskID uuid.UUID) (bool, error) {
+	result, err := r.db.Exec(ctx, `
+		UPDATE crm_tasks SET status = 'cancelled', updated_at = NOW()
+		WHERE organization_id = $1 AND contact_id = $2 AND id = $3
+		  AND status = 'pending' AND completed_at IS NULL AND updated_at = created_at`, orgID, contactID, taskID)
+	if err != nil {
+		return false, err
+	}
+	return result.RowsAffected() == 1, nil
 }
 
 func (r *crmRepository) DeleteCRMTask(ctx context.Context, orgID, taskID uuid.UUID) error {

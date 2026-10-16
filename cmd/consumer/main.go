@@ -606,6 +606,7 @@ func main() {
 	// reply refused by a since-fixed check is still attributed to its lead.
 	go jobsService.StartIncomingReplyRepair(ctx)
 	go jobsService.StartReplyOptOutRecheck(ctx)
+	go jobsService.StartHistoricalReplyCleanup(ctx)
 
 	// Mirrors Warmbly Cloud's warmup verdicts onto the mailboxes it warms, so
 	// a cloud quarantine pauses their campaigns here too. No-op when unlinked.

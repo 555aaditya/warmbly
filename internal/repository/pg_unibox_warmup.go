@@ -141,6 +141,13 @@ func (r *uniboxRepository) UpdatePendingEmail(ctx context.Context, userID, id uu
 	return true, tx.Commit(ctx)
 }
 
+// bareFrom is the sender in whichever form the sync stored it: "Name <addr>",
+// "Name (addr)" or bare.
+const bareFrom = `lower(COALESCE(
+		(regexp_match(COALESCE(u.from_addr[1], ''), '<([^<>]+)>\s*$'))[1],
+		(regexp_match(COALESCE(u.from_addr[1], ''), '\(([^()]+)\)\s*$'))[1],
+		u.from_addr[1]))`
+
 type CampaignReplyRepairPage struct {
 	Events     []models.JobEventNewEmail
 	NextCursor uuid.UUID
@@ -180,12 +187,6 @@ func (r *uniboxRepository) ListUnprocessedCampaignReplies(ctx context.Context, s
 		return page, nil
 	}
 
-	// The sender in whichever form the sync stored it: "Name <addr>",
-	// "Name (addr)" or bare.
-	const bareFrom = `lower(COALESCE(
-		(regexp_match(COALESCE(u.from_addr[1], ''), '<([^<>]+)>\s*$'))[1],
-		(regexp_match(COALESCE(u.from_addr[1], ''), '\(([^()]+)\)\s*$'))[1],
-		u.from_addr[1]))`
 	rows, err := r.db.Query(ctx, `
 		SELECT u.user_id, u.id, u.email_id, u.message_id, u.thread_id, u.flags, u.from_addr, u.to_addr, u.cc, u.bcc,
 		       u.reply_to, u.in_reply_to, u.subject, u.snippet, u.body_text, u.folder, u.provider_folder,
@@ -241,6 +242,79 @@ func (r *uniboxRepository) ListUnprocessedCampaignReplies(ctx context.Context, s
 	return page, nil
 }
 
+// HistoricalReply is a message that predates its sender's contact and was
+// still handled as a reply once the contact existed.
+type HistoricalReply struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Sender         string
+	Subject        string
+	ContactID      uuid.UUID
+	ProcessedAt    time.Time
+}
+
+type HistoricalReplyPage struct {
+	Replies    []HistoricalReply
+	NextCursor uuid.UUID
+	Done       bool
+}
+
+func (r *uniboxRepository) ListHistoricalReplies(ctx context.Context, since time.Time, afterID uuid.UUID) (HistoricalReplyPage, error) {
+	const scanSize = 500
+	page := HistoricalReplyPage{NextCursor: afterID}
+	var scanned int
+	var lastScanned *uuid.UUID
+	if err := r.db.QueryRow(ctx, `SELECT COUNT(*), MAX(id::text)::uuid FROM (
+		SELECT u.id FROM unibox_emails u
+		WHERE u.id > $1 AND u.created_at >= $2 AND u.campaign_reply_processed_at IS NOT NULL
+		ORDER BY u.id LIMIT $3) s`, afterID, since, scanSize).Scan(&scanned, &lastScanned); err != nil {
+		return page, err
+	}
+	if scanned == 0 || lastScanned == nil {
+		page.Done = true
+		return page, nil
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT u.id, ea.organization_id, `+bareFrom+`, COALESCE(u.subject, ''), co.id, u.campaign_reply_processed_at
+		FROM unibox_emails u
+		JOIN email_accounts ea ON ea.id = u.email_id
+		JOIN contacts co ON co.organization_id = ea.organization_id AND lower(co.email) = `+bareFrom+`
+		WHERE u.id > $1 AND u.id <= $3
+		  AND u.created_at >= $2
+		  AND u.campaign_reply_processed_at IS NOT NULL
+		  AND u.folder NOT IN ('sent', 'drafts')
+		  AND u.provider_folder NOT IN ('sent', 'drafts')
+		  -- Received before the contact existed, handled after: a zero date is unknown and never matches.
+		  AND u.internal_date > '0001-01-02 00:00:00+00'::timestamptz
+		  AND u.internal_date < co.created_at
+		  AND co.created_at <= u.campaign_reply_processed_at
+		  AND NOT EXISTS (
+		    SELECT 1 FROM tasks t
+		    WHERE t.message_id <> '' AND t.task_type = 'campaign'
+		      AND t.message_id = ANY(ARRAY(
+		        SELECT v FROM unnest(u.in_reply_to) AS x,
+		          LATERAL (VALUES ('<' || btrim(x, '<>') || '>'), (btrim(x, '<>'))) AS f(v)))
+		  )
+		ORDER BY u.id`, afterID, since, *lastScanned)
+	if err != nil {
+		return page, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var h HistoricalReply
+		if err := rows.Scan(&h.ID, &h.OrganizationID, &h.Sender, &h.Subject, &h.ContactID, &h.ProcessedAt); err != nil {
+			return page, err
+		}
+		page.Replies = append(page.Replies, h)
+	}
+	if err := rows.Err(); err != nil {
+		return page, err
+	}
+	page.NextCursor = *lastScanned
+	page.Done = scanned < scanSize
+	return page, nil
+}
+
 // InboundMessage is a stored inbound message and when reply processing
 // handled it (its arrival, for mail processing never claimed).
 type InboundMessage struct {
@@ -249,10 +323,6 @@ type InboundMessage struct {
 }
 
 func (r *uniboxRepository) ListInboundFrom(ctx context.Context, orgID uuid.UUID, address string, limit int) ([]InboundMessage, error) {
-	const bareFrom = `lower(COALESCE(
-		(regexp_match(COALESCE(u.from_addr[1], ''), '<([^<>]+)>\s*$'))[1],
-		(regexp_match(COALESCE(u.from_addr[1], ''), '\(([^()]+)\)\s*$'))[1],
-		u.from_addr[1]))`
 	rows, err := r.db.Query(ctx, `
 		SELECT u.id, u.email_id, u.message_id, u.thread_id, u.flags, u.from_addr, u.to_addr, u.cc, u.bcc,
 		       u.reply_to, u.in_reply_to, u.subject, u.snippet, u.body_text, u.folder, u.provider_folder,

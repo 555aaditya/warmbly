@@ -371,6 +371,8 @@ Which replies get one is up to you, in **Settings > Sending > Reply follow-ups**
 
 Only mail that arrives after the sender became a contact opens a task. Importing a list or creating contacts through the API does not turn their older messages already in your mailboxes into replies; a reply in one of your campaign threads always counts.
 
+Before this rule, older mail could open tasks and record reply intents when its sender was imported. Warmbly checks those once per consumer start, but withdraws an effect only when its saved identifiers link it to the exact message and, for a follow-up, the exact task. Older records without those links are left alone, even if their sender, subject or timing matches. A linked task is cancelled only if it is still pending and nobody has edited it. Every cancellation is recorded in the audit log. A task someone already started, edited or completed is left as it is. Temporary cleanup errors are retried before the check advances.
+
 Automated replies are off deliberately. A vacation notice is not follow-up work, and a week of sending makes enough of them to bury the real replies. Tick **Automated** if you do want one per machine reply, or untick the human ones you do not need. Unticking everything is the same as turning the switch off.
 
 The classification does more than decide the task: an automated reply never counts as a reply for **stop on reply** or for a **replied** branch in a sequence, and its notification goes to the **Out-of-office detected** preference rather than **New reply**, so muting one does not mute the other.

@@ -193,6 +193,10 @@ type Service interface {
 	// RecheckReplyOptOuts re-reads one page of reply opt-outs under the
 	// current rules, lifting the ones no message from the sender supports.
 	RecheckReplyOptOuts(ctx context.Context, afterID uuid.UUID, limit int) (uuid.UUID, bool, error)
+	// WithdrawHistoricalReplyEffects pages mail handled as a reply though it
+	// arrived before its sender was a contact, and withdraws the reply intent
+	// and untouched follow-up task each one left.
+	WithdrawHistoricalReplyEffects(ctx context.Context, since time.Time, afterID uuid.UUID) (uuid.UUID, bool, error)
 	// WireAudit attaches the audit trail a lifted reply opt-out is recorded in.
 	WireAudit(a AuditLogger)
 }
@@ -1390,7 +1394,8 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 	}
 
 	if campaignID == nil && contactID != nil && !referencesCampaignThread {
-		latest, err := s.campaignProgressRepo.GetLatestCampaignSequenceForContact(ctx, *contactID)
+		// Only a send that went out before the message arrived can be what it answers.
+		latest, err := s.campaignProgressRepo.GetLatestCampaignSequenceForContact(ctx, *contactID, msg.InternalDate)
 		if err == nil && latest != nil {
 			campaignID = &latest.CampaignID
 			sequenceID = &latest.SequenceID
@@ -1665,6 +1670,15 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 		}
 	}
 
+	metadata := map[string]interface{}{
+		"subject":       msg.Subject,
+		"reply_class":   verdict.Class,
+		"classified_by": verdict.Source,
+	}
+	if msg.ID != uuid.Nil {
+		metadata["unibox_message_id"] = msg.ID.String()
+	}
+
 	// Per-intent, so an out-of-office or a bounce does not become a
 	// high-priority follow-up nobody asked for. The default set is human
 	// replies only; a workspace can add the automated ones back.
@@ -1680,12 +1694,13 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 				DueDate:    ptrTime(time.Now().UTC().Add(24 * time.Hour)),
 				AssignedTo: &owner,
 			}); terr == nil {
+				metadata["crm_task_id"] = task.ID.String()
 				s.pushCRM(ctx, *account.OrganizationID, models.CRMObjectTask, task.ID)
-			}
-			if actionTaken == "" {
-				actionTaken = "created_crm_task"
-			} else {
-				actionTaken += ",created_crm_task"
+				if actionTaken == "" {
+					actionTaken = "created_crm_task"
+				} else {
+					actionTaken += ",created_crm_task"
+				}
 			}
 		}
 	}
@@ -1698,13 +1713,7 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 		Intent:         intent,
 		Confidence:     confidence,
 		ActionTaken:    actionTaken,
-		Metadata: map[string]interface{}{
-			"subject": msg.Subject,
-			// What decided it, so an intent nobody expected can be explained
-			// without re-running the message through the classifier.
-			"reply_class":   verdict.Class,
-			"classified_by": verdict.Source,
-		},
+		Metadata:       metadata,
 	})
 
 	// Fan the classified reply out to customer webhooks + integration actions

@@ -88,6 +88,10 @@ type UniboxRepository interface {
 	// processing never claimed and that look like campaign replies: they
 	// answer a campaign send, or come from one of the workspace's contacts.
 	ListUnprocessedCampaignReplies(ctx context.Context, since time.Time, afterID uuid.UUID, limit int) (CampaignReplyRepairPage, error)
+	// ListHistoricalReplies pages inbound mail reply processing handled after
+	// its sender became a contact, though it arrived before, outside any
+	// campaign thread.
+	ListHistoricalReplies(ctx context.Context, since time.Time, afterID uuid.UUID) (HistoricalReplyPage, error)
 	// ListInboundFrom returns a workspace's inbound mail from one address,
 	// newest first: the evidence behind an opt-out that address triggered.
 	ListInboundFrom(ctx context.Context, orgID uuid.UUID, address string, limit int) ([]InboundMessage, error)

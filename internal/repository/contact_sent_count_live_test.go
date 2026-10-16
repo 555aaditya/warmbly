@@ -102,11 +102,28 @@ func TestLiveSentCountsEmailStepsOnly(t *testing.T) {
 
 	// A reply with no thread to attribute it to lands on the last email, never
 	// on the action step after it.
-	latest, err := progress.GetLatestCampaignSequenceForContact(ctx, finished)
+	latest, err := progress.GetLatestCampaignSequenceForContact(ctx, finished, time.Time{})
 	if err != nil {
 		t.Fatalf("GetLatestCampaignSequenceForContact: %v", err)
 	}
 	if latest == nil || latest.SequenceID != email2 {
 		t.Errorf("latest step = %+v, want the second email %v", latest, email2)
+	}
+
+	// Mail that arrived between the two emails answers the first; mail from
+	// before either answers neither.
+	between, err := progress.GetLatestCampaignSequenceForContact(ctx, finished, time.Now().Add(-59*time.Minute))
+	if err != nil {
+		t.Fatalf("GetLatestCampaignSequenceForContact: %v", err)
+	}
+	if between == nil || between.SequenceID != email1 {
+		t.Errorf("step before the second email = %+v, want the first email %v", between, email1)
+	}
+	earlier, err := progress.GetLatestCampaignSequenceForContact(ctx, finished, time.Now().Add(-2*time.Hour))
+	if err != nil {
+		t.Fatalf("GetLatestCampaignSequenceForContact: %v", err)
+	}
+	if earlier != nil {
+		t.Errorf("mail from before any send credited %+v", earlier)
 	}
 }

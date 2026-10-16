@@ -313,6 +313,8 @@ Only inbound mail from that campaign contact to the sending mailbox counts. A th
 
 When a campaign rotates between sender accounts, a real inbound reply still links to the campaign if the mail client references an earlier step from another mailbox in the same workspace.
 
+A new email from a contact that answers no thread of yours counts toward the last campaign email you sent them before it arrived. Mail that arrived before any of your emails to them counts toward none, so importing older mail never stops a sequence.
+
 A reply that lands in the mailbox a send's reply-to named counts the same way, although that mailbox never wrote to the contact. That is what a [shared reply inbox](/guides/mailboxes/#a-shared-reply-inbox) relies on: the reply stops the sequence, runs the reply branch, and is credited to the mailbox that sent the email.
 
 When an upgrade repairs a reply marker that was provably created by a synchronized Sent message, the contact resumes at the next due step and the campaign reply totals update with it. An upgrade also restores provable human replies that were received by one campaign mailbox but referenced a thread started by another mailbox in the workspace. Warmbly recalculates address verification from the corrected delivery, open, click, reply, and bounce evidence. It leaves ambiguous historical replies untouched.
