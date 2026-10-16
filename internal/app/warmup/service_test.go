@@ -341,7 +341,8 @@ func TestPlacementReasonExplainsTheReading(t *testing.T) {
 	}, "", time.Now())
 	want := "25% of warmup mail delivered at Google, Microsoft and Yahoo landed in spam over 7 days (40 delivered). " +
 		"Other mail hosts (50% of 20) run their own filters and are not counted. " +
-		"Warmup and cold sending run at half volume with wider spacing until it is below 15%, then return to normal on their own."
+		"Warmup and cold sending run at half volume with wider spacing until it is below 15%, then step down to watch. " +
+		"Watch lifts below 7.5% on its own. Separate ramp limits still apply."
 	if d.Reason != want {
 		t.Fatalf("reason =\n%q\nwant\n%q", d.Reason, want)
 	}
