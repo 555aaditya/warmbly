@@ -1,0 +1,172 @@
+---
+title: Deploy on Coolify
+description: Run Warmbly on your VPS with Coolify, published Docker images, persistent volumes, and HTTPS. No host installer or source build required.
+---
+
+Use [deploy/docker-compose.coolify.yml](https://github.com/warmbly/warmbly/blob/main/deploy/docker-compose.coolify.yml), not the repository-root development Compose file. It runs the API, dashboard, admin panel, consumer, worker, tracking, realtime, forms, PostgreSQL, Redis, and NATS entirely in containers.
+
+There is no `install.sh`, source compilation, Docker socket mount, or host port mapping. Coolify owns the reverse proxy, certificates, and deployments. Data lives in Docker named volumes, so containers are disposable but the data is not.
+
+## Before you start
+
+- A working Coolify server with its proxy enabled. Start with at least **4 GB RAM** and enough disk for images, mailbox data, and backups. Actual requirements grow with usage.
+- An `amd64` or `arm64` VPS with outbound access to GHCR, Docker Hub, your mail providers, and their SMTP/IMAP ports. Warmbly is not an SMTP server; it sends through the mailboxes you connect.
+- Six DNS names pointing to your VPS. The examples below use `app.example.com`, `admin.example.com`, `api.example.com`, `realtime.example.com`, `track.example.com`, and `forms.example.com`. Replace every example with your own domain.
+- Public ports **80 and 443** available to Coolify's proxy. Do not open PostgreSQL, Redis, NATS, or the individual application ports to the internet.
+
+For real outreach, prefer a separate registered domain for tracking rather than a subdomain of the domain serving your dashboard and platform mail. This separates the reputation of campaign links from your own site. The shared example domain below is only to illustrate routing; see [deliverability](/guides/deliverability/).
+
+<Callout title="Why a generic GitHub deployment can fail">
+Warmbly is a multi-service application, not one Node or Go web server. Automatic Nixpacks/Railpack detection or selecting a single Dockerfile does not deploy its dependencies. The root Compose file also includes source-build definitions, development defaults, and host ports. The dedicated Coolify file avoids those paths and requires real secrets before starting. Without the failed deployment's logs, this is not a diagnosis of a particular failure.
+</Callout>
+
+## 1. Create the Compose resource
+
+Choose **one** of these methods. They run the same images.
+
+### Paste the file, no Git integration needed
+
+1. In your Coolify project and environment, select **+ New**.
+2. Select **Docker Compose Empty**.
+3. Paste the entire [raw Coolify Compose file](https://raw.githubusercontent.com/warmbly/warmbly/main/deploy/docker-compose.coolify.yml) into the Compose editor and save it.
+
+This is the simplest path if you only want to run Warmbly, not maintain a fork. Keep the complete file, including the `x-` anchors at the top and the `volumes` section at the bottom.
+
+### Use the GitHub repository
+
+1. Select **+ New**, choose a public Git repository, enter `https://github.com/warmbly/warmbly`, and check the repository.
+2. Select the **Docker Compose** build pack (called **Compose** under the build strategy in some versions), not Nixpacks, Railpack, or Dockerfile.
+3. Select branch `main`, set **Base Directory** to `/`, and **Docker Compose Location** to `/deploy/docker-compose.coolify.yml`.
+4. Save and load/reload the Compose definition. Confirm that the images start with `ghcr.io/warmbly/warmbly/` and that there are no `build:` entries.
+
+The path is relative to the repository root. Do not point Coolify at `/docker-compose.yml`, and do not add custom build or start commands. A Git checkout selects the Compose definition; `WARMBLY_TAG` selects the actual application release. Disable automatic Git deployments if you want upgrades only when you request them.
+
+## 2. Set environment variables
+
+In this resource's **Environment Variables**, supply the values below before deploying. URL values are browser-facing, not Docker service addresses.
+
+```dotenv
+APP_URL=https://app.example.com
+ADMIN_URL=https://admin.example.com
+API_PUBLIC_URL=https://api.example.com
+REALTIME_HOST=realtime.example.com
+TRACKING_DOMAIN=track.example.com
+FORMS_DOMAIN=forms.example.com
+WARMBLY_TAG=prod
+```
+
+Use **no trailing slash** in the three URLs. The three hostname values have **no scheme, port, or path**. In particular, do not put `:8080` in `API_PUBLIC_URL` or `:4000` in `REALTIME_HOST`. The file builds the secure WebSocket URL automatically.
+
+`prod` pulls the production release channel. For repeatable deployments, set `WARMBLY_TAG` to a published version such as `v0.6.55` from [GitHub Releases](https://github.com/warmbly/warmbly/releases). Every Warmbly service uses this same tag. Do not use a tag that has not finished publishing, `latest`, or the `-kafka` variants for this NATS stack.
+
+Generate **seven independent secrets** on a trusted computer. These commands only generate random strings; they do not install Warmbly or change your VPS:
+
+| Coolify variable | Command to generate its value |
+| --- | --- |
+| `POSTGRES_PASSWORD` | `openssl rand -hex 32` |
+| `AUTH_SECRET` | `openssl rand -hex 32` |
+| `INTERNAL_API_TOKEN` | `openssl rand -hex 32` |
+| `NODE_BROKER_TOKEN` | `openssl rand -hex 32` |
+| `SECRET_KEY_BASE` | `openssl rand -hex 64` |
+| `KMS_LOCAL_MASTER_KEY` | `openssl rand -base64 32` |
+| `CREDENTIALS_ENCRYPTION_KEY` | `openssl rand -hex 32` |
+
+Run the command separately for each row and paste only its output into that variable. Mark these as secrets in Coolify where supported. Keep them available to Compose at deployment/runtime; there is no build stage. Do not paste the command itself or leave a required value empty. Use the generated hexadecimal PostgreSQL password so it is safe inside the database URL without URL encoding.
+
+The same saved variables are reused across services. `AUTH_SECRET` also becomes realtime's `JWT_SECRET`; `NODE_BROKER_TOKEN` protects worker-only internal calls separately from public-edge services. You do not need to enter per-container copies.
+
+<Callout type="warn" title="Keep encryption keys and database credentials stable">
+Back up these variables securely. Losing or replacing `KMS_LOCAL_MASTER_KEY` or `CREDENTIALS_ENCRYPTION_KEY` makes existing encrypted data unreadable. Do not regenerate them on redeploy. Changing `POSTGRES_PASSWORD` in Coolify does not change the password inside an already initialized PostgreSQL volume; rotate it in PostgreSQL deliberately before updating clients.
+</Callout>
+
+### Platform email
+
+The initial default is `MAIL_TRANSPORT=log`, so the instance can boot without a mail relay. Platform emails are written to service logs instead of being delivered. Before inviting other users or relying on password resets, add:
+
+```dotenv
+MAIL_TRANSPORT=smtp
+EMAIL_ADDRESS=noreply@example.com
+EMAIL_NAME=Warmbly
+SMTP_HOST=smtp.your-provider.com
+SMTP_PORT=587
+SMTP_SECURITY=starttls
+SMTP_USERNAME=your-smtp-user
+SMTP_PASSWORD=your-smtp-password
+```
+
+Use your provider's actual details and a verified sender. For implicit TLS use `SMTP_PORT=465` and `SMTP_SECURITY=tls`. These variables reach both the backend and consumer, including notifications and digests. They are separate from campaign mailbox credentials. See [platform mail](/development/configuration/#platform-mail).
+
+## 3. Assign the domains to the right services
+
+In Coolify, configure a domain for each public service. The port suffix selects the **internal container port**, not a port the user puts in their browser:
+
+| Service | Coolify domain value | Public browser address |
+| --- | --- | --- |
+| `web` | `https://app.example.com:80` | `https://app.example.com` |
+| `admin` | `https://admin.example.com:80` | `https://admin.example.com` |
+| `backend` | `https://api.example.com:8080` | `https://api.example.com` |
+| `realtime` | `https://realtime.example.com:4000` | `wss://realtime.example.com/socket/websocket` |
+| `tracking` | `https://track.example.com:3000` | `https://track.example.com` |
+| `forms` | `https://forms.example.com:8090` | `https://forms.example.com` |
+
+For a Git-based resource, use **Domains**, select the receiving service, and add its domain. For Docker Compose Empty, configure the domain in each service's settings. Labels and screen names vary between Coolify versions, but the service/port mapping above is the important part.
+
+Do **not** add domains or public port mappings for `postgres`, `redis`, `nats`, `consumer`, or `worker`. Leave Coolify's normal proxy management enabled; this file does not supply manual proxy labels. You do not need a shared/predefined network with unrelated resources. Coolify handles routing and HTTPS certificates for these domains.
+
+The frontend containers listen on port **80**, not `5173`/`5174`. All `/health` requests belong to their own service; sending the API domain to `web` produces HTML instead of API responses. Compose defines readiness checks per HTTP service. Consumer and worker are background processes without HTTP endpoints.
+
+### Preserve real client IP addresses
+
+Set `TRUSTED_PROXIES`, `TRACKING_TRUSTED_PROXIES`, and `FORMS_TRUSTED_PROXIES` to the actual comma-separated source IPs/CIDRs of your Coolify reverse proxy, then redeploy. Determine these from your server's Docker network configuration; there is no universal Coolify subnet. Never use `0.0.0.0/0` or `::/0`. Only a trusted proxy may supply the original visitor's forwarded address.
+
+The safe default trusts no forwarded addresses. Leaving it unset behind a proxy means visitors share the proxy's IP for rate limits, audit records, and tracking classification. See [network and proxy](/development/configuration/#network-and-proxy).
+
+## 4. Deploy and claim the instance
+
+1. Select **Deploy** and inspect the deployment logs. Coolify pulls the images; it should not compile Go, Rust, Elixir, or Node. PostgreSQL, Redis, and NATS start first, then the backend applies database migrations automatically, then the remaining services start.
+2. Wait for the HTTP services to become healthy and for `consumer` and `worker` to remain running. Initial migrations can take longer than an ordinary restart.
+3. Open a terminal **inside the `backend` container** using Coolify and run:
+
+   ```bash
+   warmblyctl setup-link
+   ```
+
+4. Open the single-use `https://app.example.com/setup?token=...` link it prints and create the owner account. Treat the link as a password. It expires after 24 hours; run the command again to replace a lost or expired link while the instance is unclaimed.
+5. In the backend terminal, run `warmblyctl status`. Review any findings rather than interpreting an HTTP health check as a complete mail-delivery check. For details, see [first run](/development/first-run/) and [instance health](/development/instance-health/).
+
+The claim creates the initial platform admin; do not seed demo users into a real instance. After claiming, registration defaults to invitation-only. To access the admin panel, enroll a passkey or TOTP under **Settings > Security** and sign in again with that second factor. See [admin access](/development/admin-panel/).
+
+Confirm `https://api.example.com/health` responds successfully, the dashboard opens without a CORS error, and a worker appears in the admin fleet view. Then connect a mailbox and verify a controlled send and sync before using the instance for live campaigns. A healthy deployment alone does not prove your VPS can reach a mail provider.
+
+### Connecting mailboxes
+
+SMTP/IMAP mailbox connections require no Google or Microsoft app registration. Their TLS certificates are verified by this stack. Do not disable verification to work around provider settings.
+
+For OAuth mailbox connections, the file also passes `BOX_GOOGLE_CLIENT_ID`, `BOX_GOOGLE_CLIENT_SECRET`, `BOX_GOOGLE_OAUTH_CONNECT`, `BOX_OUTLOOK_CLIENT_ID`, and `BOX_OUTLOOK_CLIENT_SECRET` to the appropriate services. Gmail's UI switch follows `BOX_GOOGLE_OAUTH_CONNECT`. Set up your own provider application and the callback URLs documented under [configuration](/development/configuration/), then redeploy. These are mailbox-connection clients, not sign-in-with-Google credentials.
+
+## Updates, backups, and existing data
+
+- **Update through Coolify**, not Warmbly's in-app updater. This stack sets `UPDATER_URL=none` and never mounts the Docker socket. Back up first, set a new published `WARMBLY_TAG` (or refresh the `prod` images), and deploy with fresh image pulls enabled in your Coolify version. Merely restarting an existing container does not pull a new release. Keep all eight application images on the same release.
+- **Keep the resource and its volumes.** The persistent volumes are `postgres_data`, `redis_data`, `nats_data`, `blobs`, and `worker_state`. Coolify/Compose may prefix their actual Docker names with a resource identifier. Ordinary redeploys reuse them; deleting volumes, recreating the resource under another identifier, or running `docker compose down -v` does not.
+- **Back up data and secrets together.** Take logical PostgreSQL backups, preserve the blob volume and encryption keys, and include Redis, NATS, and worker state in your recovery plan. A live copy of the PostgreSQL data directory is not a consistent database backup. For a coordinated whole-instance snapshot, stop application services first. See [data control](/development/data-control/).
+- **Do not assume automatic backups.** PostgreSQL here is a Compose service, not necessarily a Coolify-managed database with scheduled backups. Configure and test your backup/restore process explicitly.
+- **Existing installations are a migration, not a fresh deploy.** This resource creates its own volumes and does not discover an installer deployment's data. Keep the existing instance and keys intact, and use the [backup/move procedure](/development/data-control/) or [workspace export/import](/guides/workspace-export-import/). Copying only the database or generating new encryption keys is not sufficient. Database migrations run on startup, so restoring an older image is not a guaranteed database rollback.
+
+## Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| Coolify builds source or fails looking for a package/start command | Select Docker Compose and the dedicated file path, or paste it into Docker Compose Empty. Remove Nixpacks/Railpack/Dockerfile settings. |
+| Required variable error before startup | Fill every `${VARIABLE:?}` value in this resource's environment, save, and redeploy. Keep all YAML anchors when pasting. |
+| Image not found or registry denied | Check the exact release tag and image name. These are public GHCR images; no Warmbly Cloud login is required. Check VPS DNS/network access and registry limits. |
+| Port already allocated | This file publishes no host ports. Remove mappings copied from the root Compose file; only the Coolify proxy should bind public 80/443. |
+| Proxy 502 or “no available server” | Check the failing service's runtime logs and health status, then its domain's internal port. Use `127.0.0.1` in container health checks. A certificate error is a separate DNS/proxy issue. |
+| PostgreSQL authentication fails after a redeploy | Restore the original `POSTGRES_PASSWORD` for the existing volume or rotate it inside PostgreSQL. Do not delete the data volume. |
+| Dashboard loads but requests fail | `API_PUBLIC_URL` must be the external HTTPS API origin, with no internal port or `/v1` suffix. The API must route to `backend:8080`, not nginx. Redeploy after changing environment variables so frontend `config.js` is regenerated. |
+| Realtime disconnects or the browser reports CSP/origin errors | Check DNS/HTTPS for `REALTIME_HOST`, its route to `realtime:4000`, and exact `APP_URL`/`ADMIN_URL` origins. The file shares the JWT secret and configures both WebSocket origin checks and frontend CSP. |
+| No emails arrive for resets or invitations | `MAIL_TRANSPORT=log` does not deliver mail. Configure SMTP, check backend and consumer logs, and confirm outbound provider ports are allowed. |
+| Mailbox connects but nothing sends or syncs | Inspect worker/consumer logs, worker heartbeat, provider credentials, TLS, and outbound SMTP/IMAP access. Do not open inbound mail ports or disable TLS checks. |
+
+For a failure this page does not cover, share the Coolify version, VPS architecture, selected release tag, failing service name, and relevant deployment/runtime error lines. **Redact secrets, claim links, mailbox credentials, and connection strings.**
+
+These instructions follow Coolify's official [Docker Compose](https://coolify.io/docs/applications/builds/docker-compose), [domain routing](https://coolify.io/docs/knowledge-base/domains), and [health check](https://coolify.io/docs/applications/configuration/health-checks) documentation.
