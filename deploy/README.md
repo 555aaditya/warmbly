@@ -30,6 +30,12 @@ deploy/
 
 The tracking Dockerfile lives at `tracking/Dockerfile`, and the frontends build from `web/Dockerfile` and `admin/Dockerfile` (nginx static builds with runtime config injection). The self-host compose is `docker-compose.yml` at the repo root.
 
+## Coolify
+
+Use [`docker-compose.coolify.yml`](docker-compose.coolify.yml) for an image-only deployment managed by Coolify. Paste it into Docker Compose Empty, or select `/deploy/docker-compose.coolify.yml` with the Docker Compose build pack and `/` as the base directory. It has no source builds, published host ports, development secrets, or Docker socket mounts. Configure the required environment values and public service domains before deploying. Full steps: [Deploy on Coolify](https://docs.warmbly.com/development/coolify/).
+
+Validate the definition with `bash deploy/check-coolify.sh` (Docker Compose v2 and `jq` required). This checks interpolation, mandatory secrets, internal wiring, persistence, and the absence of source builds or host ports. It does not deploy containers or verify Coolify's proxy.
+
 ## Building images
 
 ```bash
