@@ -179,7 +179,7 @@ func (r *contactRepository) campaignStepsForContact(ctx context.Context, campaig
 		return nil, "", errx.InternalError()
 	}
 	defer rows.Close()
-	var steps []models.ContactCampaignStep
+	steps := make([]models.ContactCampaignStep, 0)
 	var failureReason string
 	var failedAt time.Time
 	emails := 0

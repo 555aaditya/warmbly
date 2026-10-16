@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"testing"
 
@@ -11,6 +12,34 @@ import (
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
 	"github.com/warmbly/warmbly/internal/models"
 )
+
+func TestLiveContactCampaignStateEmptySteps(t *testing.T) {
+	handle, pool := liveContactDB(t)
+	f := newSharedOrgFixture(t, pool)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `INSERT INTO campaign_leads (campaign_id, contact_id) VALUES ($1, $2)`, f.campaign, f.contact); err != nil {
+		t.Fatal(err)
+	}
+
+	states, xerr := NewContactRepostory(handle).ListCampaignStates(ctx, f.org, f.contact)
+	if xerr != nil || len(states) != 1 {
+		t.Fatalf("campaign states: %v (%d states)", xerr, len(states))
+	}
+	if states[0].Steps == nil || len(states[0].Steps) != 0 || states[0].TotalSteps != 0 {
+		t.Fatalf("empty campaign must have a non-nil empty steps slice: %+v", states[0])
+	}
+	payload, err := json.Marshal(states[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if string(fields["steps"]) != "[]" {
+		t.Fatalf("steps JSON = %s, want []", fields["steps"])
+	}
+}
 
 // Regression cover for issue #187: adding a contact to a campaign silently did
 // nothing whenever the campaign had been created by a different member of the
