@@ -790,7 +790,7 @@ function OverviewTab({ status, loading, mailbox }: { status?: import("@/lib/api/
                         {status.errors.map((e: AccountError) => (
                             <div key={e.id} className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2">
                                 <div className="text-[12px] font-medium text-rose-800">{e.title}</div>
-                                <div className="text-[10px] text-rose-700/80 mt-0.5">Last reported {new Date(e.created_at).toLocaleString()}{e.operation === "send" ? " · Sending" : e.operation === "sync" ? " · Mailbox sync" : ""}</div>
+                                <div className="text-[10px] text-rose-700/80 mt-0.5">Reported {new Date(e.created_at).toLocaleString()}{e.operation === "send" ? " · Sending" : e.operation === "sync" ? " · Mailbox sync" : ""}</div>
                                 <div className="text-[11px] text-rose-700/90 mt-0.5 leading-relaxed">{e.message}</div>
                                 {e.action_required && <div className="text-[11px] text-rose-900 mt-1 font-medium">{e.action_required}</div>}
                                 {e.id === firstCredentialErrorId &&
