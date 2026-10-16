@@ -307,7 +307,7 @@ A reply from a different mailbox keeps the conversation's subject and its In-Rep
 
 **Forward** sends the message you picked to someone new. The subject gets `Fwd:` and the To line starts empty. What you type is an optional note; you can send a forward without one. The recipient gets your note, then the sending mailbox's signature (when signature sync is on), then a `Forwarded message` block with the original From, Date, Subject, To and Cc lines and the original message underneath, formatting included. The Date line uses the sending mailbox's time zone.
 
-The composer shows the message it will forward under your note; expand **Forwarded message** to read it before you send. Attachments on the original are not forwarded. If only a preview of the original is stored (the thread shows "Only a preview of this message is stored"), the composer says so, and the forward carries that preview. Forwarding one of your own tracked sends puts its links back to their real destinations, so the new recipient's clicks do not count against the original send.
+The [suppression list](/guides/unsubscribe/#the-suppression-list) does not apply to a forward, so you can forward to an address or domain it keeps out of campaigns. The composer shows the message it will forward under your note; expand **Forwarded message** to read it before you send. Attachments on the original are not forwarded. If only a preview of the original is stored (the thread shows "Only a preview of this message is stored"), the composer says so, and the forward carries that preview. Forwarding one of your own tracked sends puts its links back to their real destinations, so the new recipient's clicks do not count against the original send.
 
 Once sent, the forward shows in the conversation you forwarded from, as the next outgoing message with its forwarded block, whichever mailbox sent it. While it waits to go out (the undo window, or a scheduled time) it is listed with the conversation's scheduled sends. It appears once the sending mailbox's Sent folder syncs, and that sync files the copy into this conversation rather than adding a second one. Only Warmbly files it there: the recipient gets an ordinary forward that starts a conversation of its own, with no In-Reply-To or References pointing at the original, and a later reply in the conversation still answers its last message from the other side, never the forward.
 
@@ -347,7 +347,7 @@ For drafts written automatically on every inbound reply and held for approval, t
 
 The window title bar carries **Full screen**, which lifts the same composer to the centre of the screen over a dimmed backdrop for writing something longer. Click the button again, click the backdrop, or press **Escape** to drop it back to the corner with the draft intact. A second **Escape** closes the window, saving to Drafts as usual. **Minimize** always docks to the bottom right.
 
-**To** searches contacts as you type and accepts raw addresses. Suppressed recipients (bounced, complained, unsubscribed) are flagged before you write a word, and the send is blocked.
+**To** searches contacts as you type and accepts raw addresses. Suppressed recipients (bounced, complained, unsubscribed, or on a domain you listed) are flagged before you write a word, and the send is blocked.
 
 **Seeds**, beside Cc and Bcc, adds your workspace's own [seed inboxes](/guides/placement-tests/#your-own-seed-inboxes) to To, for a quick look by hand at where a message lands. Tick seeds one by one, a whole provider at once, or all of them; the picker remembers your last choice in this browser. It appears once the workspace has a seed inbox and you have the **View campaigns** permission. This sends one message addressed to every seed you add, so each seed sees the others. For a separate copy per seed and a verdict read back automatically, run a [placement test](/guides/placement-tests/#choosing-which-of-your-seeds-get-a-copy) on the seeds you choose.
 
@@ -408,7 +408,9 @@ However low that goes, every mailbox keeps at least 50 recipients a day, so a co
 
 Your plan sets a second, workspace-wide allowance across all your mailboxes together: twice the plan's daily email limit in any 24 hours, and never less than 100. The free trial's 20 emails a day gives 100 unibox recipients, Starter's 150 gives 300, and Grow's 3,000 gives 6,000. An approved increase to your daily limit raises it too. A plan with no daily limit has no workspace allowance, and neither does a self-hosted instance without billing.
 
-A mailbox that is paused or reconnecting, held after a send problem, or cooling down after a provider limit sends nothing from the unibox either, and neither does a send to an address on your suppression list.
+A mailbox that is paused or reconnecting, held after a send problem, or cooling down after a provider limit sends nothing from the unibox either.
+
+A new email or a reply to an address on your [suppression list](/guides/unsubscribe/#the-suppression-list), directly or through its domain, is refused before it is queued, with a message naming the address and the entry that matched it. A forward is not: it passes on mail you already received to people you picked by hand, so you can forward a lead to a client or colleague whose domain you keep out of campaigns. Fair use still counts a forward's recipients.
 
 When a send is refused for one of those reasons, it is not sent and the mailbox owner sees an error naming the cause and the limit it reached, so they can send it later or from another mailbox. If Warmbly cannot confirm the email reached the mailbox's sending worker, the error says so; check **Sent** before sending it again.
 

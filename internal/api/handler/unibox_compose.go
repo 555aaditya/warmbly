@@ -148,9 +148,8 @@ type UniboxComposeRequest struct {
 	ScheduledAt *time.Time `json:"scheduled_at,omitempty"`
 }
 
-// UniboxCompose sends a brand-new outbound email (not a reply). Unlike the
-// reply path it enforces org-wide recipient suppression before queueing, and
-// supports auto mailbox selection.
+// UniboxCompose sends a brand-new outbound email (not a reply), with
+// automatic mailbox selection. The send service refuses a suppressed recipient.
 // POST /unibox/compose
 func (h *Handler) UniboxCompose(c *gin.Context) {
 	orgID := middleware.GetOrganizationID(c)
@@ -168,34 +167,6 @@ func (h *Handler) UniboxCompose(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		errx.Handle(c, errx.InvalidBody(err))
 		return
-	}
-
-	// Suppression gate: a recipient who bounced, complained, or
-	// unsubscribed org-wide must not be reachable through compose.
-	if h.AdvancedService != nil {
-		all := make([]string, 0, len(req.To)+len(req.CC)+len(req.BCC))
-		all = append(all, req.To...)
-		all = append(all, req.CC...)
-		all = append(all, req.BCC...)
-		for _, rcpt := range all {
-			addr := bareAddress(rcpt)
-			if addr == "" {
-				continue
-			}
-			suppressed, reason, serr := h.AdvancedService.ShouldSuppressRecipient(c.Request.Context(), *orgID, addr)
-			if serr != nil {
-				errx.Handle(c, serr)
-				return
-			}
-			if suppressed {
-				msg := addr + " is suppressed for this workspace"
-				if reason != "" {
-					msg += " (" + reason + ")"
-				}
-				errx.Handle(c, errx.New(errx.BadRequest, msg))
-				return
-			}
-		}
 	}
 
 	var accountID *uuid.UUID

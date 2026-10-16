@@ -73,6 +73,24 @@ type emailSendService struct {
 	trackedLinkRepo repository.TrackedLinkRepository
 	// replyObserver hears about queued replies in an inbox thread. Optional.
 	replyObserver ReplyObserver
+	// suppression refuses a suppressed recipient before the send is queued.
+	// Optional: admission still refuses it at send time.
+	suppression SuppressionLookup
+}
+
+// SuppressionLookup returns the suppression entry a recipient matches, or nil.
+type SuppressionLookup interface {
+	IsRecipientSuppressed(ctx context.Context, organizationID uuid.UUID, email string) (*models.SuppressedRecipient, error)
+}
+
+// WireSuppression attaches the workspace suppression list.
+func (s *emailSendService) WireSuppression(l SuppressionLookup) {
+	s.suppression = l
+}
+
+// SuppressionAware is the optional capability the caller uses to attach it.
+type SuppressionAware interface {
+	WireSuppression(l SuppressionLookup)
 }
 
 // ReplyObserver is told about a reply queued into an existing inbox thread,
@@ -178,6 +196,10 @@ func (s *emailSendService) SendEmail(ctx context.Context, userID, orgID, account
 		if !canUse {
 			return nil, errx.New(errx.Forbidden, "Unibox requires an active trial or paid subscription")
 		}
+	}
+
+	if xerr := s.checkSuppression(ctx, orgID, req); xerr != nil {
+		return nil, xerr
 	}
 
 	// Determine send mode and schedule time

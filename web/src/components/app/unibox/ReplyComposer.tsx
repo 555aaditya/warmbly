@@ -88,6 +88,7 @@ import {
 
 import { useReplyDraft } from "@/lib/unibox/useReplyDraft";
 import { answerAddress, replyInboxSender } from "@/lib/unibox/replyInbox";
+import { errorMessage } from "@/lib/errors/message";
 
 export type { ReplyMode, ReplySeed } from "@/lib/unibox/replyDraft";
 
@@ -470,8 +471,8 @@ export function ReplyComposer({ threadId, replyTo, mode, seed, onClose }: ReplyC
             const completed = draft.complete(submittedDraft);
             if (!completed.cleared) toast.error("Reply queued, but the saved draft could not be removed. Discard it before sending again.");
             if (completed.close) onClose();
-        } catch {
-            toast.error(mode === "forward" ? "Failed to forward" : "Failed to send reply");
+        } catch (err) {
+            toast.error(errorMessage(err, mode === "forward" ? "Failed to forward" : "Failed to send reply"));
         } finally {
             setIsSending(false);
         }

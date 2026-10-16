@@ -718,6 +718,8 @@ Auth: **Scope** `SEND_CAMPAIGNS` · **Org permission** `send_campaigns`. Require
 
 `task_id` identifies the queued send task. `scheduled_at` is the resolved dispatch time (immediate for `instant`, the next gap for `smart`, or the requested time for `scheduled`).
 
+A recipient on the workspace [suppression list](/guides/unsubscribe/#the-suppression-list), directly or through its domain, answers `400` with `code: "recipient_suppressed"` and a `message` naming the address. Nothing is queued.
+
 ## Connect a mailbox (onboarding)
 
 The three onboarding routes connect a new mailbox, and a fourth moves an existing one to an app password. They are **session only (not available to API keys)** because they write user-encrypted provider refresh tokens through the SPA popup flow.

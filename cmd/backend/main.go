@@ -1513,6 +1513,9 @@ func main() {
 		if aware, ok := emailSendService.(emailsend.TrackedLinksAware); ok {
 			aware.WireTrackedLinks(trackedLinkRepository)
 		}
+		if aware, ok := emailSendService.(emailsend.SuppressionAware); ok {
+			aware.WireSuppression(advancedRepository)
+		}
 		composeService = compose.NewService(emailRepostory, repository.NewComposeRepository(primaryDB))
 		// uniboxService is constructed here (rather than alongside the
 		// other service constructors above) because cancel-scheduled

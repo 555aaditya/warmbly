@@ -36,6 +36,19 @@ func (e *ManualSendLimitError) Error() string {
 
 func (e *ManualSendLimitError) Unwrap() error { return ErrManualSendLimit }
 
+var ErrRecipientSuppressed = fmt.Errorf("%w: a recipient is on the workspace suppression list", ErrSendAdmissionDenied)
+
+// RecipientSuppressedError names the recipient the suppression list matched.
+type RecipientSuppressedError struct {
+	Address string
+}
+
+func (e *RecipientSuppressedError) Error() string {
+	return fmt.Sprintf("%v (%s)", ErrRecipientSuppressed, e.Address)
+}
+
+func (e *RecipientSuppressedError) Unwrap() error { return ErrRecipientSuppressed }
+
 func SendAdmissionCode(err error) string {
 	switch {
 	case errors.Is(err, ErrCampaignDailyLimit):
@@ -44,6 +57,8 @@ func SendAdmissionCode(err error) string {
 		return "MAILBOX_SENDING_PLAN_DENIED"
 	case errors.Is(err, ErrManualSendLimit):
 		return "MANUAL_SEND_LIMIT_REACHED"
+	case errors.Is(err, ErrRecipientSuppressed):
+		return "RECIPIENT_SUPPRESSED"
 	case errors.Is(err, ErrSendAdmissionDenied):
 		return "SEND_ADMISSION_DENIED"
 	default:
@@ -169,7 +184,7 @@ func (r *taskRepository) ReserveOutbound(ctx context.Context, in OutboundReserva
 	if lane != "warmup" && lane != "campaign" && lane != "email" && lane != "placement" {
 		return uuid.Nil, ErrSendAdmissionDenied
 	}
-	if err = checkSendRecipients(ctx, tx, in.OrganizationID, recipients); err != nil {
+	if err = checkSendRecipients(ctx, tx, in.TaskID, in.OrganizationID, lane, recipients); err != nil {
 		return uuid.Nil, err
 	}
 	var timezone string
@@ -336,16 +351,23 @@ func checkManualSendPlan(ctx context.Context, tx pgx.Tx, task, org uuid.UUID, n,
 	return nil
 }
 
-func checkSendRecipients(ctx context.Context, tx pgx.Tx, org uuid.UUID, recipients []string) error {
-	var denied bool
-	err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM unnest($2::text[]) recipient WHERE recipient_suppressed($1,recipient))`, org, recipients).Scan(&denied)
+// checkSendRecipients refuses a send to a suppressed recipient, naming the
+// first one. A unibox forward is exempt: it relays mail already received to
+// people the sender picked by hand, so it is not outreach.
+func checkSendRecipients(ctx context.Context, tx pgx.Tx, task, org uuid.UUID, lane string, recipients []string) error {
+	var match string
+	err := tx.QueryRow(ctx, `SELECT r.recipient FROM unnest($2::text[]) WITH ORDINALITY r(recipient,i)
+	 WHERE recipient_suppressed($1,r.recipient)
+	 AND NOT ($4='email' AND EXISTS(SELECT 1 FROM email_tasks et WHERE et.task_id=$3
+	   AND (et.forwarded_html<>'' OR et.forwarded_plain<>'' OR et.forward_thread_id IS NOT NULL)))
+	 ORDER BY r.i LIMIT 1`, org, recipients, task, lane).Scan(&match)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	if denied {
-		return ErrSendAdmissionDenied
-	}
-	return nil
+	return &RecipientSuppressedError{Address: match}
 }
 
 func checkMailboxSendingPlan(ctx context.Context, tx pgx.Tx, task, mailbox uuid.UUID) error {
@@ -465,7 +487,7 @@ func (r *taskRepository) BeginOutbound(ctx context.Context, task, mailbox, worke
 	}
 	lane, err := sendAuthority(ctx, tx, task, mailbox, org, worker, provider, true)
 	if err == nil {
-		err = checkSendRecipients(ctx, tx, org, recipients)
+		err = checkSendRecipients(ctx, tx, task, org, lane, recipients)
 	}
 	if err == nil && lane == "campaign" {
 		err = checkCampaignReservation(ctx, tx, task)

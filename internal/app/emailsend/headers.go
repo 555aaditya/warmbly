@@ -11,6 +11,9 @@ import (
 const (
 	ErrCodeInvalidRecipient = "invalid_recipient"
 	ErrCodeInvalidMessageID = "invalid_message_id"
+	// ErrCodeRecipientSuppressed refuses a send to an address on the
+	// workspace suppression list, directly or through its domain.
+	ErrCodeRecipientSuppressed = "recipient_suppressed"
 )
 
 // checkHeaderValues requires every to, cc and bcc entry to be exactly one

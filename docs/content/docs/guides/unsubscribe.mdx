@@ -150,7 +150,7 @@ Turn this off with **Settings > Sending > Honour replies that ask to stop** if y
 | Added by hand | Someone on the team added it |
 | Imported | Pasted in as part of a list |
 
-The list is workspace-wide. An entry stops the address in every campaign, in new campaigns created later, and in the unibox composer, which refuses to send to it. Import a list containing a suppressed address and the contact is created but never mailed. The [launch check](/guides/campaigns/#the-launch-check-on-your-list) counts suppressed leads out of a campaign's deliverable total, so what the campaign says it will send is what it sends.
+The list is workspace-wide. An entry stops the address in every campaign, in new campaigns created later, and in unibox new emails and replies, which are refused with the address named. A unibox [forward](/guides/unibox/#forwarding) is the one exception: it passes on mail already received to recipients picked by hand, so a domain listed to keep clients out of outreach does not stop you forwarding them a lead. Import a list containing a suppressed address and the contact is created but never mailed. The [launch check](/guides/campaigns/#the-launch-check-on-your-list) counts suppressed leads out of a campaign's deliverable total, so what the campaign says it will send is what it sends.
 
 **Adding entries.** Press **Add** and paste addresses or domains, one per line or as a column from a spreadsheet. A bare domain (`acme.com` or `@acme.com`) suppresses every address at it, which is the usual way to keep customers, partners and your own company out of outreach. An optional reason is kept with each entry.
 
