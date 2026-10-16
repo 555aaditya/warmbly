@@ -1,7 +1,14 @@
 import type Inbox from "@/lib/api/models/app/emails/Inbox";
+import type AccountStatus from "@/lib/api/models/app/analytics/AccountStatus";
 import { diagnosticSendingAllowed, diagnosticWarmupActive } from "./diagnosticParticipation";
 
 export type MailboxDisplayStatus = "healthy" | "warming" | "paused" | "inactive";
+
+export function mailboxColdActivity(status?: Pick<AccountStatus, "send_lifecycle" | "in_campaign">) {
+    const lifecycle = status?.send_lifecycle;
+    const resting = !!lifecycle && lifecycle.state !== "active";
+    return { resting, sending: !!status?.in_campaign && !resting };
+}
 
 // Account activity is not proof of deliverability or reputation readiness.
 export default function mailboxDisplayStatus(box: Inbox): MailboxDisplayStatus {

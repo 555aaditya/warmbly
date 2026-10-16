@@ -285,13 +285,14 @@ type AccountHealth struct {
 }
 
 type AccountError struct {
-	ID             uuid.UUID `json:"id"`
-	ErrorCode      string    `json:"error_code"`
-	Severity       string    `json:"severity"`
-	Title          string    `json:"title"`
-	Message        string    `json:"message"`
-	ActionRequired *string   `json:"action_required,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID             uuid.UUID              `json:"id"`
+	ErrorCode      string                 `json:"error_code"`
+	Severity       string                 `json:"severity"`
+	Title          string                 `json:"title"`
+	Message        string                 `json:"message"`
+	ActionRequired *string                `json:"action_required,omitempty"`
+	CreatedAt      time.Time              `json:"created_at"`
+	Operation      MailTransportOperation `json:"operation,omitempty"`
 }
 
 type AccountDailyUsage struct {

@@ -5,6 +5,7 @@ import { browseString, mailboxSort, mailboxTab, type MailboxTab } from "@/lib/br
 import { useSearchParams } from "@/hooks/useSearchParams";
 import useMailboxTagFilter from "@/hooks/useMailboxTagFilter";
 import groupMailboxes from "@/lib/groupMailboxes";
+import { mailboxColdActivity } from "@/lib/mailboxStatus";
 import { useAppStore } from "@/stores/useAppStore";
 import toast from "react-hot-toast/headless";
 import { useQueryClient } from "@tanstack/react-query";
@@ -1426,8 +1427,7 @@ function MailboxStatusPill({ box, status, historicalIssue, warming, compact = fa
     const error = status?.errors?.[0];
     const lifecycle = status?.send_lifecycle;
     const inCampaign = !!status?.in_campaign;
-    const resting = inCampaign && !!lifecycle && lifecycle.state !== "active";
-    const sending = inCampaign && !resting;
+    const { resting, sending } = mailboxColdActivity(status);
 
     let problem: { label: string; text: string; Icon: LucideIcon; title: string } | null = null;
     if (box.status === "revoked") problem = { label: "Reconnect", text: "text-rose-600", Icon: UnplugIcon, title: "Access was revoked at the provider. Reconnect the mailbox to send and warm again." };
