@@ -2,11 +2,14 @@ package warmup
 
 import (
 	"context"
+	"math"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/warmbly/warmbly/internal/app/warmupramp"
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/repository"
@@ -205,4 +208,53 @@ func deliverWarmup(t *testing.T, handle *db.DB, sender, recipient uuid.UUID, off
 			recipient, sender, offset, ids)
 	}
 	return ids
+}
+
+func TestLiveHealthPlacementRecoveryUsesTheDisplayedUTCWindow(t *testing.T) {
+	repo, handle := liveWarmupRepo(t)
+	f, partner := newFreePoolAccount(t, handle), newFreePoolAccount(t, handle)
+	now := time.Date(2026, 10, 16, 4, 30, 0, 0, time.UTC)
+	start := models.WarmupPlacementWindowStart(now)
+	execSQL(t, handle.Pool, `UPDATE email_accounts SET provider = 'gmail' WHERE id = $1`, partner.account)
+	execSQL(t, handle.Pool, `UPDATE warmup_pool_participants SET health_state = 'throttled',
+		last_health_reason = $2, blocked_until = $3, health_signals_from = $4 WHERE email_account_id = $1`,
+		f.account, placementReasonMarker, now.Add(72*time.Hour), start.Add(-48*time.Hour))
+	for _, batch := range []struct {
+		at          time.Time
+		inbox, spam int
+	}{
+		{start.Add(-time.Microsecond), 5, 4},
+		{start, 28, 2},
+	} {
+		execSQL(t, handle.Pool, `INSERT INTO warmup_received
+			(email_account_id, internal_id, message_id, sender_account_id, created_at, first_landing)
+			SELECT $1, gen_random_uuid(), gen_random_uuid()::text, $2, $3,
+			CASE WHEN n <= $4 THEN 'inbox' ELSE 'spam' END FROM generate_series(1, $5) n`,
+			partner.account, f.account, batch.at, batch.inbox, batch.inbox+batch.spam)
+	}
+	old, err := repo.HealthMetricCounts(t.Context(), f.account, now.Add(-7*24*time.Hour), now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour))
+	if err != nil || old.Placement.MajorDelivered != 39 || old.Placement.MajorSpam != 6 {
+		t.Fatalf("old rolling sample = %+v, err = %v", old.Placement, err)
+	}
+	svc := NewService(repo).(*service)
+	svc.now = func() time.Time { return now }
+	health, xerr := svc.evaluateAndPersistAnyPool(t.Context(), f.account)
+	if xerr != nil {
+		t.Fatal(xerr)
+	}
+	if health.HealthState != models.WarmupHealthHealthy || health.BlockedUntil != nil || warmupramp.HealthVolumeMultiplier(health.HealthState) != 1 {
+		t.Fatalf("recovered mailbox kept a future throttle: %+v", health)
+	}
+	if math.Abs(health.LastHealthScore-100.0*2/30) > 0.001 {
+		t.Fatalf("health did not use the displayed 30-delivery sample: %+v", health)
+	}
+	// The placement boundary must not erase complaints or tampering from the preceding rolling week.
+	execSQL(t, handle.Pool, `INSERT INTO warmup_tampering_events(email_account_id, message_id, kind, created_at)
+		VALUES ($1, gen_random_uuid()::text, 'deletion', $2)`, f.account, start.Add(-time.Microsecond))
+	execSQL(t, handle.Pool, `INSERT INTO warmup_spam_reports(reporter_account_id, reported_account_id, message_id, report_type, created_at)
+		VALUES ($1, $2, gen_random_uuid()::text, 'user_complaint', $3)`, partner.account, f.account, start.Add(-time.Microsecond))
+	m, err := svc.loadMetrics(t.Context(), f.account, health)
+	if err != nil || m.PlacementSample != 30 || m.DeletionsLast7d != 1 || m.UserComplaintsLast7d != 1 {
+		t.Fatalf("separate safety windows = %+v, err = %v", m, err)
+	}
 }

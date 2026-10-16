@@ -2,6 +2,7 @@ package models
 
 import (
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -40,6 +41,13 @@ const (
 	// unseen by its recipient before it counts as unconfirmed.
 	WarmupUnconfirmedAfterHours = 24
 )
+
+// WarmupPlacementWindowStart includes today and the preceding six UTC dates.
+func WarmupPlacementWindowStart(now time.Time) time.Time {
+	now = now.UTC()
+	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	return day.AddDate(0, 0, -(WarmupPlacementWindowDays - 1))
+}
 
 // WarmupPlacementEvidence is one sender's verified warmup deliveries, split
 // into the providers that judge it and every other host. Only Google,

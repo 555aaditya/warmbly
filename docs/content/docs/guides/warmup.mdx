@@ -337,13 +337,17 @@ Pools enforce permission and restrictive complaint/bounce/authentication evidenc
 
 The thresholds for each signal are in the [health bands](/guides/deliverability/#health-bands) table.
 
+Watch and throttled standing are warnings, not connection failures. They do not subtract a fixed number of points from mailbox health: the score is still capped by the measured inbox rate, and separate account errors can lower it further. The score is overall health out of 100, not another inbox percentage.
+
 ### How spam placement is judged
 
 Spam placement is a folder outcome, not misconduct or evidence of diagnostic reputation benefit. It slows sending but does not alone quarantine or block a recipient:
 
 - `10%` puts the mailbox on watch: warmup and cold sending are spaced out a little more.
 - `20%` throttles it: warmup keeps running at half volume with double spacing, and cold volume is halved.
-- A watch lifts below `7.5%` and a throttle below `15%`, on their own. They lift below the line that set them rather than at it, so a mailbox sitting near a line is not flipped in and out of a band (and announced to your integrations) with every delivery.
+- A throttle steps down to watch below `15%`, then returns to normal below `7.5%`, on its own. They lift below the line that set them rather than at it, so a mailbox sitting near a line is not flipped in and out of a band (and announced to your integrations) with every delivery.
+
+Placement uses today and the preceding six UTC dates, matching the seven-day inbox rate on Deliverability and Emails. Older placement results stop affecting volume at the same boundary as the displayed rate. Complaints and mailbox tampering keep their separate rolling windows.
 
 Only Google, Microsoft and Yahoo recipients judge a mailbox. They filter on sender reputation, which is what your cold email is judged on at those same providers. Every other mail host runs its own filter, often a stock rule set tuned for that one server, so a message landing in its spam folder is not evidence that the mail is spam. Those landings are shown in the placement view and never held against the mailbox, in the bands, the ramp or the [Advisor](/guides/advisor/). The rate is taken over verified deliveries at the three providers in the last seven days, and needs `20` of them before it acts.
 

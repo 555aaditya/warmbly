@@ -686,14 +686,14 @@ func (s *service) evaluateAndPersist(ctx context.Context, participant *models.Wa
 func (s *service) loadMetrics(ctx context.Context, accountID uuid.UUID, participant *models.WarmupParticipantHealth) (*models.WarmupHealthMetrics, error) {
 	signalsFrom := participant.HealthSignalsFrom
 	now := s.now().UTC()
-	since := func(window time.Duration) time.Time {
-		start := now.Add(-window)
+	since := func(start time.Time) time.Time {
 		if signalsFrom.After(start) {
 			return signalsFrom
 		}
 		return start
 	}
-	counts, err := s.repo.HealthMetricCounts(ctx, accountID, since(7*24*time.Hour), since(30*24*time.Hour))
+	counts, err := s.repo.HealthMetricCounts(ctx, accountID,
+		since(models.WarmupPlacementWindowStart(now)), since(now.Add(-7*24*time.Hour)), since(now.Add(-30*24*time.Hour)))
 	if err != nil {
 		return nil, fmt.Errorf("HealthMetricCounts: %w", err)
 	}
@@ -930,8 +930,8 @@ func evaluatePlacement(m *models.WarmupHealthMetrics, prior models.WarmupHealthS
 		return evaluationDecision{
 			State:        models.WarmupHealthThrottled,
 			BlockedUntil: &until,
-			Reason: fmt.Sprintf("%s Warmup and cold sending run at half volume with wider spacing until it is below %s, then return to normal on their own.",
-				placementSummary(m), fmtPct(spamPlacementThrottlePct*spamPlacementExitFactor)),
+			Reason: fmt.Sprintf("%s Warmup and cold sending run at half volume with wider spacing until it is below %s, then step down to watch. Normal volume returns below %s on its own.",
+				placementSummary(m), fmtPct(spamPlacementThrottlePct*spamPlacementExitFactor), fmtPct(spamPlacementWatchPct*spamPlacementExitFactor)),
 			Score: rate,
 		}
 	case rate >= spamPlacementWatchPct,

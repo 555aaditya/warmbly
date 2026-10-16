@@ -30,12 +30,12 @@ func (r *countingRepo) ListParticipantHealth(context.Context) ([]models.WarmupPa
 	r.hit("ListParticipantHealth")
 	return r.rows, nil
 }
-func (r *countingRepo) HealthMetricCounts(ctx context.Context, id uuid.UUID, a, b time.Time) (models.WarmupHealthCounts, error) {
+func (r *countingRepo) HealthMetricCounts(ctx context.Context, id uuid.UUID, a, b, c time.Time) (models.WarmupHealthCounts, error) {
 	r.hit("HealthMetricCounts")
 	if r.onMetrics != nil {
 		r.onMetrics()
 	}
-	return r.zeroMetricsRepo.HealthMetricCounts(ctx, id, a, b)
+	return r.zeroMetricsRepo.HealthMetricCounts(ctx, id, a, b, c)
 }
 func (r *countingRepo) UpdateParticipantHealth(_ context.Context, id uuid.UUID, state models.WarmupHealthState, _ *time.Time, _ string, _ float64) (*models.WarmupParticipantHealth, error) {
 	r.hit("UpdateParticipantHealth")

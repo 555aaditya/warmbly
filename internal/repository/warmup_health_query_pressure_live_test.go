@@ -51,7 +51,7 @@ func TestLiveWarmupHealthCountsShareScansWithoutChangingSignals(t *testing.T) {
 	since7d, since30d := now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour)
 	r := NewWarmupRepository(f.pool)
 	for _, id := range []uuid.UUID{f.sender, f.recipient, uuid.New()} {
-		got, err := r.HealthMetricCounts(ctx, id, since7d, since30d)
+		got, err := r.HealthMetricCounts(ctx, id, since7d, since7d, since30d)
 		want := legacyHealthCounts(t, f.pool, id, since7d, since30d)
 		if err != nil || !reflect.DeepEqual(got, want) {
 			t.Fatalf("empty health=%+v want=%+v err=%v", got, want, err)
@@ -79,7 +79,7 @@ func TestLiveWarmupHealthCountsShareScansWithoutChangingSignals(t *testing.T) {
 		}
 	}
 	for _, id := range []uuid.UUID{f.sender, f.recipient, uuid.New()} {
-		got, err := r.HealthMetricCounts(ctx, id, since7d, since30d)
+		got, err := r.HealthMetricCounts(ctx, id, since7d, since7d, since30d)
 		want := legacyHealthCounts(t, f.pool, id, since7d, since30d)
 		if err != nil || !reflect.DeepEqual(got, want) {
 			t.Fatalf("health=%+v want=%+v err=%v", got, want, err)

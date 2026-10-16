@@ -101,7 +101,7 @@ Google, Microsoft, and Yahoo family totals are not interchangeable with their co
 
 ## Health bands
 
-Each mailbox sits in a band, shown as a colored chip. The band controls how Warmbly treats it.
+Each mailbox sits in a band, shown as a colored chip. The band controls how Warmbly treats it. Watch and throttled are amber warnings on Emails, not red errors, unless a separate account problem is present. They do not apply a flat health-score deduction on top of the inbox-rate cap. Mailbox health is a score out of 100, not an inbox percentage.
 
 | Band | Spam placement | Complaint rate | Bounce rate | Other triggers |
 | --- | --- | --- | --- | --- |
@@ -114,11 +114,13 @@ A mailbox enters a band by crossing any single threshold. What each band does:
 
 - **Healthy**: sending normally, nothing to do.
 - **Watch**: warmup volume lowered and spacing increased. Cold volume is dampened by the same factor, so it slows across both before anything stricter. Lifts once spam placement is back below `7.5%`.
-- **Throttled**: warmup keeps running at half volume with double spacing, because warming is how placement recovers, and cold volume is halved. Lifts once spam placement is back below `15%`.
+- **Throttled**: warmup keeps running at half volume with double spacing, because warming is how placement recovers, and cold volume is halved. Steps down to watch once spam placement is back below `15%`, then returns to normal below `7.5%`.
 - **Quarantine**: out of the shared paid warmup pool for `7 days`, as neither sender nor recipient. Cold sending is paused.
 - **Blocked**: out of the shared pool for `30 days`.
 
 Spam placement never goes past throttled. It is a reading of reputation, and warming is how a mailbox recovers, so it slows the mailbox down and lifts on its own; there is nothing to appeal.
+
+Placement decisions and the headline inbox rate use the same seven UTC dates: today and the preceding six days. This date boundary does not shorten the rolling complaint or tampering windows.
 
 **Sample floors** stop one bad event flipping a new mailbox: spam placement needs `20+` verified warmup deliveries in `7 days`, complaints need `100+` delivered emails in `30 days`.
 
