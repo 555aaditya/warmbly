@@ -2,6 +2,7 @@ package eventbus
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -191,5 +192,60 @@ func TestNATSBus_SubscribeKeyedValidatesLanes(t *testing.T) {
 	}
 	if err := bus.SubscribeKeyed(t.Context(), []string{"w.x"}, "g", 2, nil, noop); err == nil {
 		t.Fatal("several lanes without a key resolver accepted")
+	}
+}
+
+func TestNATSBus_KeyedLanesKeepSaturatedMessagesAlive(t *testing.T) {
+	grace := natsAckGrace
+	natsAckGrace = 200 * time.Millisecond
+	t.Cleanup(func() { natsAckGrace = grace })
+	t.Setenv("EVENTBUS_HANDLER_TIMEOUT", "300ms")
+
+	bus := newTestNATSBus(t)
+	topic := "w.saturated"
+	const messages = 64
+	var mu sync.Mutex
+	var order []string
+	seen := map[string][]int{}
+	allHandled := make(chan struct{})
+	subscribeInBackground(t, t.Context(), bus, topic, "saturated", 8, payloadKey, func(_ context.Context, msg Message) error {
+		p := string(msg.Payload)
+		mu.Lock()
+		order = append(order, p)
+		seen[p] = append(seen[p], msg.Attempt)
+		if len(seen) == messages && len(seen[p]) == 1 {
+			close(allHandled)
+		}
+		mu.Unlock()
+		time.Sleep(150 * time.Millisecond)
+		return nil
+	})
+	ackWait := waitForConsumer(t, bus, bus.durable("saturated", []string{topic}))
+	for i := 0; i < messages; i++ {
+		p := fmt.Sprintf("a%02d", i)
+		if err := bus.Publish(t.Context(), topic, "a", []byte(p)); err != nil {
+			t.Fatalf("publish %s: %v", p, err)
+		}
+	}
+	select {
+	case <-allHandled:
+	case <-time.After(20 * time.Second):
+		t.Fatal("not every saturated-lane message was handled")
+	}
+	// Give already-prefetched redeliveries time to reach the handler too.
+	time.Sleep(2 * ackWait)
+	mu.Lock()
+	defer mu.Unlock()
+	for i := 0; i < messages; i++ {
+		p := fmt.Sprintf("a%02d", i)
+		if got := seen[p]; len(got) != 1 || got[0] != 1 {
+			t.Errorf("%s handled with attempts %v, want exactly one first delivery", p, got)
+		}
+		if order[i] != p {
+			t.Errorf("message %d = %s, want %s", i, order[i], p)
+		}
+	}
+	if len(order) != messages {
+		t.Errorf("handled %d messages, want %d", len(order), messages)
 	}
 }

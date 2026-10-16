@@ -306,8 +306,8 @@ func (b *NATSBus) SubscribeKeyed(ctx context.Context, topics []string, group str
 			}
 			pool.dispatch(m, laneKey)
 		}
-		// The lanes hold what is read; a small prefetch keeps unheld messages from outliving their ack wait.
-		opts = append(opts, jetstream.PullMaxMessages(lanes))
+		// Fetch again only after dispatch tracks this delivery, even when a lane is full.
+		opts = append(opts, jetstream.PullMaxMessages(1))
 	}
 
 	cc, err := cons.Consume(callback, opts...)
