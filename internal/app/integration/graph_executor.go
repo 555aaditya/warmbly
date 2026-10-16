@@ -12,6 +12,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/webhook"
 	"github.com/warmbly/warmbly/internal/infrastructure/pubsub"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/tmplfuncs"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -473,6 +474,12 @@ func sampleEventData(triggerEvent string) map[string]any {
 		base["confidence"] = 0.92
 		base["subject"] = "Re: quick question"
 		base["snippet"] = "Sure, let's talk next week."
+		base["ai_kind"] = "human_reply"
+		base["ai_intent"] = "scheduling"
+		base["ai_intent_confidence"] = 0.91
+		base["ai_labels"] = []any{"Meeting", "Interested"}
+		base["ai_relevance"] = 82
+		base["ai_needs_review"] = false
 	case "meeting.booked", "meeting.rescheduled", "meeting.canceled":
 		base["source"] = "calendly"
 		base["invitee_email"] = "jane@example.com"
@@ -573,12 +580,18 @@ func evaluateAutomationCondition(c models.AutomationCondition, data map[string]a
 		raw, present := data[c.Key]
 		switch c.Operator {
 		case models.AutoOpExists:
+			if items, ok := tmplfuncs.ListStrings(raw); ok {
+				return len(items) > 0
+			}
 			return present && valueString(raw) != ""
 		case models.AutoOpIsTrue:
 			return toBool(raw)
 		case models.AutoOpNotEquals:
 			return !strings.EqualFold(valueString(raw), valueString(c.Value))
 		case models.AutoOpContains:
+			if _, ok := tmplfuncs.ListStrings(raw); ok {
+				return tmplfuncs.ListHas(raw, c.Value)
+			}
 			return strings.Contains(strings.ToLower(valueString(raw)), strings.ToLower(valueString(c.Value)))
 		case models.AutoOpGte:
 			return toFloat(raw) >= toFloat(c.Value)

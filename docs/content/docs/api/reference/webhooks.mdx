@@ -354,6 +354,23 @@ Every callback is an HTTP `POST` with a `Content-Type: application/json` body in
 
 There is no `version` field in the payload. If an event's payload ever changes in a backward-incompatible way, it is published under a new `event_type` name. Existing event type names are never re-versioned in place.
 
+### Reply received payload
+
+`campaign.reply_received` carries `contact_email`, `contact_id`, `campaign_id`, `intent` and `confidence` (the workspace keyword list's reading), `subject`, `snippet`, `action_taken`, `thread_id` and `email_account_id`. When [inbox tagging](/guides/inbox-tagging/) judged the message it also carries the stored verdict:
+
+```json
+{
+  "ai_labels": ["Meeting", "Interested"],
+  "ai_intent": "scheduling",
+  "ai_intent_confidence": 0.91,
+  "ai_kind": "human_reply",
+  "ai_relevance": 82,
+  "ai_needs_review": false
+}
+```
+
+`ai_kind` and `ai_intent` are empty strings when tagging was not confident enough to act on them, and the six keys are absent when tagging never judged the message. See [Automations](/guides/automations/#filtering-replies-on-inbox-tagging) for what each holds.
+
 ### Delivery headers
 
 Each delivery carries these request headers:

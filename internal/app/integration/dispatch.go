@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/tmplfuncs"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -298,7 +299,10 @@ func renderEventMessage(sub models.IntegrationEventSubscription, data map[string
 	switch eventType {
 	case models.WebhookEventCampaignReplyReceived:
 		m.Title = "📨 New reply"
-		if intent := stringFromMap(data, "intent"); intent != "" {
+		// The inbox-tagging labels, when present, are what the inbox shows.
+		if labels, _ := tmplfuncs.ListStrings(data["ai_labels"]); len(labels) > 0 {
+			m.Title = "📨 New reply (" + strings.Join(labels, ", ") + ")"
+		} else if intent := stringFromMap(data, "intent"); intent != "" {
 			m.Title = "📨 New reply (" + intent + ")"
 		}
 	case models.WebhookEventCampaignEmailBounced, models.WebhookEventDeliverabilityBounce:

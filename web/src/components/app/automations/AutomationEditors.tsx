@@ -31,6 +31,7 @@ import {
     conditionFieldKey,
     conditionFromFieldKey,
     operatorsForType,
+    isConfidenceKey,
     triggerVariables,
     NATIVE_CONNECTION,
     NATIVE_ACTIONS,
@@ -124,7 +125,7 @@ export function ConditionEditor({
     const isAI = condition.field === "ai";
     const op = condition.operator;
     const needsValue = !isRandom && !isAI && op !== "exists" && op !== "is_true";
-    const isConfidence = selectedKey === "confidence";
+    const isConfidence = isConfidenceKey(selectedKey);
     const vars = triggerVariables(trigger);
 
     return (
@@ -210,7 +211,7 @@ export function ConditionEditor({
                         Passes the “yes” branch when truthy. Reference fields as <code className="font-mono">.field</code>; use{" "}
                         <code className="font-mono">eq gt lt and or not</code>, numeric{" "}
                         <code className="font-mono">gtf ltf add sub mul div</code>, and{" "}
-                        <code className="font-mono">contains lower</code>. Example:{" "}
+                        <code className="font-mono">contains lower has join</code>. Example:{" "}
                         <code className="font-mono">{`and (gtf .confidence 0.8) (eq .intent "positive")`}</code>.
                     </p>
                 </div>
@@ -237,6 +238,33 @@ export function ConditionEditor({
                         className="w-full"
                         fullWidth
                     />
+                </div>
+            ) : needsValue && def?.type === "list" ? (
+                <div className="space-y-2">
+                    <Label>Value</Label>
+                    <TextInput value={String(condition.value ?? "")} onChange={(v) => set({ value: v })} placeholder="Label" className="w-full" />
+                    {(def.suggestions?.length ?? 0) > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                            {def.suggestions!.map((v) => (
+                                <button
+                                    key={v}
+                                    type="button"
+                                    onClick={() => set({ value: v })}
+                                    className={`px-1.5 py-0.5 rounded border text-[11px] ${
+                                        condition.value === v
+                                            ? "border-sky-300 bg-sky-50 text-sky-700"
+                                            : "border-slate-200 bg-slate-50 text-slate-600 hover:border-sky-300 hover:text-sky-700"
+                                    }`}
+                                >
+                                    {v}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                    <p className="text-[10.5px] text-slate-400 leading-relaxed">
+                        Matches a whole label, so “Interested” does not match “Not interested”. Type a label from your own tagging
+                        questions to test it too.
+                    </p>
                 </div>
             ) : needsValue && isConfidence ? (
                 <div>

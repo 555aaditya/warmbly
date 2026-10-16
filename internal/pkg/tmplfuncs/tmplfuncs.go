@@ -47,6 +47,34 @@ func valueString(v any) string {
 	}
 }
 
+// ListStrings reads a list (a Go slice, or one decoded from JSON) as strings;
+// ok is false for anything that is not a list.
+func ListStrings(v any) ([]string, bool) {
+	switch t := v.(type) {
+	case []string:
+		return t, true
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, x := range t {
+			out = append(out, valueString(x))
+		}
+		return out, true
+	}
+	return nil, false
+}
+
+// ListHas is whole-item, case-insensitive membership.
+func ListHas(list any, item any) bool {
+	items, _ := ListStrings(list)
+	want := strings.TrimSpace(valueString(item))
+	for _, v := range items {
+		if strings.EqualFold(strings.TrimSpace(v), want) {
+			return true
+		}
+	}
+	return false
+}
+
 var funcs = template.FuncMap{
 	// Arithmetic (coercing; division/modulo by zero yield 0, never panic).
 	"add": func(a, b any) float64 { return toFloat(a) + toFloat(b) },
@@ -79,6 +107,13 @@ var funcs = template.FuncMap{
 	"title": func(a any) string { return strings.Title(strings.ToLower(valueString(a))) }, //nolint:staticcheck // ASCII title-case is fine for names
 	"contains": func(s, sub any) bool {
 		return strings.Contains(strings.ToLower(valueString(s)), strings.ToLower(valueString(sub)))
+	},
+	// List helpers: {{has .ai_labels "Meeting"}} is whole-item membership, so
+	// "Interested" does not match "Not interested"; {{join .ai_labels ", "}}.
+	"has": ListHas,
+	"join": func(list, sep any) string {
+		items, _ := ListStrings(list)
+		return strings.Join(items, valueString(sep))
 	},
 	"hasPrefix": func(s, p any) bool { return strings.HasPrefix(valueString(s), valueString(p)) },
 	"hasSuffix": func(s, p any) bool { return strings.HasSuffix(valueString(s), valueString(p)) },

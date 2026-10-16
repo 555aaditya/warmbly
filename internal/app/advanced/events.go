@@ -150,12 +150,49 @@ func (s *service) recordReplyIntent(ctx context.Context, orgID uuid.UUID, messag
 		log.Warn().Err(err).Str("message_id", messageID).Msg("reply intent: inbox tag lookup failed")
 		return
 	}
-	if res == nil || res.Kind != inboxtag.KindHumanReply || res.NeedsReview || res.Intent == "" || res.IntentConfidence < inboxtag.ConfFloor {
+	intent := trustedReplyIntent(res)
+	if intent == "" {
 		return
 	}
-	if err := s.campaignProgressRepo.RecordReplyIntent(ctx, campaignID, contactID, sequenceID, res.Intent); err != nil {
+	if err := s.campaignProgressRepo.RecordReplyIntent(ctx, campaignID, contactID, sequenceID, intent); err != nil {
 		log.Warn().Err(err).Str("campaign_id", campaignID.String()).Str("contact_id", contactID.String()).Msg("reply intent: record failed")
 	}
+}
+
+// trustedReplyIntent is a verdict's human-reply intent when it is confident
+// enough to route on, else "".
+func trustedReplyIntent(res *repository.InboxTagResult) string {
+	if res == nil || res.Kind != inboxtag.KindHumanReply || res.NeedsReview || res.Intent == "" || res.IntentConfidence < inboxtag.ConfFloor {
+		return ""
+	}
+	return res.Intent
+}
+
+// addTagVerdict adds the stored inbox-tagging verdict to a reply event under
+// ai_* keys, held to the floors the inbox and reply_intent branches use. A
+// message tagging never judged gets no keys.
+func addTagVerdict(payload map[string]any, res *repository.InboxTagResult) {
+	if res == nil {
+		return
+	}
+	kind := ""
+	if res.KindConfidence >= inboxtag.ConfFloor && res.ReviewReason != "kind" {
+		kind = res.Kind
+	}
+	intent, intentConfidence := trustedReplyIntent(res), 0.0
+	if intent != "" {
+		intentConfidence = res.IntentConfidence
+	}
+	labels := res.Labels
+	if labels == nil {
+		labels = []string{}
+	}
+	payload["ai_kind"] = kind
+	payload["ai_intent"] = intent
+	payload["ai_intent_confidence"] = intentConfidence
+	payload["ai_labels"] = labels
+	payload["ai_relevance"] = res.Relevance
+	payload["ai_needs_review"] = res.NeedsReview
 }
 
 // inboxTagActed reports whether the tagger already took the named action on

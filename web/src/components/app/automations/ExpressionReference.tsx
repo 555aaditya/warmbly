@@ -72,6 +72,14 @@ const SECTIONS: Section[] = [
         ],
     },
     {
+        title: "Lists",
+        blurb: "For list values such as a reply's inbox tagging labels.",
+        entries: [
+            { code: '{{has .ai_labels "Meeting"}}', label: "Whole-item test (case-insensitive)", note: '"Interested" does not match "Not interested".' },
+            { code: '{{join .ai_labels ", "}}', label: "Join into one line of text" },
+        ],
+    },
+    {
         title: "Spintax",
         blurb: "Random alternation, expanded per recipient after the merge fields render.",
         entries: [
