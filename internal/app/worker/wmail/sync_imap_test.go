@@ -1128,3 +1128,102 @@ func TestImapSyncLeavesHistoryBelowUIDNextOnAModSeqBump(t *testing.T) {
 		t.Error("mailbox was deactivated by re-reported history")
 	}
 }
+
+// throttleCountingBudget is a fixedBudget that counts the throttled days the
+// pass records, which is what deactivates a mailbox on the third.
+type throttleCountingBudget struct {
+	fixedBudget
+	throttledDays int
+}
+
+func (b *throttleCountingBudget) RecordThrottledDay(context.Context) bool {
+	b.throttledDays++
+	return false
+}
+
+// The #959 shape end to end: a bump re-reports thousands of old messages
+// against a nearly spent day. History must cost no budget, record no
+// throttled day and fetch no body, and the bump is walked once, not re-asked
+// every pass.
+func TestImapModSeqBumpOverHistoryRecordsNoThrottledDay(t *testing.T) {
+	history := uidRange(3*config.ImapFetchBatchSize + 50)
+	conn := &fakeImapConn{
+		folders: []models.Mailbox{{Name: "INBOX", UIDValidity: 7, UIDNext: 10_002, HighestModSeq: 90_000}},
+		changed: append(history, 10_000, 10_001),
+	}
+	budget := &throttleCountingBudget{fixedBudget: fixedBudget{allow: 2}}
+	w, events := newIMAPTestMail(conn, budget,
+		&models.Mailbox{Name: "INBOX", UIDValidity: 7, UIDNext: 10_000, HighestModSeq: 100})
+
+	for pass := range 2 {
+		if err := w.Sync(t.Context()); err != nil {
+			t.Fatalf("pass %d: Sync: %v", pass, err)
+		}
+	}
+
+	if got := len(newEmails(*events)); got != 2 {
+		t.Errorf("stored %d messages, want only the 2 arrivals", got)
+	}
+	if budget.throttledDays != 0 {
+		t.Errorf("recorded %d throttled days on re-reported history", budget.throttledDays)
+	}
+	if w.tracker.state.ThrottledUntil != nil {
+		t.Errorf("mailbox throttled (%s) by re-reported history", w.tracker.state.ThrottleReason)
+	}
+	if budget.observed != 2 {
+		t.Errorf("flood detection counted %d messages, want the 2 arrivals", budget.observed)
+	}
+	if conn.modseqSearches != 1 {
+		t.Errorf("searched the bump %d times over two passes, want once", conn.modseqSearches)
+	}
+	if got := w.SmtpImapData.Mailboxes[0].HighestModSeq; got != 90_000 {
+		t.Errorf("mod-sequence = %d, want 90000", got)
+	}
+}
+
+// An arrival the budget defers during a bump holds the cursor, UIDNEXT
+// included, so the retry still knows which UIDs are history and stores only
+// the arrival it owes.
+func TestImapModSeqBumpDeferredArrivalKeepsHistoryOut(t *testing.T) {
+	conn := &fakeImapConn{
+		folders: []models.Mailbox{{Name: "INBOX", UIDValidity: 7, UIDNext: 5003, HighestModSeq: 90_000}},
+		changed: append(uidRange(400), 5000, 5001, 5002),
+	}
+	budget := &fixedBudget{allow: 2}
+	w, events := newIMAPTestMail(conn, budget,
+		&models.Mailbox{Name: "INBOX", UIDValidity: 7, UIDNext: 5000, HighestModSeq: 100})
+
+	if err := w.Sync(t.Context()); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	held := w.SmtpImapData.Mailboxes[0]
+	if held.HighestModSeq != 100 || held.UIDNext != 5000 {
+		t.Fatalf("cursor = (%d, %d) with an arrival deferred, want it held at (100, 5000)", held.HighestModSeq, held.UIDNext)
+	}
+
+	// The consumer maps what the first pass stored before the retry looks.
+	known := map[string]string{}
+	for _, e := range newEmails(*events) {
+		known[e.Message.MessageID] = uuid.NewString()
+	}
+	w.EmailMessageMapRepository = someKnownMessageMap{known: known}
+	first := len(newEmails(*events))
+
+	budget.allow = 10
+	if err := w.Sync(t.Context()); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	var uids []uint32
+	for _, e := range newEmails(*events)[first:] {
+		if e.Message.UID < 5000 {
+			t.Errorf("retry admitted UID %d from below the held UIDNEXT", e.Message.UID)
+		}
+		uids = append(uids, e.Message.UID)
+	}
+	if first+len(uids) != 3 {
+		t.Errorf("stored %d then %v, want the 3 arrivals once each", first, uids)
+	}
+	if got := w.SmtpImapData.Mailboxes[0]; got.HighestModSeq != 90_000 || got.UIDNext != 5003 {
+		t.Errorf("cursor = (%d, %d) after the retry, want (90000, 5003)", got.HighestModSeq, got.UIDNext)
+	}
+}
