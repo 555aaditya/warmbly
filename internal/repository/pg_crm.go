@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -57,9 +56,8 @@ type CRMRepository interface {
 	TasksSummary(ctx context.Context, orgID uuid.UUID, filters models.SearchTasks) (*models.TasksSummary, error)
 	UpdateCRMTask(ctx context.Context, orgID, taskID uuid.UUID, data *models.UpdateCRMTask) (*models.CRMTask, error)
 	DeleteCRMTask(ctx context.Context, orgID, taskID uuid.UUID) error
-	// CancelUntouchedCRMTasks cancels a contact's pending tasks with this
-	// title created between from and to that nobody has edited since.
-	CancelUntouchedCRMTasks(ctx context.Context, orgID, contactID uuid.UUID, title string, from, to time.Time) ([]uuid.UUID, error)
+	// CancelUntouchedCRMTask cancels only the attributed task if nobody edited it.
+	CancelUntouchedCRMTask(ctx context.Context, orgID, contactID, taskID uuid.UUID) (bool, error)
 	BulkDeleteCRMTasks(ctx context.Context, orgID uuid.UUID, sel models.TaskSelection, cap int) (matched, affected int64, err error)
 	// SelectTaskIDs resolves a bulk selection to ids, at most cap+1 of them.
 	SelectTaskIDs(ctx context.Context, orgID uuid.UUID, sel models.TaskSelection, cap int) ([]uuid.UUID, error)
@@ -1891,26 +1889,15 @@ func (r *crmRepository) DeleteTaskType(ctx context.Context, orgID, typeID uuid.U
 	return nil
 }
 
-func (r *crmRepository) CancelUntouchedCRMTasks(ctx context.Context, orgID, contactID uuid.UUID, title string, from, to time.Time) ([]uuid.UUID, error) {
-	rows, err := r.db.Query(ctx, `
+func (r *crmRepository) CancelUntouchedCRMTask(ctx context.Context, orgID, contactID, taskID uuid.UUID) (bool, error) {
+	result, err := r.db.Exec(ctx, `
 		UPDATE crm_tasks SET status = 'cancelled', updated_at = NOW()
-		WHERE organization_id = $1 AND contact_id = $2 AND lower(title) = lower($3)
-		  AND created_at BETWEEN $4 AND $5
-		  AND status = 'pending' AND completed_at IS NULL AND updated_at = created_at
-		RETURNING id`, orgID, contactID, title, from, to)
+		WHERE organization_id = $1 AND contact_id = $2 AND id = $3
+		  AND status = 'pending' AND completed_at IS NULL AND updated_at = created_at`, orgID, contactID, taskID)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-	defer rows.Close()
-	var ids []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
+	return result.RowsAffected() == 1, nil
 }
 
 func (r *crmRepository) DeleteCRMTask(ctx context.Context, orgID, taskID uuid.UUID) error {

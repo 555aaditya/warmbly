@@ -115,8 +115,11 @@ func (s *JobsService) StartHistoricalReplyCleanup(ctx context.Context) {
 		batchCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
 		next, done, err := s.AdvancedService.WithdrawHistoricalReplyEffects(batchCtx, since, afterID)
+		if err != nil {
+			return err
+		}
 		afterID = next
-		finished = err == nil && done
-		return err
+		finished = done
+		return nil
 	})
 }

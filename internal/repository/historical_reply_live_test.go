@@ -94,17 +94,28 @@ func TestLiveHistoricalReplyCleanupQueries(t *testing.T) {
 			t.Fatalf("CreateReplyIntent: %v", err)
 		}
 	}
-	now := time.Now()
-	intents, err := adv.ListReplyIntentsFor(ctx, f.org, lead, "Big sale", now.Add(-time.Minute), now.Add(time.Minute))
-	if err != nil || len(intents) != 1 || intents[0].ActionTaken != "created_crm_task" || intents[0].Intent != models.ReplyIntentNeutral {
-		t.Fatalf("ListReplyIntentsFor = %+v, %v; want the newsletter's one intent", intents, err)
+	if intents, err := adv.ListReplyIntentsForMessage(ctx, f.org, newsletter); err != nil || len(intents) != 0 {
+		t.Fatalf("legacy intents matched without provenance: %+v, %v", intents, err)
+	}
+	if err := adv.CreateReplyIntent(ctx, &models.ReplyIntentRecord{OrganizationID: f.org, ContactEmail: lead,
+		Intent: models.ReplyIntentNeutral, Metadata: map[string]interface{}{"unibox_message_id": newsletter.String()}}); err != nil {
+		t.Fatal(err)
+	}
+	intents, err := adv.ListReplyIntentsForMessage(ctx, f.org, newsletter)
+	if err != nil || len(intents) != 1 || intents[0].Metadata["unibox_message_id"] != newsletter.String() {
+		t.Fatalf("ListReplyIntentsForMessage = %+v, %v; want the attributable intent", intents, err)
+	}
+	for _, scope := range [][2]uuid.UUID{{uuid.New(), newsletter}, {f.org, uuid.New()}, {f.org, uuid.Nil}} {
+		if intents, err := adv.ListReplyIntentsForMessage(ctx, scope[0], scope[1]); err != nil || len(intents) != 0 {
+			t.Fatalf("intents crossed scope %v: %+v, %v", scope, intents, err)
+		}
 	}
 	if err := adv.DeleteReplyIntents(ctx, f.org, []uuid.UUID{intents[0].ID}); err != nil {
 		t.Fatalf("DeleteReplyIntents: %v", err)
 	}
 	var left int
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM reply_intents WHERE organization_id = $1`, f.org).Scan(&left); err != nil || left != 1 {
-		t.Fatalf("intents left = %d, %v; want the fresh reply's", left, err)
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM reply_intents WHERE organization_id = $1`, f.org).Scan(&left); err != nil || left != 2 {
+		t.Fatalf("intents left = %d, %v; want both unattributable legacy intents", left, err)
 	}
 
 	crm := &crmRepository{db: pool}
@@ -122,14 +133,47 @@ func TestLiveHistoricalReplyCleanupQueries(t *testing.T) {
 	untouched, worked := task("pending"), task("in_progress")
 	edited := task("pending")
 	exec(`UPDATE crm_tasks SET description = 'called them', updated_at = NOW() + interval '1 second' WHERE id = $1`, edited)
-	cancelled, err := crm.CancelUntouchedCRMTasks(ctx, f.org, contact, title, now.Add(-time.Minute), time.Now().Add(time.Minute))
+	for _, scope := range [][3]uuid.UUID{{uuid.New(), contact, untouched}, {f.org, uuid.New(), untouched}, {f.org, contact, worked}, {f.org, contact, edited}} {
+		if cancelled, err := crm.CancelUntouchedCRMTask(ctx, scope[0], scope[1], scope[2]); err != nil || cancelled {
+			t.Fatalf("changed out-of-scope or touched task %v: %v, %v", scope, cancelled, err)
+		}
+	}
+	cancelled, err := crm.CancelUntouchedCRMTask(ctx, f.org, contact, untouched)
 	if err != nil {
-		t.Fatalf("CancelUntouchedCRMTasks: %v", err)
+		t.Fatalf("CancelUntouchedCRMTask: %v", err)
 	}
-	if len(cancelled) != 1 || cancelled[0] != untouched {
-		t.Fatalf("cancelled %v, want only the untouched task %v (kept %v and %v)", cancelled, untouched, worked, edited)
+	if !cancelled {
+		t.Fatalf("did not cancel the untouched task %v", untouched)
 	}
-	if again, err := crm.CancelUntouchedCRMTasks(ctx, f.org, contact, title, now.Add(-time.Minute), time.Now().Add(time.Minute)); err != nil || len(again) != 0 {
+	if again, err := crm.CancelUntouchedCRMTask(ctx, f.org, contact, untouched); err != nil || again {
 		t.Fatalf("second cancel = %v, %v; want nothing", again, err)
+	}
+}
+
+func TestReview988PreservesFreshDifferentSubjectTask(t *testing.T) {
+	_, pool := liveContactDB(t)
+	f := newSharedOrgFixture(t, pool)
+	ctx := context.Background()
+	crm := &crmRepository{db: pool}
+	create := func() *models.CRMTask {
+		t.Helper()
+		task, err := crm.CreateCRMTask(ctx, f.org, f.owner, &models.CreateCRMTask{
+			ContactID: &f.contact, Title: "Follow up: reply from lead@example.org", Priority: "high",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return task
+	}
+	staleNewsletterTask, freshReplyTask := create(), create()
+	if cancelled, err := crm.CancelUntouchedCRMTask(ctx, f.org, f.contact, staleNewsletterTask.ID); err != nil || !cancelled {
+		t.Fatalf("attributed task cancellation = %v, %v", cancelled, err)
+	}
+	var freshStatus string
+	if err := pool.QueryRow(ctx, `SELECT status FROM crm_tasks WHERE id=$1`, freshReplyTask.ID).Scan(&freshStatus); err != nil {
+		t.Fatal(err)
+	}
+	if freshStatus != "pending" {
+		t.Fatalf("fresh reply task %v became %s", freshReplyTask.ID, freshStatus)
 	}
 }

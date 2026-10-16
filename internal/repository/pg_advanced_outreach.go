@@ -65,9 +65,8 @@ type AdvancedOutreachRepository interface {
 	MarkTaskDeadLetterReplayed(ctx context.Context, id uuid.UUID) error
 
 	CreateReplyIntent(ctx context.Context, record *models.ReplyIntentRecord) error
-	// ListReplyIntentsFor returns the intents recorded for one address and
-	// subject between from and to.
-	ListReplyIntentsFor(ctx context.Context, organizationID uuid.UUID, email, subject string, from, to time.Time) ([]models.ReplyIntentRecord, error)
+	// ListReplyIntentsForMessage requires the stored message's exact provenance.
+	ListReplyIntentsForMessage(ctx context.Context, organizationID, messageID uuid.UUID) ([]models.ReplyIntentRecord, error)
 	DeleteReplyIntents(ctx context.Context, organizationID uuid.UUID, ids []uuid.UUID) error
 	CreatePreflightReport(ctx context.Context, report *models.PreflightReport) error
 
@@ -1259,13 +1258,14 @@ func (r *advancedOutreachRepository) CreateReplyIntent(ctx context.Context, reco
 	return err
 }
 
-func (r *advancedOutreachRepository) ListReplyIntentsFor(ctx context.Context, organizationID uuid.UUID, email, subject string, from, to time.Time) ([]models.ReplyIntentRecord, error) {
+func (r *advancedOutreachRepository) ListReplyIntentsForMessage(ctx context.Context, organizationID, messageID uuid.UUID) ([]models.ReplyIntentRecord, error) {
+	if messageID == uuid.Nil {
+		return nil, nil
+	}
 	rows, err := resultDB(ctx, r.db).Query(ctx, `
-		SELECT id, organization_id, contact_email, intent, action_taken, created_at
+		SELECT id, organization_id, contact_email, intent, action_taken, created_at, metadata
 		FROM reply_intents
-		WHERE organization_id = $1 AND contact_email = lower(btrim($2))
-		  AND created_at BETWEEN $3 AND $4
-		  AND COALESCE(metadata->>'subject', '') = $5`, organizationID, email, from, to, subject)
+		WHERE organization_id = $1 AND metadata->>'unibox_message_id' = $2`, organizationID, messageID.String())
 	if err != nil {
 		return nil, err
 	}
@@ -1273,7 +1273,7 @@ func (r *advancedOutreachRepository) ListReplyIntentsFor(ctx context.Context, or
 	var out []models.ReplyIntentRecord
 	for rows.Next() {
 		var rec models.ReplyIntentRecord
-		if err := rows.Scan(&rec.ID, &rec.OrganizationID, &rec.ContactEmail, &rec.Intent, &rec.ActionTaken, &rec.CreatedAt); err != nil {
+		if err := rows.Scan(&rec.ID, &rec.OrganizationID, &rec.ContactEmail, &rec.Intent, &rec.ActionTaken, &rec.CreatedAt, &rec.Metadata); err != nil {
 			return nil, err
 		}
 		out = append(out, rec)
