@@ -70,3 +70,28 @@ func TestApplyWarmupPlacementCapsHealth(t *testing.T) {
 		t.Fatalf("70%% warns: %+v", h)
 	}
 }
+
+func TestWarmupHealthKeepsReducedVolumeAsWarningWithoutDoublePenalty(t *testing.T) {
+	for _, tc := range []struct {
+		name, state, initialStatus, wantStatus string
+		initialScore, wantScore                int
+	}{
+		{"watch", "watch", "healthy", "warning", 100, 93},
+		{"throttle", "throttled", "healthy", "warning", 100, 93},
+		{"connection error", "throttled", "error", "error", 60, 60},
+		{"existing warning", "watch", "warning", "warning", 80, 80},
+		{"quarantine", "quarantined", "healthy", "error", 100, 50},
+		{"block", "blocked", "healthy", "error", 100, 30},
+		{"score floor", "blocked", "error", "error", 20, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := models.AccountHealth{Status: tc.initialStatus, Score: tc.initialScore}
+			r := models.WarmupPlacementWindow{Major: models.WarmupPlacementTally{Inbox: 28, Spam: 2}}.Rate()
+			applyWarmupHealth(&h, &models.WarmupHealthInfo{State: tc.state, Reason: "current health evidence"})
+			applyWarmupPlacement(&h, &r)
+			if h.Score != tc.wantScore || h.Status != tc.wantStatus || len(h.Issues) != 1 {
+				t.Fatalf("health = %+v, want %s %d and one reason", h, tc.wantStatus, tc.wantScore)
+			}
+		})
+	}
+}

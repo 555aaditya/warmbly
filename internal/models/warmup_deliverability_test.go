@@ -1,6 +1,31 @@
 package models
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
+
+func TestWarmupPlacementWindowStartUsesSevenUTCDates(t *testing.T) {
+	for _, tc := range []struct {
+		now, want string
+	}{
+		{"2026-10-16T04:30:00Z", "2026-10-10T00:00:00Z"},
+		{"2026-10-16T00:00:00Z", "2026-10-10T00:00:00Z"},
+		{"2026-10-16T23:59:59Z", "2026-10-10T00:00:00Z"},
+		{"2026-10-16T00:30:00+02:00", "2026-10-09T00:00:00Z"},
+		{"2026-01-02T12:00:00Z", "2025-12-27T00:00:00Z"},
+	} {
+		t.Run(tc.now, func(t *testing.T) {
+			now, err := time.Parse(time.RFC3339, tc.now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := WarmupPlacementWindowStart(now); got.Format(time.RFC3339) != tc.want || got.Location() != time.UTC {
+				t.Fatalf("window start = %s, want %s in UTC", got, tc.want)
+			}
+		})
+	}
+}
 
 func TestClassifyWarmupLanding(t *testing.T) {
 	cases := []struct {

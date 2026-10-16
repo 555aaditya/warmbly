@@ -31,7 +31,7 @@ func (s *analyticsService) placementRates(ctx context.Context, orgID uuid.UUID, 
 	if s.placementRepo == nil {
 		return nil
 	}
-	windows, err := s.placementRepo.Rates(ctx, orgID, emailID, placementWindowStart(time.Now().UTC()))
+	windows, err := s.placementRepo.Rates(ctx, orgID, emailID, models.WarmupPlacementWindowStart(time.Now()))
 	if err != nil {
 		return nil
 	}
@@ -45,12 +45,6 @@ func headlineRates(windows map[uuid.UUID]models.WarmupPlacementWindow) map[uuid.
 		out[id] = w.Rate()
 	}
 	return out
-}
-
-// placementWindowStart is the first UTC day of the trailing window ending on now's day.
-func placementWindowStart(now time.Time) time.Time {
-	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	return day.AddDate(0, 0, -(models.WarmupPlacementWindowDays - 1))
 }
 
 // applyWarmupPlacement caps the health score at the headline inbox rate, so a
@@ -118,7 +112,7 @@ func (s *analyticsService) GetWarmupPlacement(ctx context.Context, orgID uuid.UU
 	if err != nil {
 		return nil, errx.InternalError()
 	}
-	windows, err := s.placementRepo.Rates(ctx, orgID, emailID, placementWindowStart(time.Now().UTC()))
+	windows, err := s.placementRepo.Rates(ctx, orgID, emailID, models.WarmupPlacementWindowStart(time.Now()))
 	if err != nil {
 		return nil, errx.InternalError()
 	}

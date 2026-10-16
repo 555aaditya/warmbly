@@ -167,7 +167,7 @@ type WarmupRepository interface {
 	// so a sweep cut off by its deadline resumes where it left off.
 	ListParticipantHealth(ctx context.Context) ([]models.WarmupParticipantHealth, error)
 	// HealthMetricCounts is every count behind a health decision in one round trip.
-	HealthMetricCounts(ctx context.Context, accountID uuid.UUID, since7d, since30d time.Time) (models.WarmupHealthCounts, error)
+	HealthMetricCounts(ctx context.Context, accountID uuid.UUID, sincePlacement, since7d, since30d time.Time) (models.WarmupHealthCounts, error)
 	// CountWarmupSpamReportsSince: one scan; placements (the provider filed it) and complaints (the recipient did) apart.
 	CountWarmupSpamReportsSince(ctx context.Context, accountID uuid.UUID, since time.Time) (placements, complaints int, err error)
 	// ColdRampStateForAccounts returns a whole candidate pool's graduation
@@ -884,7 +884,7 @@ const healthTamperingCountsSQL = `SELECT
 	FROM warmup_tampering_events WHERE email_account_id = $1 AND created_at >= $2`
 
 // HealthMetricCounts shares scans only between signals with identical predicates.
-func (r *warmupRepository) HealthMetricCounts(ctx context.Context, accountID uuid.UUID, since7d, since30d time.Time) (models.WarmupHealthCounts, error) {
+func (r *warmupRepository) HealthMetricCounts(ctx context.Context, accountID uuid.UUID, sincePlacement, since7d, since30d time.Time) (models.WarmupHealthCounts, error) {
 	query := `
 		SELECT
 			(SELECT COALESCE(SUM(emails_sent), 0) FROM warmup_statistics
@@ -898,13 +898,13 @@ func (r *warmupRepository) HealthMetricCounts(ctx context.Context, accountID uui
 			  WHERE email_account_id = $1 AND status = 'completed' AND completed_at >= $3),
 			tampering.deletions, tampering.spam_flags,
 			placed.major, placed.major_spam, placed.other, placed.other_spam
-		FROM (` + placementEvidenceSQL("$1", "$2") + `) placed
+		FROM (` + placementEvidenceSQL("$1", "$4") + `) placed
 		CROSS JOIN (` + healthFeedbackCountsSQL + `) feedback
 		CROSS JOIN (` + healthTamperingCountsSQL + `) tampering
 	`
 	var c models.WarmupHealthCounts
 	p := &c.Placement
-	err := resultDB(ctx, r.db).QueryRow(ctx, query, accountID, since7d, since30d).Scan(
+	err := resultDB(ctx, r.db).QueryRow(ctx, query, accountID, since7d, since30d, sincePlacement).Scan(
 		&c.SentLast7d, &c.SpamPlacementsLast7d, &c.UserComplaintsLast7d,
 		&c.ComplaintsLast30d, &c.BouncesLast30d, &c.DeliveredLast30d,
 		&c.DeletionsLast7d, &c.SpamFlagsLast7d,

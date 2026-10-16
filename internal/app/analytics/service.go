@@ -410,9 +410,7 @@ func (s *analyticsService) warmupHealthFromParticipant(accountID uuid.UUID, part
 	return reads.cloud[accountID]
 }
 
-// applyWarmupHealth folds warmup-pool reputation into the unified account
-// health score so a throttled/quarantined mailbox reads as degraded even when
-// its connection and sync are fine. Healthy/empty states leave health intact.
+// applyWarmupHealth keeps reduced volume a warning and pool exclusion an error.
 func applyWarmupHealth(health *models.AccountHealth, wh *models.WarmupHealthInfo) {
 	if wh == nil {
 		return
@@ -422,9 +420,9 @@ func applyWarmupHealth(health *models.AccountHealth, wh *models.WarmupHealthInfo
 	var issue string
 	switch models.WarmupHealthState(wh.State) {
 	case models.WarmupHealthWatch:
-		penalty, issue = 10, "Warmup reputation needs watching"
+		issue = "Warmup reputation needs watching"
 	case models.WarmupHealthThrottled:
-		penalty, issue = 25, "Warmup throttled — spam placement elevated"
+		issue = "Warmup sending reduced"
 	case models.WarmupHealthQuarantined:
 		penalty, issue = 50, "Warmup quarantined — mailbox temporarily removed from the pool"
 	case models.WarmupHealthBlocked:
@@ -442,7 +440,7 @@ func applyWarmupHealth(health *models.AccountHealth, wh *models.WarmupHealthInfo
 		health.Score = 0
 	}
 	switch models.WarmupHealthState(wh.State) {
-	case models.WarmupHealthWatch:
+	case models.WarmupHealthWatch, models.WarmupHealthThrottled:
 		if health.Status == "healthy" {
 			health.Status = "warning"
 		}

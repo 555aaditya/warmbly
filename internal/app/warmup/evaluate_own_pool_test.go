@@ -17,7 +17,7 @@ type zeroMetricsRepo struct {
 	repository.WarmupRepository
 }
 
-func (zeroMetricsRepo) HealthMetricCounts(context.Context, uuid.UUID, time.Time, time.Time) (models.WarmupHealthCounts, error) {
+func (zeroMetricsRepo) HealthMetricCounts(context.Context, uuid.UUID, time.Time, time.Time, time.Time) (models.WarmupHealthCounts, error) {
 	return models.WarmupHealthCounts{}, nil
 }
 

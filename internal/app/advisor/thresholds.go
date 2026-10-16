@@ -37,9 +37,9 @@ const (
 
 	// Spam-folder placement at Google, Microsoft and Yahoo. The pool only
 	// slows a mailbox at these; the advice is what the member may choose.
-	spamPlacementWarn       = 10.0
-	spamPlacementQuarantine = 20.0
-	spamPlacementBlock      = 50.0
+	spamPlacementWarn     = 10.0
+	spamPlacementSlowdown = 20.0
+	spamPlacementBlock    = 50.0
 
 	// --- mailbox volume ----------------------------------------------------
 	// The repo defaults: 50/day cold cap, 600s minimum gap.
