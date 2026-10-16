@@ -2,6 +2,7 @@ package advisor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -262,6 +263,149 @@ func TestSpamPlacementRespectsItsSampleFloorAndBands(t *testing.T) {
 	}
 	if strings.Contains(string(f.Action.Args), "status") {
 		t.Errorf("spam placement fix must not switch the mailbox off: %s", f.Action.Args)
+	}
+}
+
+func TestPlacementSlowdownDoesNotOfferACampaignHold(t *testing.T) {
+	for _, tc := range []struct {
+		spam     int
+		severity models.AdvisorSeverity
+	}{
+		{10, models.AdvisorMedium},
+		{19, models.AdvisorMedium},
+		{20, models.AdvisorHigh},
+		{49, models.AdvisorHigh},
+		{50, models.AdvisorCritical},
+	} {
+		t.Run(fmt.Sprintf("%d percent", tc.spam), func(t *testing.T) {
+			m := healthyMailbox()
+			m.WarmupPlacement = models.WarmupPlacementEvidence{MajorDelivered: 100, MajorSpam: tc.spam}
+			f := findingsByKey(Detect(snapshotOf(m), defaults()))["mailbox_spam_placement"]
+			if f.Severity != tc.severity {
+				t.Fatalf("severity = %s, want %s", f.Severity, tc.severity)
+			}
+			if tc.spam >= 50 {
+				if f.Action == nil || f.Action.Tool != "set_mailbox_send_hold" || !strings.Contains(f.Remedy, "Stop cold sending") {
+					t.Fatalf("severe placement lost its campaign hold: %+v", f)
+				}
+				return
+			}
+			if f.Action != nil || !strings.Contains(f.Remedy, "automatically") {
+				t.Fatalf("recoverable placement should advise automatic slowdown without a hold: %+v", f)
+			}
+			if f.Evidence["recommended_action"] != f.Remedy {
+				t.Fatal("narration evidence does not carry the current recovery guidance")
+			}
+		})
+	}
+}
+
+func TestThrottledMailboxAdviceKeepsItInThePool(t *testing.T) {
+	for _, reason := range []string{
+		"27.3% of 22 major-provider deliveries landed in spam",
+		"re-entry probation after block expiry",
+	} {
+		t.Run(reason, func(t *testing.T) {
+			m := healthyMailbox()
+			m.PoolHealth, m.PoolHealthReason = "throttled", reason
+			m.PoolBlocked = true // A throttle's future blocked_until is not pool exclusion.
+			m.WarmupPlacement = models.WarmupPlacementEvidence{MajorDelivered: 22, MajorSpam: 6}
+			byKey := findingsByKey(Detect(snapshotOf(m), defaults()))
+			if _, ok := byKey["warmup_pool_blocked"]; ok {
+				t.Fatal("a throttled mailbox is still described as excluded from the pool")
+			}
+			f, ok := byKey["warmup_pool_throttled"]
+			if !ok || f.Severity != models.AdvisorHigh || f.Action != nil {
+				t.Fatalf("expected a non-critical slowdown finding without a hold: %+v", f)
+			}
+			if !strings.Contains(f.Detail, reason) || !strings.Contains(f.Remedy, "Warmbly manage") {
+				t.Fatalf("throttle advice does not explain the reason and automatic recovery: %+v", f)
+			}
+			for _, key := range []string{"warmup_pool_throttled", "mailbox_spam_placement"} {
+				f := byKey[key]
+				copy := strings.ToLower(f.Remedy + " " + strings.Join(f.Steps, " "))
+				for _, old := range []string{"stop cold sending", "take the mailbox off", "out of cold rotation for a week", "until it requalifies", "bring it back at 5"} {
+					if strings.Contains(copy, old) {
+						t.Errorf("%s still recommends unnecessary exclusion: %s", key, copy)
+					}
+				}
+				if f.Action != nil || f.Evidence["recommended_action"] != f.Remedy {
+					t.Errorf("%s carries a hold or stale narration guidance", key)
+				}
+			}
+			settings := defaults()
+			settings.MutedDetectors = []string{"warmup_pool_throttled"}
+			if _, ok := findingsByKey(Detect(snapshotOf(m), settings))["warmup_pool_throttled"]; ok {
+				t.Fatal("the slowdown finding ignored its own mute setting")
+			}
+		})
+	}
+}
+
+func TestPoolExclusionIsSeparateFromRecoverableBands(t *testing.T) {
+	for _, state := range []string{"healthy", "watch", "quarantined", "blocked", ""} {
+		t.Run(state, func(t *testing.T) {
+			m := healthyMailbox()
+			m.PoolHealth, m.PoolBlocked = state, true
+			byKey := findingsByKey(Detect(snapshotOf(m), defaults()))
+			if _, ok := byKey["warmup_pool_throttled"]; ok {
+				t.Fatal("a non-throttled mailbox produced a throttle finding")
+			}
+			f, blocked := byKey["warmup_pool_blocked"]
+			if state == "healthy" || state == "watch" {
+				if blocked {
+					t.Fatalf("%s was treated as pool exclusion solely for its timer", state)
+				}
+				return
+			}
+			if !blocked || f.Severity != models.AdvisorCritical || f.Action == nil || f.Action.Tool != "set_mailbox_send_hold" {
+				t.Fatalf("real pool exclusion lost its severe guidance or hold: %+v", f)
+			}
+			if !strings.Contains(f.Remedy, "Stop cold sending") || f.Action.Undo == nil || strings.Contains(string(f.Action.Args), "status") {
+				t.Fatalf("pool exclusion must offer a reversible campaign hold without disabling warmup: %+v", f)
+			}
+		})
+	}
+}
+
+func TestThrottleDoesNotSuppressIndependentSafetyFindings(t *testing.T) {
+	m := healthyMailbox()
+	m.PoolHealth = "throttled"
+	m.AuthState, m.AuthSPF, m.AuthDMARC = "failing", false, false
+	m.Complaints30d, m.Bounces30d = 2, 80
+	m.WarmupPlacement = models.WarmupPlacementEvidence{MajorDelivered: 100, MajorSpam: 50}
+	byKey := findingsByKey(Detect(snapshotOf(m), defaults()))
+	for _, key := range []string{"mailbox_domain_auth", "mailbox_complaint_rate", "mailbox_bounce_rate", "mailbox_spam_placement"} {
+		if f, ok := byKey[key]; !ok || f.Severity != models.AdvisorCritical {
+			t.Errorf("throttling suppressed independent safety finding %s: %+v", key, f)
+		}
+	}
+	if f := byKey["mailbox_spam_placement"]; f.Action == nil || f.Action.Tool != "set_mailbox_send_hold" {
+		t.Fatal("severe placement lost its hold action on a throttled mailbox")
+	}
+}
+
+func TestUpdatedPlacementGuidanceInvalidatesOldNarration(t *testing.T) {
+	m := healthyMailbox()
+	m.WarmupPlacement = models.WarmupPlacementEvidence{MajorDelivered: 22, MajorSpam: 6}
+	f := findingsByKey(Detect(snapshotOf(m), defaults()))["mailbox_spam_placement"]
+	current := f.toModel(uuid.New())
+	legacy := *current
+	var err error
+	legacy.Evidence, err = json.Marshal(map[string]any{
+		"mailbox":                     m.Email,
+		"major_provider_spam_7d":      6,
+		"major_provider_delivered_7d": 22,
+		"spam_placement_percent":      band(100.0 * 6 / 22),
+		"quarantine_band_percent":     20.0,
+		"currently_sending_cold":      m.SendingCold(),
+		"current_daily_cap":           m.CampaignLimit,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.EvidenceHash() == legacy.EvidenceHash() || cacheKey(current) == cacheKey(&legacy) {
+		t.Fatal("unchanged placement numbers would retain the old stop-sending narration after an upgrade")
 	}
 }
 

@@ -43,6 +43,12 @@ func warmupDetectors() []Detector {
 			Run:      detectCloudStandingUnavailable,
 		},
 		{
+			Key:      "warmup_pool_throttled",
+			Category: models.AdvisorCategoryWarmup,
+			About:    "A mailbox whose warmup and cold sending are temporarily reduced by its health band. Throttling keeps the mailbox in the pool, including during re-entry probation. Placement throttles recover automatically through watch as placement improves. Throttling is not pool exclusion, a connection failure, or a reason on its own to hold campaigns or require manual re-entry. Follow the recommended action in the evidence.",
+			Run:      detectWarmupPoolThrottled,
+		},
+		{
 			Key:      "warmup_pool_blocked",
 			Category: models.AdvisorCategoryWarmup,
 			About:    "A mailbox quarantined or blocked from the shared warmup pool for its spam placement, complaint or bounce rate, or for tampering with warmup mail it received. Pool standing is the platform's own read on whether a mailbox is safe to keep in shared reputation surfaces.",
@@ -285,14 +291,60 @@ func detectCloudStandingUnavailable(s *repository.AdvisorSnapshot) []Finding {
 	return out
 }
 
+func detectWarmupPoolThrottled(s *repository.AdvisorSnapshot) []Finding {
+	out := []Finding{}
+	for _, m := range s.Mailboxes {
+		if m.PoolHealth != string(models.WarmupHealthThrottled) || m.PoolHealthReason == "cloud_evidence_unavailable" {
+			continue
+		}
+		remedy := "Keep warmup running and let Warmbly manage the reduced sending pace. Do not raise the daily cap to bypass the slowdown. Recovery follows the reason shown, without manual pool re-entry; separate ramp limits still apply."
+		out = append(out, Finding{
+			Key:         "warmup_pool_throttled",
+			GroupTitle:  "{count} mailboxes have temporarily reduced sending",
+			Category:    models.AdvisorCategoryWarmup,
+			Severity:    models.AdvisorHigh,
+			Surface:     models.AdvisorSurfaceMailboxes,
+			EntityType:  "email_account",
+			EntityID:    ref(m.ID),
+			EntityLabel: m.Email,
+			Impact:      clampImpact(40 + int(m.PoolHealthScore)/4),
+			Title:       fmt.Sprintf("%s has temporarily reduced sending", m.Email),
+			Detail: fmt.Sprintf(
+				"Warmbly has reduced warmup and cold sending for %s to half volume with wider spacing. This status describes a reduced sending pace, not pool exclusion or a connection failure. %s",
+				m.Email, m.PoolHealthReason),
+			Remedy: remedy,
+			Steps: []string{
+				"Keep warmup enabled so recent placement evidence can show recovery.",
+				"Leave the daily cap at or below its current setting while Warmbly manages the reduced pace.",
+				"Review recent campaign targeting and copy, and investigate any confirmed authentication, complaint or bounce issues separately.",
+				"For a placement throttle, the half-volume limit steps down to watch below 15% spam placement, and watch lifts below 7.5%. Other cooldowns follow the reason shown. Warmbly re-evaluates these limits automatically.",
+			},
+			Evidence: map[string]any{
+				"mailbox":                m.Email,
+				"pool_state":             m.PoolHealth,
+				"pool_health_reason":     m.PoolHealthReason,
+				"pool_type":              m.WarmupPoolType,
+				"currently_sending_cold": m.SendingCold(),
+				"recommended_action":     remedy,
+			},
+		})
+	}
+	return out
+}
+
 func detectWarmupPoolBlocked(s *repository.AdvisorSnapshot) []Finding {
 	out := []Finding{}
 	for _, m := range s.Mailboxes {
 		if m.PoolHealthReason == "cloud_evidence_unavailable" {
 			continue
 		}
+		// Recoverable bands also carry blocked_until; their timer is not pool exclusion.
+		switch models.WarmupHealthState(m.PoolHealth) {
+		case models.WarmupHealthHealthy, models.WarmupHealthWatch, models.WarmupHealthThrottled:
+			continue
+		}
 		bad := m.PoolBlocked ||
-			m.PoolHealth == "quarantined" || m.PoolHealth == "blocked" || m.PoolHealth == "throttled"
+			m.PoolHealth == "quarantined" || m.PoolHealth == "blocked"
 		if !bad {
 			continue
 		}

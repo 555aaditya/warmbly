@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/warmbly/warmbly/internal/models"
 )
 
 // LoadSnapshot reads one org's advisor view. Every section is best-effort: a
@@ -18,7 +20,7 @@ func (r *advisorRepository) LoadSnapshot(ctx context.Context, orgID uuid.UUID, n
 		Lists:          map[uuid.UUID]AdvisorListStats{},
 	}
 
-	mailboxes, err := r.loadMailboxes(ctx, orgID)
+	mailboxes, err := r.loadMailboxes(ctx, orgID, now)
 	if err != nil {
 		// Mailboxes are the one section worth failing on: almost every detector
 		// is scoped to a mailbox, and an empty list would look like "org has no
@@ -35,7 +37,7 @@ func (r *advisorRepository) LoadSnapshot(ctx context.Context, orgID uuid.UUID, n
 	return snap, nil
 }
 
-func (r *advisorRepository) loadMailboxes(ctx context.Context, orgID uuid.UUID) ([]AdvisorMailbox, error) {
+func (r *advisorRepository) loadMailboxes(ctx context.Context, orgID uuid.UUID, now time.Time) ([]AdvisorMailbox, error) {
 	// Bounce/complaint attribution runs through tasks: deliverability_events
 	// carries task_id, not email_account_id, so a mailbox's complaints are the
 	// events whose task was sent by it.
@@ -91,7 +93,7 @@ func (r *advisorRepository) loadMailboxes(ctx context.Context, orgID uuid.UUID) 
 			FROM warmup_statistics wst
 			WHERE wst.email_account_id = ea.id AND wst.date > CURRENT_DATE - 7
 		) w ON true
-		LEFT JOIN LATERAL (` + placementEvidenceSQL("ea.id", "NOW() - INTERVAL '7 days'") + `
+		LEFT JOIN LATERAL (` + placementEvidenceSQL("ea.id", "$2") + `
 		) ws ON true
 		LEFT JOIN LATERAL (` + warmupStandingSQL("ea.id") + `
 		) p ON true
@@ -126,7 +128,7 @@ func (r *advisorRepository) loadMailboxes(ctx context.Context, orgID uuid.UUID) 
 		WHERE ea.organization_id = $1
 		ORDER BY ea.created_at ASC`
 
-	rows, err := r.db.Query(ctx, query, orgID)
+	rows, err := r.db.Query(ctx, query, orgID, models.WarmupPlacementWindowStart(now))
 	if err != nil {
 		return nil, err
 	}

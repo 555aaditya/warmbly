@@ -236,6 +236,13 @@ func TestLiveHealthPlacementRecoveryUsesTheDisplayedUTCWindow(t *testing.T) {
 	if err != nil || old.Placement.MajorDelivered != 39 || old.Placement.MajorSpam != 6 {
 		t.Fatalf("old rolling sample = %+v, err = %v", old.Placement, err)
 	}
+	snapshot, err := repository.NewAdvisorRepository(handle).LoadSnapshot(t.Context(), f.org, now)
+	if err != nil || len(snapshot.Mailboxes) != 1 {
+		t.Fatalf("advisor snapshot = %+v, err = %v", snapshot, err)
+	}
+	if p := snapshot.Mailboxes[0].WarmupPlacement; p.MajorDelivered != 30 || p.MajorSpam != 2 {
+		t.Fatalf("advisor did not use the displayed placement window: %+v", p)
+	}
 	svc := NewService(repo).(*service)
 	svc.now = func() time.Time { return now }
 	health, xerr := svc.evaluateAndPersistAnyPool(t.Context(), f.account)

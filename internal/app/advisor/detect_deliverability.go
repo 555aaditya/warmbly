@@ -29,7 +29,7 @@ func deliverabilityDetectors() []Detector {
 		{
 			Key:      "mailbox_spam_placement",
 			Category: models.AdvisorCategoryDeliverability,
-			About:    "The share of a mailbox's warmup mail that partner inboxes filed into spam. This is the earliest honest read on inbox placement, because it is measured on mail the platform controls end to end rather than inferred from opens.",
+			About:    "The share of a mailbox's warmup mail that major-provider inboxes filed into spam. At least 20 deliveries are needed. At 10% it warns and at 20% it escalates the automatic placement-based slowdown, not pool exclusion or a campaign hold. At 50% or more it recommends holding cold campaigns while keeping warmup running. Follow the recommended action in the evidence.",
 			Run:      detectSpamPlacement,
 		},
 		{
@@ -169,14 +169,22 @@ func detectSpamPlacement(s *repository.AdvisorSnapshot) []Finding {
 		}
 
 		severity := models.AdvisorMedium
-		remedy := "Slow this mailbox down: lower the daily cap and widen the gap between sends while placement recovers. Warmup should keep running throughout."
+		remedy := "Keep warmup running and do not increase sending while placement recovers. Warmbly adjusts the placement-health sending pace automatically; a temporary slowdown does not require a campaign hold or manual pool re-entry."
+		steps := []string{
+			"Review the domain's authentication results and investigate any confirmed failures. Spam placement alone does not prove an authentication problem.",
+			"Do not raise the daily cap to bypass the slowdown. Warmbly manages placement-health sending reductions and recovery automatically.",
+			"Keep warmup enabled so new deliveries can show whether placement is improving.",
+			"Review recent campaign targeting and copy for poor audience fit, heavy link counts and missing unsubscribe headers.",
+			"Follow the recent major-provider placement sample. A recoverable placement slowdown does not require a fixed week-long wait or manual pool re-entry.",
+		}
 		switch {
 		case r >= spamPlacementBlock:
 			severity = models.AdvisorCritical
-			remedy = "Stop cold sending from this mailbox now. At this placement rate almost nothing is reaching an inbox, and every further send deepens the reputation hole. Leave warmup running and let it recover before resuming."
-		case r >= spamPlacementQuarantine:
+			remedy = "Stop cold sending from this mailbox now. At least half of its recent warmup deliveries at Google, Microsoft and Yahoo landed in spam. Leave warmup running, investigate the cause, and let placement recover before resuming."
+			steps[1] = "Hold this mailbox out of campaigns while investigating its placement. Leave warmup enabled rather than switching the mailbox off."
+			steps[4] = "Wait for a fresh sample showing recovered placement before releasing the campaign hold, then resume at a low daily cap."
+		case r >= spamPlacementSlowdown:
 			severity = models.AdvisorHigh
-			remedy = "Take this mailbox out of cold rotation for a week. Keep warmup running, check SPF/DKIM/DMARC on the domain, and resume at a low cap once placement is back under 10%."
 		}
 
 		f := Finding{
@@ -194,25 +202,21 @@ func detectSpamPlacement(s *repository.AdvisorSnapshot) []Finding {
 				"Over the last 7 days %d of %d warmup messages from %s delivered at Google, Microsoft and Yahoo went to spam. Warmup placement is the earliest honest read on where cold mail is landing, because it is measured on mail the platform controls end to end. Other mail hosts run their own filters and are not counted.",
 				p.MajorSpam, p.MajorDelivered, m.Email),
 			Remedy: remedy,
-			Steps: []string{
-				"Check SPF, DKIM and DMARC on this domain first. Authentication is the single biggest cause of spam placement, and no amount of volume tuning compensates for it.",
-				"Lower this mailbox's daily cap and widen the gap between sends. Placement recovers on calm, spaced-out sending.",
-				"Leave warmup running. It is what rebuilds the reputation, and stopping it now removes the only positive signal the mailbox is generating.",
-				"Read the last few campaigns this mailbox sent for spam-trigger phrasing, heavy link counts, and missing unsubscribe headers.",
-				"Give it a week and check this number again before putting the mailbox back into full rotation.",
-			},
+			Steps:  steps,
 			Evidence: map[string]any{
 				"mailbox":                     m.Email,
 				"major_provider_spam_7d":      p.MajorSpam,
 				"major_provider_delivered_7d": p.MajorDelivered,
 				"spam_placement_percent":      band(r),
-				"quarantine_band_percent":     spamPlacementQuarantine,
+				"slowdown_band_percent":       spamPlacementSlowdown,
+				"hold_band_percent":           spamPlacementBlock,
 				"currently_sending_cold":      m.SendingCold(),
 				"current_daily_cap":           m.CampaignLimit,
+				"recommended_action":          remedy,
 			},
 		}
 
-		if m.SendingCold() && r >= spamPlacementQuarantine {
+		if m.SendingCold() && r >= spamPlacementBlock {
 			f.Action = mailboxHoldAction(m.ID, "Hold this mailbox out of campaigns")
 		}
 		out = append(out, f)
