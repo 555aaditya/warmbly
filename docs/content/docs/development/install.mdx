@@ -294,6 +294,10 @@ Put your own compose changes in a `docker-compose.override.yml`, which compose m
 
 Upgrade the backend first and confirm its database migrations complete before upgrading consumers. Consumers wait up to two minutes for the clean migration version required by their embedded code before starting database-dependent work. If the backend is still old or a migration failed, the consumer exits with an actionable schema-readiness error and can retry through the container restart policy. It does not run migrations or ignore missing tables.
 
+### Unibox forwarding upgrade order
+
+Do not use forwarding to suppressed recipients until every backend handling submissions, queued send callbacks and worker/control-plane authorization has been upgraded, old requests have drained and old replicas have retired. During a mixed-backend rollout, pause Unibox submissions and queued send dispatch: an old backend still refuses these forwards. Existing clients can already submit forwards, so frontend ordering alone is insufficient. Verify old-replica retirement explicitly rather than relying on release completion or one healthy backend. No worker schema change or mailbox reconnect is required. See [send safety](/development/send-safety/#shared-send-time-admission).
+
 ### Mailbox sync upgrade order
 
 The mailbox lookup optimization adds concurrent indexes for normalized send Message-IDs and exact IMAP folder generations, without rewriting existing records. Index construction uses temporary disk space and I/O, so confirm database headroom before upgrading a busy instance and wait for migrations to finish. The new batch message-map endpoint needs no configuration: old workers still use single-message reads, and new workers use that route when an old backend does not support batches. Upgrade the backend first to get the performance benefit, then workers. Sync cadence, draft-deletion reconciliation and durable arrival requirements stay unchanged.

@@ -348,6 +348,8 @@ Sends or schedules a reply or a forward from any mailbox in the organization. Th
 
 Instant sends are held for the sender's undo window (5 to 120 seconds, default 30) before they actually leave, so `scheduled_at` is that far in the future. Within the window the send can still be cancelled with `DELETE /unibox/scheduled/:task_id`.
 
+A reply to an address on the workspace [suppression list](/guides/unsubscribe/#the-suppression-list), directly or through its domain, answers `400` with `code: "recipient_suppressed"` and a `message` naming the address, and nothing is queued. A forward is not checked against the list.
+
 Only Gmail has a provider thread handle, and it belongs to the mailbox that holds the thread. So the reply files into the Gmail thread `thread_id` names only when `email_account_id` holds a message in it; a mailbox that already replied into the conversation from outside continues the thread that reply started. Otherwise it goes out with the same In-Reply-To and References headers and the conversation's subject, which keeps it in the same conversation for the recipient, and starts a conversation of its own in the sending mailbox. The queued send still belongs to `thread_id`, so it is listed with that conversation's scheduled sends.
 
 ### Forwarding a message
@@ -361,6 +363,8 @@ Set `forward_message_id` to forward a message from the inbox. Warmbly attaches t
 The Date line is written in the sending mailbox's time zone (its own, else the workspace's, else UTC). The original HTML keeps its formatting: its stylesheet is folded into inline styles and it is sanitized like a message opened in Unibox, so scripts, event handlers and Warmbly's own open-tracking pixels are dropped. When the original has only a text part, it is forwarded as text. Links in the forwarded message are never rewritten for click tracking; only your note is tracked, when the mailbox tracks direct mail. Forwarding one of your own tracked sends (from Sent, say) swaps its tracked links back to their real destinations, so the new recipient's clicks are not counted against the original send.
 
 A forward goes out as a new conversation for its recipient: no provider thread, and no In-Reply-To or References unless you set `in_reply_to` yourself. A `thread_id` sent with it is not used for either. Inside Unibox the forward belongs to the conversation of the message it forwards (that message's `thread_id`), whichever mailbox sends it: it is listed with that conversation's scheduled sends while queued, and once the sending mailbox's Sent folder syncs, the sent copy is returned by `GET /unibox/thread` for that conversation, stored once. A forward in a conversation is never picked as the parent Message-ID for a later reply into it.
+
+The [suppression list](/guides/unsubscribe/#the-suppression-list) does not apply to a forward: it passes on mail already received to recipients chosen by hand, so it may go to an address or domain the list keeps out of campaigns. Fair use still counts its recipients.
 
 Two limits:
 

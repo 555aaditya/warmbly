@@ -301,7 +301,12 @@ func (s *tasksService) refuseUserEmail(ctx context.Context, taskID uuid.UUID, ac
 // sender can act on.
 func userEmailRefusalReason(err error) string {
 	var limit *repository.ManualSendLimitError
+	var suppressed *repository.RecipientSuppressedError
 	switch {
+	case errors.As(err, &suppressed):
+		return fmt.Sprintf("%s is on your suppression list. Remove the entry under Contacts > Suppression list to email it.", suppressed.Address)
+	case errors.Is(err, repository.ErrRecipientSuppressed):
+		return "a recipient is on your suppression list. Remove the entry under Contacts > Suppression list to email it."
 	case errors.As(err, &limit):
 		return models.ManualSendRefusal(limit.Window, limit.Limit)
 	case errors.Is(err, repository.ErrManualSendLimit):
@@ -309,7 +314,7 @@ func userEmailRefusalReason(err error) string {
 	case errors.Is(err, ErrWorkerOffline), errors.Is(err, ErrWorkerUnconfirmed):
 		return "its sending worker is offline. Try again in a few minutes."
 	case errors.Is(err, repository.ErrSendAdmissionDenied):
-		return "the mailbox cannot send right now. It may be paused or reconnecting, held after a send problem, cooling down after a provider limit, or a recipient may be on your suppression list."
+		return "the mailbox cannot send right now. It may be paused or reconnecting, held after a send problem, or cooling down after a provider limit."
 	default:
 		return "the send could not be prepared. Try again."
 	}
