@@ -114,7 +114,7 @@ A mailbox enters a band by crossing any single threshold. What each band does:
 
 - **Healthy**: sending normally, nothing to do.
 - **Watch**: warmup volume lowered and spacing increased. Cold volume is dampened by the same factor, so it slows across both before anything stricter. Lifts once spam placement is back below `7.5%`.
-- **Throttled**: warmup keeps running at half volume with double spacing, because warming is how placement recovers, and cold volume is halved. Steps down to watch once spam placement is back below `15%`, then returns to normal below `7.5%`.
+- **Throttled**: warmup keeps running at half volume with double spacing, because warming is how placement recovers, and cold volume is halved. Steps down to watch once spam placement is back below `15%`, then returns to healthy below `7.5%`. Separate [early-signal ramp limits](/guides/warmup/#holding-the-ramp-on-an-early-signal) still apply to fresh spam landings.
 - **Quarantine**: out of the shared paid warmup pool for `7 days`, as neither sender nor recipient. Cold sending is paused.
 - **Blocked**: out of the shared pool for `30 days`.
 

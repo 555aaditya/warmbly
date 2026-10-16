@@ -930,7 +930,7 @@ func evaluatePlacement(m *models.WarmupHealthMetrics, prior models.WarmupHealthS
 		return evaluationDecision{
 			State:        models.WarmupHealthThrottled,
 			BlockedUntil: &until,
-			Reason: fmt.Sprintf("%s Warmup and cold sending run at half volume with wider spacing until it is below %s, then step down to watch. Normal volume returns below %s on its own.",
+			Reason: fmt.Sprintf("%s Warmup and cold sending run at half volume with wider spacing until it is below %s, then step down to watch. Watch lifts below %s on its own. Separate ramp limits still apply.",
 				placementSummary(m), fmtPct(spamPlacementThrottlePct*spamPlacementExitFactor), fmtPct(spamPlacementWatchPct*spamPlacementExitFactor)),
 			Score: rate,
 		}

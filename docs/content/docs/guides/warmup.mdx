@@ -345,7 +345,7 @@ Spam placement is a folder outcome, not misconduct or evidence of diagnostic rep
 
 - `10%` puts the mailbox on watch: warmup and cold sending are spaced out a little more.
 - `20%` throttles it: warmup keeps running at half volume with double spacing, and cold volume is halved.
-- A throttle steps down to watch below `15%`, then returns to normal below `7.5%`, on its own. They lift below the line that set them rather than at it, so a mailbox sitting near a line is not flipped in and out of a band (and announced to your integrations) with every delivery.
+- A throttle steps down to watch below `15%`, then returns to healthy below `7.5%`, on its own. They lift below the line that set them rather than at it, so a mailbox sitting near a line is not flipped in and out of a band (and announced to your integrations) with every delivery. The separate [early-signal ramp pause](#holding-the-ramp-on-an-early-signal) still applies to fresh spam landings.
 
 Placement uses today and the preceding six UTC dates, matching the seven-day inbox rate on Deliverability and Emails. Older placement results stop affecting volume at the same boundary as the displayed rate. Complaints and mailbox tampering keep their separate rolling windows.
 
