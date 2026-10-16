@@ -308,6 +308,7 @@ function CampaignCard({
 }) {
     const [open, setOpen] = React.useState(false);
     const current = state.current_step;
+    const steps = state.steps ?? [];
 
     return (
         <div className="rounded-md border border-slate-200 bg-white overflow-hidden">
@@ -336,7 +337,7 @@ function CampaignCard({
                     />
                 </div>
 
-                <StepRail steps={state.steps} />
+                <StepRail steps={steps} />
 
                 <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1.5">
                     <PanelFact
@@ -412,7 +413,7 @@ function CampaignCard({
                         className="overflow-hidden"
                     >
                         <div className="border-t border-slate-100">
-                            {state.steps.map((s) => (
+                            {steps.map((s) => (
                                 <StepRow
                                     key={s.id}
                                     step={s}
