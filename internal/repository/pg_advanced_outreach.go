@@ -65,6 +65,10 @@ type AdvancedOutreachRepository interface {
 	MarkTaskDeadLetterReplayed(ctx context.Context, id uuid.UUID) error
 
 	CreateReplyIntent(ctx context.Context, record *models.ReplyIntentRecord) error
+	// ListReplyIntentsFor returns the intents recorded for one address and
+	// subject between from and to.
+	ListReplyIntentsFor(ctx context.Context, organizationID uuid.UUID, email, subject string, from, to time.Time) ([]models.ReplyIntentRecord, error)
+	DeleteReplyIntents(ctx context.Context, organizationID uuid.UUID, ids []uuid.UUID) error
 	CreatePreflightReport(ctx context.Context, report *models.PreflightReport) error
 
 	GetABVariantStats(ctx context.Context, campaignID uuid.UUID) ([]models.ABVariantStats, error)
@@ -1252,6 +1256,36 @@ func (r *advancedOutreachRepository) CreateReplyIntent(ctx context.Context, reco
 		record.ActionTaken,
 		metadata,
 	)
+	return err
+}
+
+func (r *advancedOutreachRepository) ListReplyIntentsFor(ctx context.Context, organizationID uuid.UUID, email, subject string, from, to time.Time) ([]models.ReplyIntentRecord, error) {
+	rows, err := resultDB(ctx, r.db).Query(ctx, `
+		SELECT id, organization_id, contact_email, intent, action_taken, created_at
+		FROM reply_intents
+		WHERE organization_id = $1 AND contact_email = lower(btrim($2))
+		  AND created_at BETWEEN $3 AND $4
+		  AND COALESCE(metadata->>'subject', '') = $5`, organizationID, email, from, to, subject)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.ReplyIntentRecord
+	for rows.Next() {
+		var rec models.ReplyIntentRecord
+		if err := rows.Scan(&rec.ID, &rec.OrganizationID, &rec.ContactEmail, &rec.Intent, &rec.ActionTaken, &rec.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
+func (r *advancedOutreachRepository) DeleteReplyIntents(ctx context.Context, organizationID uuid.UUID, ids []uuid.UUID) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := resultDB(ctx, r.db).Exec(ctx, `DELETE FROM reply_intents WHERE organization_id = $1 AND id = ANY($2)`, organizationID, ids)
 	return err
 }
 

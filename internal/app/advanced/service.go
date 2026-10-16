@@ -193,6 +193,10 @@ type Service interface {
 	// RecheckReplyOptOuts re-reads one page of reply opt-outs under the
 	// current rules, lifting the ones no message from the sender supports.
 	RecheckReplyOptOuts(ctx context.Context, afterID uuid.UUID, limit int) (uuid.UUID, bool, error)
+	// WithdrawHistoricalReplyEffects pages mail handled as a reply though it
+	// arrived before its sender was a contact, and withdraws the reply intent
+	// and untouched follow-up task each one left.
+	WithdrawHistoricalReplyEffects(ctx context.Context, since time.Time, afterID uuid.UUID) (uuid.UUID, bool, error)
 	// WireAudit attaches the audit trail a lifted reply opt-out is recorded in.
 	WireAudit(a AuditLogger)
 }
@@ -1384,7 +1388,8 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 	}
 
 	if campaignID == nil && contactID != nil && !referencesCampaignThread {
-		latest, err := s.campaignProgressRepo.GetLatestCampaignSequenceForContact(ctx, *contactID)
+		// Only a send that went out before the message arrived can be what it answers.
+		latest, err := s.campaignProgressRepo.GetLatestCampaignSequenceForContact(ctx, *contactID, msg.InternalDate)
 		if err == nil && latest != nil {
 			campaignID = &latest.CampaignID
 			sequenceID = &latest.SequenceID

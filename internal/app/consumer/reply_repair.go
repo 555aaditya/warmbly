@@ -93,3 +93,30 @@ func (s *JobsService) StartReplyOptOutRecheck(ctx context.Context) {
 		return err
 	})
 }
+
+// historicalReplyCleanupWindow covers every message the repair sweep could
+// have handled as a reply before it learned to tell older mail apart.
+const historicalReplyCleanupWindow = 2 * replyRepairWindow
+
+// StartHistoricalReplyCleanup withdraws, once per start, the reply intents
+// and untouched follow-up tasks that mail from before its sender's contact
+// produced. Current processing leaves none, so a later pass finds nothing.
+func (s *JobsService) StartHistoricalReplyCleanup(ctx context.Context) {
+	if s.AdvancedService == nil {
+		return
+	}
+	since := time.Now().Add(-historicalReplyCleanupWindow)
+	var afterID uuid.UUID
+	finished := false
+	jobrun.Loop(ctx, "historical_reply_cleanup", time.Minute, true, func(ctx context.Context) error {
+		if finished {
+			return nil
+		}
+		batchCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancel()
+		next, done, err := s.AdvancedService.WithdrawHistoricalReplyEffects(batchCtx, since, afterID)
+		afterID = next
+		finished = err == nil && done
+		return err
+	})
+}

@@ -266,7 +266,10 @@ type CampaignProgressRepository interface {
 	GetContactLastSequenceTime(ctx context.Context, contactID, campaignID uuid.UUID) (*time.Time, error)
 	CheckContactHasReplied(ctx context.Context, contactID, campaignID uuid.UUID) (bool, error)
 	CountEmailsSentTodayByOrganization(ctx context.Context, organizationID uuid.UUID) (int, error)
-	GetLatestCampaignSequenceForContact(ctx context.Context, contactID uuid.UUID) (*CampaignSequencePair, error)
+	// GetLatestCampaignSequenceForContact returns the contact's latest sent
+	// email step sent at or before receivedAt; a zero receivedAt is unknown and
+	// bounds nothing.
+	GetLatestCampaignSequenceForContact(ctx context.Context, contactID uuid.UUID, receivedAt time.Time) (*CampaignSequencePair, error)
 
 	// FindRoutedPairs selects the (contact, step) pairs that are due now by
 	// following each contact's step rules (the branching tree) rather than a
@@ -1295,18 +1298,23 @@ func (r *campaignProgressRepository) CountEmailsSentTodayByOrganization(ctx cont
 	return count, err
 }
 
-func (r *campaignProgressRepository) GetLatestCampaignSequenceForContact(ctx context.Context, contactID uuid.UUID) (*CampaignSequencePair, error) {
+func (r *campaignProgressRepository) GetLatestCampaignSequenceForContact(ctx context.Context, contactID uuid.UUID, receivedAt time.Time) (*CampaignSequencePair, error) {
+	var before *time.Time
+	if !receivedAt.IsZero() {
+		before = &receivedAt
+	}
 	query := `
 		SELECT campaign_id, sequence_id
 		FROM campaign_contact_progress p
 		WHERE contact_id = $1
 		  AND sent_at IS NOT NULL
+		  AND ($2::timestamptz IS NULL OR sent_at <= $2)
 		  AND ` + progressIsEmailStep("p") + `
 		ORDER BY sent_at DESC
 		LIMIT 1
 	`
 	out := &CampaignSequencePair{}
-	if err := resultDB(ctx, r.db).QueryRow(ctx, query, contactID).Scan(&out.CampaignID, &out.SequenceID); err != nil {
+	if err := resultDB(ctx, r.db).QueryRow(ctx, query, contactID, before).Scan(&out.CampaignID, &out.SequenceID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
