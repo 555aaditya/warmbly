@@ -14,6 +14,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// natsAckGrace keeps the ack wait past the handler budget, so a message is not
+// handed out again while its handler can still be running.
+var natsAckGrace = 5 * time.Second
+
 // NATSBus is the EventBus backed by NATS JetStream. JetStream (not core NATS)
 // is required because the rest of the system assumes durable, replayable
 // delivery: a worker that goes offline must resume from its last ack.
@@ -223,6 +227,12 @@ func (b *NATSBus) Publish(ctx context.Context, topic, key string, payload []byte
 }
 
 func (b *NATSBus) Subscribe(ctx context.Context, topics []string, group string, handler Handler) error {
+	return b.SubscribeKeyed(ctx, topics, group, 1, nil, handler)
+}
+
+// SubscribeKeyed hands messages with the same resolved key to one ordered lane
+// and runs independent lanes concurrently, as the Kafka backend does.
+func (b *NATSBus) SubscribeKeyed(ctx context.Context, topics []string, group string, lanes int, key KeyResolver, handler Handler) error {
 	if len(topics) == 0 {
 		return errors.New("eventbus nats: at least one topic required")
 	}
@@ -231,6 +241,9 @@ func (b *NATSBus) Subscribe(ctx context.Context, topics []string, group string, 
 	}
 	if handler == nil {
 		return errors.New("eventbus nats: handler required")
+	}
+	if lanes < 1 || lanes > 64 || (lanes > 1 && key == nil) {
+		return errors.New("eventbus nats: keyed subscription requires 1-64 lanes and a key resolver")
 	}
 	if err := b.ensureStream(ctx); err != nil {
 		return err
@@ -246,44 +259,25 @@ func (b *NATSBus) Subscribe(ctx context.Context, topics []string, group string, 
 		return fmt.Errorf("eventbus nats: lookup stream: %w", err)
 	}
 
+	budget := subscriptionTimeout(ctx)
+	ackWait := budget + natsAckGrace
 	cons, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
 		Durable:        b.durable(group, topics),
 		AckPolicy:      jetstream.AckExplicitPolicy,
 		DeliverPolicy:  jetstream.DeliverAllPolicy,
 		FilterSubjects: subjects,
 		MaxDeliver:     10,
-		AckWait:        handlerTimeout() + 5*time.Second,
+		AckWait:        ackWait,
 	})
 	if err != nil {
 		return fmt.Errorf("eventbus nats: create consumer: %w", err)
 	}
 
-	cc, err := cons.Consume(func(m jetstream.Msg) {
+	deliver := func(m jetstream.Msg) {
 		// A message already being handled finishes after a shutdown signal; only reading the next one stops.
-		hctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), handlerTimeout())
+		hctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), budget)
 		defer cancel()
-		key := m.Headers().Get("Warmbly-Key")
-		if key == "" {
-			key = m.Headers().Get(nats.MsgIdHdr)
-		}
-		// Strip the prefix when reporting topic back to handlers so they see
-		// the same string they published with. Note: NATS subjects use "."
-		// while Kafka topics use ":" — handlers may receive either form
-		// depending on which backend is wired in. New code should not rely
-		// on the exact separator and should use Subject() if it needs to
-		// compare against a Kafka-style topic name.
-		topic := strings.TrimPrefix(m.Subject(), b.prefix+".")
-		attempt := 1
-		if meta, merr := m.Metadata(); merr == nil && meta.NumDelivered > 0 {
-			attempt = int(meta.NumDelivered)
-		}
-		if err := invokeHandler(hctx, handler, Message{
-			Topic:      topic,
-			Key:        key,
-			Payload:    m.Data(),
-			Attempt:    attempt,
-			Redelivers: true,
-		}); err != nil {
+		if err := invokeHandler(hctx, handler, b.envelope(m)); err != nil {
 			log.Error().Err(err).Str("subject", m.Subject()).Msg("eventbus nats handler error")
 			// Nak with a short delay so transient errors don't hot-loop.
 			if nakErr := m.NakWithDelay(time.Second); nakErr != nil {
@@ -294,16 +288,47 @@ func (b *NATSBus) Subscribe(ctx context.Context, topics []string, group string, 
 		if ackErr := m.Ack(); ackErr != nil {
 			log.Warn().Err(ackErr).Msg("eventbus nats ack failed")
 		}
-	})
+	}
+
+	var pool *natsLanes
+	callback := deliver
+	var opts []jetstream.PullConsumeOpt
+	if lanes > 1 {
+		pool = newNATSLanes(lanes, ackWait, deliver)
+		callback = func(m jetstream.Msg) {
+			laneKey, err := resolveKey(ctx, key, b.envelope(m))
+			if err != nil {
+				log.Error().Err(err).Str("subject", m.Subject()).Msg("eventbus nats key resolution failed")
+				if nakErr := m.NakWithDelay(time.Second); nakErr != nil {
+					log.Warn().Err(nakErr).Msg("eventbus nats nak failed")
+				}
+				return
+			}
+			pool.dispatch(m, laneKey)
+		}
+		// The lanes hold what is read; a small prefetch keeps unheld messages from outliving their ack wait.
+		opts = append(opts, jetstream.PullMaxMessages(lanes))
+	}
+
+	cc, err := cons.Consume(callback, opts...)
 	if err != nil {
+		if pool != nil {
+			pool.stop()
+		}
 		return fmt.Errorf("eventbus nats: consume: %w", err)
 	}
 
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
+		if pool != nil {
+			pool.halt()
+		}
 		cc.Stop()
 		<-cc.Closed()
+		if pool != nil {
+			pool.stop()
+		}
 		return ErrBusClosed
 	}
 	b.subscribers = append(b.subscribers, cc)
@@ -311,10 +336,36 @@ func (b *NATSBus) Subscribe(ctx context.Context, topics []string, group string, 
 
 	// Block until ctx is cancelled, mirroring KafkaBus.Subscribe semantics.
 	<-ctx.Done()
+	if pool != nil {
+		pool.halt()
+	}
 	cc.Stop()
 	// Closed fires once the callback in progress has returned, so shutdown waits for it.
 	<-cc.Closed()
+	if pool != nil {
+		pool.stop()
+	}
 	return ctx.Err()
+}
+
+// envelope reports a JetStream message in the bus-neutral form handlers read.
+func (b *NATSBus) envelope(m jetstream.Msg) Message {
+	key := m.Headers().Get("Warmbly-Key")
+	if key == "" {
+		key = m.Headers().Get(nats.MsgIdHdr)
+	}
+	attempt := 1
+	if meta, err := m.Metadata(); err == nil && meta.NumDelivered > 0 {
+		attempt = int(meta.NumDelivered)
+	}
+	return Message{
+		// Handlers see the topic they published to, without the stream prefix.
+		Topic:      strings.TrimPrefix(m.Subject(), b.prefix+"."),
+		Key:        key,
+		Payload:    m.Data(),
+		Attempt:    attempt,
+		Redelivers: true,
+	}
 }
 
 func (b *NATSBus) Close() error {
@@ -352,7 +403,10 @@ func natsURLFromEnv() string {
 }
 
 // Compile-time interface check.
-var _ EventBus = (*NATSBus)(nil)
+var (
+	_ EventBus        = (*NATSBus)(nil)
+	_ KeyedSubscriber = (*NATSBus)(nil)
+)
 
 // maxBytesOrUnlimited maps an unset ceiling onto JetStream's own spelling for
 // it. Zero in a StreamConfig means zero bytes, not unlimited.

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	ckf "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/rs/zerolog/log"
@@ -146,6 +147,7 @@ func (b *KafkaBus) subscribeOnce(ctx context.Context, topics []string, group str
 	// background: a synchronous commit per message cost a broker round trip each.
 	cc.Set("enable.auto.commit", true)
 	cc.Set("enable.auto.offset.store", false)
+	cc.Set("max.poll.interval.ms", int(maxPollInterval(subscriptionTimeout(ctx)).Milliseconds()))
 
 	cons, err := cc.Connect()
 	if err != nil {
@@ -191,6 +193,7 @@ func (b *KafkaBus) subscribeOnce(ctx context.Context, topics []string, group str
 }
 
 func kafkaHandler(ctx context.Context, handler Handler) func(*ckf.Message) error {
+	budget := subscriptionTimeout(ctx)
 	var mu sync.Mutex
 	attempts := map[*ckf.Message]int{}
 	return func(msg *ckf.Message) error {
@@ -201,7 +204,7 @@ func kafkaHandler(ctx context.Context, handler Handler) func(*ckf.Message) error
 		envelope := kafkaEnvelope(msg)
 		envelope.Attempt = attempt
 		// A message already being handled finishes after a shutdown signal; only reading the next one stops.
-		hctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), handlerTimeout())
+		hctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), budget)
 		defer cancel()
 		if err := invokeHandler(hctx, handler, envelope); err != nil {
 			log.Error().Err(err).Str("topic", envelope.Topic).Msg("eventbus kafka handler error")
@@ -212,6 +215,12 @@ func kafkaHandler(ctx context.Context, handler Handler) func(*ckf.Message) error
 		mu.Unlock()
 		return nil
 	}
+}
+
+// maxPollInterval leaves a serial consumer room for a handler that runs its
+// whole budget and is retried once, keeping librdkafka's 5 minute default as the floor.
+func maxPollInterval(budget time.Duration) time.Duration {
+	return max(5*time.Minute, 2*budget+30*time.Second)
 }
 
 func kafkaEnvelope(msg *ckf.Message) Message {

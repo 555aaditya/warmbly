@@ -313,7 +313,7 @@ On `filesystem`, a remote worker writes blobs to its own disk rather than a volu
 | `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD` | Broker credentials | unset | yes |
 | `SCHEMA_REGISTRY_URL`, `SCHEMA_REGISTRY_KEY`, `SCHEMA_REGISTRY_SECRET` | Registry for the Avro codec | unset | yes |
 | `CODEC_PROVIDER` | `json` or `avro` | `json` under compose, `avro` for a bare binary | yes |
-| `EVENTBUS_HANDLER_TIMEOUT` | How long one handler may take before the delivery is abandoned | `30s` | yes |
+| `EVENTBUS_HANDLER_TIMEOUT` | How long one handler may take before the delivery is abandoned. A subscription that needs longer carries its own budget, never shorter than this one: a worker's command subscription runs under 195s, because a send is given 120s (the SMTP client's 90s conversation plus the checks before it) and then records its result. On NATS the ack wait is the subscription's budget plus 5s | `30s` | yes |
 | `PUBSUB_ENABLED` | `false` uses the Redis bridge for realtime fanout, `true` uses Google Pub/Sub | `false` | yes |
 | `GCP_PROJECT_ID` | Project when `PUBSUB_ENABLED=true` | unset | yes |
 
@@ -446,7 +446,7 @@ Keep the copies private. GeoLite2 may not be redistributed, which is also why no
 | `WORKER_BIND_IP` | Source address to bind outbound connections to, and the seed for a derived `WORKER_ID` | unset | yes |
 | `WORKER_PUBLIC_IP` | Public IPv4 reported by the worker, never replaced by the backend-observed address, which may be a reverse proxy. Otherwise the node discovers HTTPS egress IPv4 using `api.ipify.org` every ten minutes. Set this explicitly when mail and HTTPS have different egress routes | detected | yes |
 | `WARMBLY_WORKER_CAPACITY` | Assigned-mailbox planning target for this worker. This guides placement and is not a mailbox-provider send limit | `100` | yes |
-| `WORKER_COMMAND_CONCURRENCY` | Kafka worker command lanes, from `1` to `64`. Commands are grouped by the mailbox in the payload, including older task-keyed sends. Each mailbox stays in order; independent lanes run concurrently. NATS remains serial. Invalid values use the default | `8` | yes |
+| `WORKER_COMMAND_CONCURRENCY` | Worker command lanes, from `1` to `64`, on both Kafka and NATS. Commands are grouped by the mailbox in the payload, including older task-keyed sends. Each mailbox stays in order; independent lanes run concurrently, so one slow mail server holds only its own lane. On NATS a command waiting in a lane is kept from being redelivered while it waits. Invalid values use the default | `8` | yes |
 | `WARMBLY_NODE_REGION` | Free-form label for where this node egresses from, e.g. `eu-central`. Placement prefers a worker near where a mailbox's provider expects sign-ins; unset scores neutral. Written by the join script from `--region` | unset | yes |
 | `ENCRYPTED_KEYS_BACKEND_URL` | Backend base the worker fetches organization keys from | unset | yes |
 | `ENCRYPTED_KEYS_WORKER_TOKEN` | The worker's copy of `INTERNAL_API_TOKEN` | unset | yes |

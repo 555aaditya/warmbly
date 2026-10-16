@@ -38,7 +38,7 @@ func (w *WorkerService) replayPendingSend(ctx context.Context, command models.Se
 
 // Provider execution spends the handler budget; recording gets its own bounded budget.
 func (w *WorkerService) reportSendResult(parent context.Context, p pendingSendResult) error {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), sendResultReportTimeout)
 	defer cancel()
 	var err error
 	for attempt := range 4 {

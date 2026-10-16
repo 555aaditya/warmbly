@@ -57,7 +57,8 @@ type EventBus interface {
 	// Subscribe registers a Handler against one or more topics under a named
 	// consumer group. The call blocks until the context is cancelled or a
 	// fatal error occurs. The handler is invoked one message at a time per
-	// subscription. A handler that returns nil signals successful processing
+	// subscription, under a deadline of EVENTBUS_HANDLER_TIMEOUT or the longer
+	// one set by WithHandlerTimeout. A handler that returns nil signals successful processing
 	// and the message is acked; a non-nil error leaves the message for
 	// redelivery according to the backend's retry policy.
 	Subscribe(ctx context.Context, topics []string, group string, handler Handler) error
@@ -183,4 +184,22 @@ func handlerTimeout() time.Duration {
 		}
 	}
 	return 30 * time.Second
+}
+
+type handlerTimeoutKey struct{}
+
+// WithHandlerTimeout raises the per-message budget of subscriptions opened with
+// ctx, for handlers that legitimately run longer. It never lowers
+// EVENTBUS_HANDLER_TIMEOUT.
+func WithHandlerTimeout(ctx context.Context, d time.Duration) context.Context {
+	return context.WithValue(ctx, handlerTimeoutKey{}, d)
+}
+
+// subscriptionTimeout is the per-message budget of a subscription opened with ctx.
+func subscriptionTimeout(ctx context.Context) time.Duration {
+	d := handlerTimeout()
+	if v, ok := ctx.Value(handlerTimeoutKey{}).(time.Duration); ok && v > d {
+		return v
+	}
+	return d
 }
