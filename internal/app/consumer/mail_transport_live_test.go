@@ -185,6 +185,57 @@ func TestLiveMailTransportConfirmedSendReconcilesOnlySend(t *testing.T) {
 	}
 }
 
+func TestLiveMailTransportConfirmedSendAndSyncClearLegacyReports(t *testing.T) {
+	for _, syncFirst := range []bool{false, true} {
+		t.Run(map[bool]string{false: "send_first", true: "sync_first"}[syncFirst], func(t *testing.T) {
+			d := liveDB(t)
+			s := liveJobsService(d)
+			s.EmailAccountErrorRepository = repository.NewEmailAccountErrorRepository(d)
+			s.EmailSyncStateRepository = repository.NewEmailSyncStateRepository(d)
+			f := newSendResultFixture(t, d)
+			task := f.stampSend(t, s)
+			var generation uuid.UUID
+			if err := d.QueryRow(t.Context(), `SELECT transport_generation FROM email_accounts WHERE id=$1`, f.mailbox).Scan(&generation); err != nil {
+				t.Fatal(err)
+			}
+			old := time.Now().Add(-5 * 24 * time.Hour).UTC().Truncate(time.Second)
+			if _, err := d.Exec(t.Context(), `INSERT INTO email_account_errors(id,email_account_id,user_id,error_code,severity,resolve_method,title,message,created_at,task_id)
+			    VALUES($1,$2,$3,'SERVER_UNREACHABLE','WARNING','RETRY','Connection error','Temporary SMTP failure',$4,$5)`, uuid.New(), f.mailbox, f.user, old, task); err != nil {
+				t.Fatal(err)
+			}
+			synced := old.Add(4 * 24 * time.Hour)
+			sync := func() error {
+				return s.HandleSyncState(t.Context(), &models.JobEventSyncState{UserID: f.user, EmailID: f.mailbox, State: models.SyncState{TransportGeneration: generation, LastSyncedAt: &synced}})
+			}
+			send := func() error {
+				return s.HandleEmailSent(t.Context(), models.SendEmailResult{TransportGeneration: generation, TaskID: task, SentAt: synced.Add(-time.Hour), MessageID: "<legacy-recovered@test.local>"})
+			}
+			first, second := send, sync
+			if syncFirst {
+				first, second = sync, send
+			}
+			if err := first(); err != nil {
+				t.Fatal(err)
+			}
+			rows, err := s.EmailAccountErrorRepository.GetByAccountID(t.Context(), f.mailbox, true)
+			if err != nil || len(rows) != 1 {
+				t.Fatal("one operation guessed the old failure's scope", rows, err)
+			}
+			if err := second(); err != nil {
+				t.Fatal(err)
+			}
+			byAccount, err := s.EmailAccountErrorRepository.GetByAccountIDs(t.Context(), []uuid.UUID{f.mailbox}, true)
+			if err != nil || len(byAccount[f.mailbox]) != 0 {
+				t.Fatal("confirmed recovery left the legacy report visible to account health", byAccount, err)
+			}
+			rows, err = s.EmailAccountErrorRepository.GetByAccountID(t.Context(), f.mailbox, false)
+			if err != nil || len(rows) != 1 || rows[0].ResolvedAt == nil || !rows[0].CreatedAt.Equal(old) || rows[0].Operation != models.MailTransportUnknown {
+				t.Fatal("recovery lost or reclassified the historical failure", rows, err)
+			}
+		})
+	}
+}
+
 func TestLiveMailTransportUnreadableSyncStateCannotAcquireRecovery(t *testing.T) {
 	d := liveDB(t)
 	f := newSendResultFixture(t, d)

@@ -431,8 +431,8 @@ func TestLiveMailTransportOperationIsolationAndUnknownHold(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := f.errors(t, true)
-	if len(rows) != 1 || rows[0].Operation != models.MailTransportUnknown {
-		t.Fatalf("send cleared unknown operation: %+v", rows)
+	if len(rows) != 0 {
+		t.Fatalf("success from both transports left an old error unresolved: %+v", rows)
 	}
 	var held bool
 	if err := f.pool.QueryRow(t.Context(), `SELECT send_recovery_hold FROM email_accounts WHERE id=$1`, f.account).Scan(&held); err != nil || !held {
@@ -502,8 +502,8 @@ func TestLiveMailTransportOutOfOrderFailureStaysHistorical(t *testing.T) {
 	if len(f.errors(t, true)) != 0 {
 		t.Fatal("newer proven success did not recover")
 	}
-	if row, err := f.repo.CreateOnce(t.Context(), f.report(models.MailTransportUnknown, &old)); err != nil || row == nil {
-		t.Fatal("known successes guessed legacy operation ownership", err)
+	if row, err := f.repo.CreateOnce(t.Context(), f.report(models.MailTransportUnknown, &old)); err != nil || row != nil {
+		t.Fatal("success from both transports left a delayed unclassified failure active", err)
 	}
 }
 
