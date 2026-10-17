@@ -518,11 +518,16 @@ func (p *openAIProvider) RunAgent(ctx context.Context, req AgentRequest) (*Agent
 		maxTokens = defaultAgentTokens
 	}
 
-	byName := make(map[string]ToolDef, len(req.Tools))
-	for _, t := range req.Tools {
+	catalog := newToolCatalog(req.Tools, req.Messages)
+	tools, system := req.Tools, req.System
+	if catalog != nil {
+		tools = append(append([]ToolDef(nil), tools...), catalog.search)
+		system += catalog.instructions()
+	}
+	byName := make(map[string]ToolDef, len(tools))
+	for _, t := range tools {
 		byName[t.Name] = t
 	}
-	wireTools := toolDefsToWire(req.Tools)
 
 	// messages is the durable transcript; we mutate a copy so the caller's
 	// slice is not aliased.
@@ -545,14 +550,19 @@ func (p *openAIProvider) RunAgent(ctx context.Context, req AgentRequest) (*Agent
 		// With a listener attached, stream the completion so text reaches the
 		// client token by token; the closing EventText below carries the full
 		// block, so deltas stay purely cosmetic.
+		available := req.Tools
+		if catalog != nil {
+			available = catalog.definitions()
+		}
+		wireTools := toolDefsToWire(available)
 		var resp *oaiResponse
 		var err error
 		if req.OnEvent != nil {
-			resp, err = p.completeStream(ctx, model, maxTokens, transcriptToWire(req.System, messages), wireTools, nil, func(delta string) {
+			resp, err = p.completeStream(ctx, model, maxTokens, transcriptToWire(system, messages), wireTools, nil, func(delta string) {
 				req.OnEvent(AgentEvent{Type: EventTextDelta, Text: delta})
 			})
 		} else {
-			resp, err = p.complete(ctx, model, maxTokens, transcriptToWire(req.System, messages), wireTools, nil)
+			resp, err = p.complete(ctx, model, maxTokens, transcriptToWire(system, messages), wireTools, nil)
 		}
 		if err != nil {
 			return nil, err

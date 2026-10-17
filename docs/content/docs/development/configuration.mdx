@@ -673,6 +673,8 @@ An empty `AI_PROVIDER` with a set `AI_API_KEY` falls back to `api.openai.com`, s
 
 Model compatibility needs no configuration. Backends disagree about the request shape: newer OpenAI models want `max_completion_tokens` rather than `max_tokens`, refuse any temperature but the default, and some refuse function tools unless reasoning is switched off, while most OpenAI compatible backends only know the older shape. The provider learns this from the first rejection of each parameter and remembers it, so a model is walked to a working shape on its first call and every later call starts there.
 
+The OpenAI-compatible agent loop also handles catalogs larger than 128 tools automatically. It exposes read-only tool discovery and loads up to 20 matching tools at a time, rather than sending the whole catalog in one request. All permitted built-in and connected MCP tools remain discoverable, and their original permissions and approval rules still apply. Existing conversations can continue after upgrading; no database migration or AI configuration change is needed.
+
 Set these on the backend and the consumer.
 
 Automatic inbox tagging is read by the backend, consumer, and `warmblyctl`. Both inbox-tagging variables are required; a key by itself does not start classification. See [Automatic inbox tagging](/guides/inbox-tagging/).
