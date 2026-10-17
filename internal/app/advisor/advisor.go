@@ -125,7 +125,19 @@ type Detector struct {
 	// it matters. It grounds the narrator so the copy explains the real rule
 	// rather than paraphrasing the numbers back at the user.
 	About string
+	// Reads lists the snapshot sections it depends on beyond the mailboxes.
+	Reads []repository.AdvisorSection
 	Run   func(s *repository.AdvisorSnapshot) []Finding
+}
+
+// held reports whether a section this detector reads failed to load.
+func (d Detector) held(s *repository.AdvisorSnapshot) bool {
+	for _, sec := range d.Reads {
+		if s.SectionFailed(sec) {
+			return true
+		}
+	}
+	return false
 }
 
 // AllDetectors returns every detector in evaluation order. Order does not
@@ -154,18 +166,11 @@ func DetectorAbout() map[string]string {
 // Detect runs every detector that the org's settings leave enabled and returns
 // the findings sorted most-urgent-first.
 func Detect(s *repository.AdvisorSnapshot, settings *models.AdvisorSettings) []Finding {
-	muted := map[string]bool{}
-	for _, k := range settings.MutedDetectors {
-		muted[k] = true
-	}
-	mutedCat := map[string]bool{}
-	for _, c := range settings.MutedCategories {
-		mutedCat[c] = true
-	}
+	muted := mutedBy(settings)
 
 	out := []Finding{}
 	for _, d := range AllDetectors() {
-		if muted[d.Key] || mutedCat[string(d.Category)] {
+		if muted(d) || d.held(s) {
 			continue
 		}
 		for _, f := range d.Run(s) {
@@ -192,6 +197,31 @@ func Detect(s *repository.AdvisorSnapshot, settings *models.AdvisorSettings) []F
 		return out[i].Impact > out[j].Impact
 	})
 	return out
+}
+
+// heldDetectors is the enabled detectors whose open findings stand unchanged
+// this run, because a section they read did not load.
+func heldDetectors(s *repository.AdvisorSnapshot, settings *models.AdvisorSettings) []string {
+	muted := mutedBy(settings)
+	out := []string{}
+	for _, d := range AllDetectors() {
+		if !muted(d) && d.held(s) {
+			out = append(out, d.Key)
+		}
+	}
+	return out
+}
+
+func mutedBy(settings *models.AdvisorSettings) func(Detector) bool {
+	muted := map[string]bool{}
+	for _, k := range settings.MutedDetectors {
+		muted[k] = true
+	}
+	mutedCat := map[string]bool{}
+	for _, c := range settings.MutedCategories {
+		mutedCat[c] = true
+	}
+	return func(d Detector) bool { return muted[d.Key] || mutedCat[string(d.Category)] }
 }
 
 // --- shared helpers -------------------------------------------------------

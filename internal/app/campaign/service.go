@@ -2,6 +2,7 @@ package campaign
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,8 +40,9 @@ type CampaignService interface {
 	// StartSendPlanSnapshotter runs the background loop that re-walks every
 	// active campaign's send plan on an interval and stores it, so SendPlan
 	// serves a stored snapshot instead of computing on the request. A no-op
-	// without the snapshot store or a planner.
-	StartSendPlanSnapshotter(ctx context.Context, interval time.Duration)
+	// without the snapshot store or a planner. maxAge is when a stored
+	// snapshot counts as stale; zero keeps the built-in window.
+	StartSendPlanSnapshotter(ctx context.Context, interval, maxAge time.Duration)
 	Update(ctx context.Context, orgID, id string, data *models.UpdateCampaign) (*models.Campaign, *errx.Error)
 	// Delete removes an organization's campaign outright. A running campaign
 	// is stopped as part of it: its pending tasks are cancelled in the same
@@ -143,6 +145,8 @@ type campaignService struct {
 	// on the request. Optional/nil-safe: without it SendPlan computes inline
 	// through the single-flight cache, as it did before.
 	planSnapshotRepo repository.CampaignSendPlanSnapshotRepository
+	// planMaxAge overrides sendPlanSnapshotMaxAge when set (nanoseconds).
+	planMaxAge atomic.Int64
 }
 
 // SegmentCounter is the slice of the segment service Estimate needs.

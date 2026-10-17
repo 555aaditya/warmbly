@@ -151,7 +151,7 @@ func TestLiveMailTransportLegacyRecoveryMigration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	data, err := os.ReadFile("../infrastructure/db/migrations/000301_recovered_legacy_mailbox_errors.up.sql")
+	data, err := os.ReadFile("../infrastructure/db/migrations/000313_recovered_legacy_mailbox_errors.up.sql")
 	if err != nil {
 		t.Fatal(err)
 	}

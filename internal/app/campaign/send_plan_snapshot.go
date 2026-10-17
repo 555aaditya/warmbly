@@ -111,7 +111,10 @@ func (s *campaignService) refreshPlanAsync(campaign *models.Campaign, orgID uuid
 // claim means exactly one backend replica walks the fleet each tick rather than
 // every replica repeating the work; runOnBoot seeds snapshots promptly after a
 // restart. A no-op without the snapshot store or a planner.
-func (s *campaignService) StartSendPlanSnapshotter(ctx context.Context, interval time.Duration) {
+func (s *campaignService) StartSendPlanSnapshotter(ctx context.Context, interval, maxAge time.Duration) {
+	if maxAge > 0 {
+		s.planMaxAge.Store(int64(maxAge))
+	}
 	if s.planSnapshotRepo == nil || s.campaignRepository == nil {
 		return
 	}
@@ -125,6 +128,14 @@ func (s *campaignService) StartSendPlanSnapshotter(ctx context.Context, interval
 		s.snapshotActiveCampaignsOnce(ctx)
 		return nil
 	})
+}
+
+// sendPlanMaxAge is the configured staleness window, else sendPlanSnapshotMaxAge.
+func (s *campaignService) sendPlanMaxAge() time.Duration {
+	if v := s.planMaxAge.Load(); v > 0 {
+		return time.Duration(v)
+	}
+	return sendPlanSnapshotMaxAge
 }
 
 // snapshotActiveCampaignsOnce walks every active campaign once, skipping those
@@ -190,7 +201,7 @@ func (s *campaignService) snapshotCampaign(ctx context.Context, id uuid.UUID) st
 	// missing snapshots are recomputed.
 	if snap, err := s.planSnapshotRepo.Get(ctx, orgID, campaign.ID); err == nil && snap != nil &&
 		snap.VersionKey == key && snap.Day == planBudgetDay(time.Now()) &&
-		time.Since(snap.ComputedAt) <= sendPlanSnapshotMaxAge {
+		time.Since(snap.ComputedAt) <= s.sendPlanMaxAge() {
 		return "skipped"
 	}
 	cctx, cancel := context.WithTimeout(ctx, sendPlanSnapshotPerCompute)

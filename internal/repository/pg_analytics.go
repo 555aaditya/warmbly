@@ -781,13 +781,7 @@ func (r *analyticsRepository) GetDashboardOverallStats(ctx context.Context, orgI
 			COUNT(CASE WHEN ccp.opened_at IS NOT NULL AND NOT ccp.opened_machine AND ccp.sent_at >= $2 AND ccp.sent_at <= $3 THEN 1 END) as total_opens,
 			COUNT(CASE WHEN ccp.opened_at IS NOT NULL AND ccp.opened_machine AND ccp.sent_at >= $2 AND ccp.sent_at <= $3 THEN 1 END) as machine_opens,
 			COUNT(CASE WHEN ccp.clicked_at IS NOT NULL AND ccp.sent_at >= $2 AND ccp.sent_at <= $3 THEN 1 END) as total_clicks,
-			COUNT(CASE WHEN ccp.clicked_at IS NULL AND ccp.sent_at >= $2 AND ccp.sent_at <= $3 AND EXISTS (
-				SELECT 1 FROM email_link_clicks lc
-				WHERE lc.campaign_id = ccp.campaign_id AND lc.contact_id = ccp.contact_id AND lc.sequence_id = ccp.sequence_id AND lc.machine
-			) AND NOT EXISTS (
-				SELECT 1 FROM email_link_clicks lc
-				WHERE lc.campaign_id = ccp.campaign_id AND lc.contact_id = ccp.contact_id AND lc.sequence_id = ccp.sequence_id AND NOT lc.machine
-			) THEN 1 END) as machine_clicks,
+			COUNT(CASE WHEN ccp.clicked_at IS NULL AND ccp.sent_at >= $2 AND ccp.sent_at <= $3 AND mo.campaign_id IS NOT NULL THEN 1 END) as machine_clicks,
 			COUNT(CASE WHEN ccp.replied_at IS NOT NULL AND ccp.sent_at >= $2 AND ccp.sent_at <= $3 THEN 1 END) as total_replies,
 			COUNT(CASE WHEN ccp.bounced_at IS NOT NULL AND ccp.sent_at >= $2 AND ccp.sent_at <= $3 THEN 1 END) as total_bounces,
 			(SELECT COUNT(*) FROM campaigns ac WHERE ac.organization_id = $1 AND ac.status = 'active'` + inCampaignScope("ac.id", scope, 4) + `) as active_campaigns,
@@ -795,6 +789,15 @@ func (r *analyticsRepository) GetDashboardOverallStats(ctx context.Context, orgI
 		FROM campaign_contact_progress ccp
 		JOIN campaigns c ON c.id = ccp.campaign_id
 		JOIN sequences s ON s.id = ccp.sequence_id AND s.kind = 'email'
+		-- Steps with at least one click, every one of them machine (machine is NOT NULL).
+		LEFT JOIN (
+			SELECT lc.campaign_id, lc.contact_id, lc.sequence_id
+			FROM email_link_clicks lc
+			JOIN campaigns lk ON lk.id = lc.campaign_id
+			WHERE lk.organization_id = $1` + inCampaignScope("lc.campaign_id", scope, 4) + `
+			GROUP BY lc.campaign_id, lc.contact_id, lc.sequence_id
+			HAVING bool_and(lc.machine)
+		) mo ON mo.campaign_id = ccp.campaign_id AND mo.contact_id = ccp.contact_id AND mo.sequence_id = ccp.sequence_id
 		WHERE c.organization_id = $1` + inCampaignScope("c.id", scope, 4) + `
 		  AND ccp.sent_at >= $2 AND ccp.sent_at <= $3
 	`
@@ -1018,6 +1021,8 @@ func (r *analyticsRepository) GetDashboardDailyTrend(ctx context.Context, orgID 
 		JOIN sequences s ON s.id = ccp.sequence_id AND s.kind = 'email'
 		WHERE c.organization_id = $1
 		  AND ccp.sent_at IS NOT NULL
+		  -- Index range with a day of slack for any zone offset; the ::date tests decide.
+		  AND ccp.sent_at >= $2::date - 1 AND ccp.sent_at < $3::date + 2
 		  AND ccp.sent_at::date >= $2
 		  AND ccp.sent_at::date <= $3` + inCampaignScope("c.id", scope, 4) + `
 		GROUP BY sent_at::date
