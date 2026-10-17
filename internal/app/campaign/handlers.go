@@ -1411,7 +1411,7 @@ func (s *campaignService) SendPlan(ctx context.Context, orgID uuid.UUID, campaig
 			// stalled snapshotter would otherwise serve old figures as fresh.
 			now := time.Now()
 			plan.Stale = snap.VersionKey != key || snap.Day != planBudgetDay(now) ||
-				now.Sub(snap.ComputedAt) > sendPlanSnapshotMaxAge
+				now.Sub(snap.ComputedAt) > s.sendPlanMaxAge()
 			if plan.Stale {
 				s.refreshPlanAsync(campaign, orgID, key)
 			}

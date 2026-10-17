@@ -1272,3 +1272,117 @@ func TestDetectWarmupMailNotArriving(t *testing.T) {
 		t.Fatal("a healthy mailbox is reported")
 	}
 }
+
+// busySnapshot fires as many section-reading detectors as one fixture can.
+func busySnapshot() *repository.AdvisorSnapshot {
+	campaignID, otherID := uuid.New(), uuid.New()
+	heavy := healthyMailbox()
+	heavy.ColdSent7d, heavy.ColdSent30d = 5000, 20000
+	snap := snapshotOf(heavy, healthyMailbox())
+	snap.Campaigns = []repository.AdvisorCampaign{
+		{
+			ID: campaignID, Name: "Outbound", Status: "active",
+			DailyLimit: 900, StartTime: "09:00", EndTime: "09:30",
+			SenderCount: 1, SenderCapacity: 50, PickedSenders: 1, SenderStrategy: "explicit",
+			StepCount: 2, EmailStepCount: 2, VariantCount: 1,
+			Sent: 3000, Opened: 300, Replied: 1, Bounced: 10,
+			LeadsTotal: 1000, LeadsRemaining: 5,
+		},
+		{ID: otherID, Name: "Solo", Status: "active", StepCount: 1, EmailStepCount: 1, DailyLimit: 10, Sent: 10},
+	}
+	snap.Steps = []repository.AdvisorStep{
+		{
+			ID: uuid.New(), CampaignID: campaignID, Kind: "email", Position: 0, Name: "Opener", WaitAfter: 1,
+			Subject:   "ACT NOW!! LIMITED TIME OFFER, THIS IS NOT SPAM AND IT IS 100% FREE FOR YOU AND YOUR WHOLE TEAM TODAY",
+			BodyPlain: "Hi {{.FirstName}},\n\n{{if .Company}}Act now, click here, buy now, limited time, no obligation, 100% free, risk free. " + strings.Repeat("More words here. ", 200),
+			Sent:      2000, Replied: 40,
+		},
+		{
+			ID: uuid.New(), CampaignID: campaignID, Kind: "email", Position: 1, Name: "Bump",
+			Subject: "re", BodyPlain: "Hi {{.FirstName}}, any thoughts?",
+			Sent: 1000, Replied: 0,
+		},
+	}
+	snap.Lists = map[uuid.UUID]repository.AdvisorListStats{
+		campaignID: {CampaignID: campaignID, Total: 1000, RoleAddresses: 400, FreeMail: 700, Suppressed: 200, Unsubscribed: 30, MissingFirstName: 500},
+	}
+	snap.Org = repository.AdvisorOrgStats{Mailboxes: 2, ActiveMailboxes: 2, RunningCampaigns: 2, DuplicateContacts: 150}
+	return snap
+}
+
+// A detector that reads a section it does not declare would resolve its
+// findings on a run where that section failed to load.
+func TestDetectorsDeclareEverySectionTheyRead(t *testing.T) {
+	blank := map[repository.AdvisorSection]func(*repository.AdvisorSnapshot){
+		repository.AdvisorSectionCampaigns: func(s *repository.AdvisorSnapshot) { s.Campaigns = nil },
+		repository.AdvisorSectionSteps:     func(s *repository.AdvisorSnapshot) { s.Steps = nil },
+		repository.AdvisorSectionLists:     func(s *repository.AdvisorSnapshot) { s.Lists = map[uuid.UUID]repository.AdvisorListStats{} },
+		repository.AdvisorSectionOrg:       func(s *repository.AdvisorSnapshot) { s.Org = repository.AdvisorOrgStats{} },
+	}
+	fingerprints := func(fs []Finding) string {
+		out := make([]string, 0, len(fs))
+		for _, f := range fs {
+			out = append(out, f.Fingerprint())
+		}
+		return strings.Join(out, ",")
+	}
+	base := busySnapshot()
+	fired := 0
+	for _, d := range AllDetectors() {
+		full := d.Run(base)
+		if len(d.Reads) > 0 && len(full) > 0 {
+			fired++
+		}
+		for sec, clear := range blank {
+			declared := false
+			for _, r := range d.Reads {
+				declared = declared || r == sec
+			}
+			if declared {
+				continue
+			}
+			s := *base
+			clear(&s)
+			if fingerprints(d.Run(&s)) != fingerprints(full) {
+				t.Errorf("detector %q reads the %s section but does not declare it", d.Key, sec)
+			}
+		}
+	}
+	if fired < 20 {
+		t.Errorf("the fixture fires only %d section-reading detectors; the check has no teeth", fired)
+	}
+}
+
+func TestFailedSectionHoldsItsDetectors(t *testing.T) {
+	snap := busySnapshot()
+	snap.Failed = map[repository.AdvisorSection]error{repository.AdvisorSectionLists: errors.New("statement timeout")}
+	settings := defaults()
+
+	for _, f := range Detect(snap, settings) {
+		if strings.HasPrefix(f.Key, "list_") {
+			t.Errorf("%s opened from a list section that did not load", f.Key)
+		}
+	}
+	held := map[string]bool{}
+	for _, k := range heldDetectors(snap, settings) {
+		held[k] = true
+	}
+	for _, d := range AllDetectors() {
+		if want := strings.HasPrefix(d.Key, "list_"); held[d.Key] != want {
+			t.Errorf("detector %q held = %v, want %v", d.Key, held[d.Key], want)
+		}
+	}
+
+	// A muted detector is not held, so its findings still close as before.
+	settings.MutedDetectors = []string{"list_role_addresses"}
+	for _, k := range heldDetectors(snap, settings) {
+		if k == "list_role_addresses" {
+			t.Error("a muted detector was held open")
+		}
+	}
+
+	snap.Failed = nil
+	if got := heldDetectors(snap, settings); len(got) != 0 {
+		t.Errorf("a complete snapshot held %v", got)
+	}
+}

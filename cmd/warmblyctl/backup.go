@@ -305,6 +305,14 @@ func runRestore(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Println("  database    restored")
+	if err := analyzeDatabase(ctx, dsn); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		warn("the database restored, but ANALYZE did not finish, so queries plan without statistics until autovacuum gathers them. Run ANALYZE by hand:\n%s", err)
+	} else {
+		fmt.Println("  statistics  analyzed")
+	}
 
 	if !*noBlobs && m.BlobFiles > 0 {
 		root := blobRoot()
@@ -487,6 +495,20 @@ func restoreDatabase(ctx context.Context, dsn, bundle string) error {
 	load.Stderr = &loadErr
 	if err := load.Run(); err != nil {
 		return fmt.Errorf("the dump did not load cleanly, so the database is now empty and unusable.\nFix the cause and run the restore again:\n%s", strings.TrimSpace(loadErr.String()))
+	}
+	return nil
+}
+
+// analyzeDatabase gathers planner statistics, which a dump does not carry.
+func analyzeDatabase(ctx context.Context, dsn string) error {
+	cmd := pgCommand(ctx, "psql", dsn, "-v", "ON_ERROR_STOP=1", "-q", "-c", "ANALYZE;")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return errors.New(msg)
+		}
+		return err
 	}
 	return nil
 }

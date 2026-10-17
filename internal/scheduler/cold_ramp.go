@@ -16,10 +16,13 @@ func (s *schedulerService) coldRampStates(ctx context.Context, accounts []models
 	states := make(map[uuid.UUID]repository.ColdRampState, len(accounts))
 	ids := make([]uuid.UUID, 0, len(accounts))
 	for _, a := range accounts {
-		ids = append(ids, a.ID)
 		states[a.ID] = repository.ColdRampState{WarmupStartedAt: a.Warmup}
+		// Every reader ignores the state of a mailbox that never warmed.
+		if a.Warmup != nil {
+			ids = append(ids, a.ID)
+		}
 	}
-	if s.warmupRepo == nil || len(accounts) == 0 {
+	if s.warmupRepo == nil || len(ids) == 0 {
 		return states
 	}
 	observed, err := s.warmupRepo.ColdRampStateForAccounts(ctx, ids, time.Now().Add(-warmupramp.LookbackWindow))
@@ -27,7 +30,9 @@ func (s *schedulerService) coldRampStates(ctx context.Context, accounts []models
 		return states
 	}
 	for _, a := range accounts {
-		states[a.ID] = observed[a.ID].WithKnownWarmup(a.Warmup)
+		if a.Warmup != nil {
+			states[a.ID] = observed[a.ID].WithKnownWarmup(a.Warmup)
+		}
 	}
 	return states
 }

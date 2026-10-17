@@ -33,6 +33,9 @@ type VerificationEvidenceRepository interface {
 	// step sent at least `window` ago that never bounced and is not yet in
 	// the ledger. Returns the contacts credited.
 	CreditCleanDeliveries(ctx context.Context, window time.Duration, limit int) ([]uuid.UUID, error)
+	// CreditRecentCleanDeliveries is CreditCleanDeliveries limited to steps sent
+	// within lookback before the window; a full pass still catches older ones.
+	CreditRecentCleanDeliveries(ctx context.Context, window, lookback time.Duration, limit int) ([]uuid.UUID, error)
 }
 
 // ContactVerdict is a contact's last verdict (the check's own status) and any re-check waiting on it.
@@ -162,6 +165,15 @@ func (r *verificationEvidenceRepository) SetScore(ctx context.Context, contactID
 }
 
 func (r *verificationEvidenceRepository) CreditCleanDeliveries(ctx context.Context, window time.Duration, limit int) ([]uuid.UUID, error) {
+	return r.creditCleanDeliveries(ctx, window, 0, limit)
+}
+
+func (r *verificationEvidenceRepository) CreditRecentCleanDeliveries(ctx context.Context, window, lookback time.Duration, limit int) ([]uuid.UUID, error) {
+	return r.creditCleanDeliveries(ctx, window, lookback, limit)
+}
+
+// creditCleanDeliveries bounds sent_at only when lookback > 0, as its own statement text so a generic plan keeps the index range.
+func (r *verificationEvidenceRepository) creditCleanDeliveries(ctx context.Context, window, lookback time.Duration, limit int) ([]uuid.UUID, error) {
 	if limit <= 0 {
 		limit = 1000
 	}
@@ -175,6 +187,13 @@ func (r *verificationEvidenceRepository) CreditCleanDeliveries(ctx context.Conte
 	// change went to a different mailbox and are not evidence about this one.
 	// dispatched_at, not sent_at: sent_at is stamped when the worker's result
 	// lands, which for a send already on the bus can be after the edit.
+	params := []any{window.Seconds(), limit}
+	since := ""
+	if lookback > 0 {
+		since = `
+			  AND p.sent_at >= NOW() - make_interval(secs => $3)`
+		params = append(params, (window + lookback).Seconds())
+	}
 	query := `
 		WITH due AS (
 			SELECT p.contact_id, p.campaign_id, p.sequence_id, p.sent_at
@@ -182,7 +201,7 @@ func (r *verificationEvidenceRepository) CreditCleanDeliveries(ctx context.Conte
 			JOIN contacts c ON c.id = p.contact_id
 			WHERE p.sent_at IS NOT NULL AND p.bounced_at IS NULL
 			  AND ` + progressIsEmailStep("p") + `
-			  AND p.sent_at < NOW() - make_interval(secs => $1)
+			  AND p.sent_at < NOW() - make_interval(secs => $1)` + since + `
 			  AND (c.verification_evidence_reset_at IS NULL OR COALESCE(p.dispatched_at, p.sent_at) > c.verification_evidence_reset_at)
 			  AND NOT EXISTS (
 			    SELECT 1 FROM contact_verification_evidence e
@@ -200,7 +219,6 @@ func (r *verificationEvidenceRepository) CreditCleanDeliveries(ctx context.Conte
 		)
 		SELECT DISTINCT contact_id FROM ins
 	`
-	params := []any{window.Seconds(), limit}
 	rows, err := resultDB(ctx, r.DB).Query(ctx, query, params...)
 	if err != nil {
 		db.CaptureError(err, query, params, "query")

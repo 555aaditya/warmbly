@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { QueryClient } from "@tanstack/react-query";
-import { createDeliveryDeduper, createRefreshCoalescer } from "./refreshCoalescer";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
+import { createDeliveryDeduper, createHiddenTabGate, createRefreshCoalescer } from "./refreshCoalescer";
 
 describe("createRefreshCoalescer", () => {
     let client: QueryClient;
@@ -79,6 +79,114 @@ describe("createRefreshCoalescer", () => {
         await vi.advanceTimersByTimeAsync(10);
         expect(spy).toHaveBeenCalledTimes(2);
         expect(client.getQueryState(["unibox", "overview"])?.isInvalidated).toBe(true);
+    });
+});
+
+describe("createRefreshCoalescer with a match", () => {
+    let client: QueryClient;
+
+    beforeEach(() => {
+        vi.useFakeTimers();
+        client = new QueryClient();
+        for (const key of [["contacts", "list"], ["contacts", "a", "campaign-state"], ["contacts", "b", "campaign-state"], ["contacts", "c", "campaign-state"]]) {
+            client.setQueryData(key, 1);
+        }
+    });
+    afterEach(() => {
+        vi.useRealTimers();
+        client.clear();
+    });
+
+    const invalidated = () =>
+        client.getQueryCache().getAll().filter((q) => q.state.isInvalidated).map((q) => q.queryKey.join("/")).sort();
+
+    it("refreshes the union of what each narrowed add asked for", () => {
+        const c = createRefreshCoalescer(client, { delayMs: 10 });
+        const notOtherState = (id: string) => (q: { queryKey: readonly unknown[] }) => q.queryKey[2] !== "campaign-state" || q.queryKey[1] === id;
+        c.add([["contacts"]], notOtherState("a"));
+        c.add([["contacts"]], notOtherState("b"));
+        vi.advanceTimersByTime(10);
+        expect(invalidated()).toEqual(["contacts/a/campaign-state", "contacts/b/campaign-state", "contacts/list"]);
+    });
+
+    it("lets an unnarrowed add widen a narrowed one", () => {
+        const c = createRefreshCoalescer(client, { delayMs: 10 });
+        c.add([["contacts"]], (q) => q.queryKey[1] === "list");
+        c.add([["contacts"]]);
+        vi.advanceTimersByTime(10);
+        expect(invalidated()).toHaveLength(4);
+    });
+
+    it("does not treat a narrowed broader key as covering a narrower one", () => {
+        const c = createRefreshCoalescer(client, { delayMs: 10 });
+        c.add([["contacts"]], (q) => q.queryKey[1] === "list");
+        c.add([["contacts", "c"]]);
+        vi.advanceTimersByTime(10);
+        expect(invalidated()).toEqual(["contacts/c/campaign-state", "contacts/list"]);
+    });
+});
+
+describe("createHiddenTabGate", () => {
+    let client: QueryClient;
+    let visibility: DocumentVisibilityState;
+
+    const setVisibility = (state: DocumentVisibilityState) => {
+        visibility = state;
+        document.dispatchEvent(new Event("visibilitychange"));
+    };
+    const observe = (key: string[]) => {
+        const fn = vi.fn(async () => 1);
+        const observer = new QueryObserver(client, { queryKey: key, queryFn: fn });
+        const unsubscribe = observer.subscribe(() => {});
+        return { fn, unsubscribe };
+    };
+
+    beforeEach(() => {
+        client = new QueryClient();
+        visibility = "visible";
+        vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    });
+    afterEach(() => {
+        vi.restoreAllMocks();
+        client.clear();
+    });
+
+    it("refetches at once on a visible tab", async () => {
+        const gate = createHiddenTabGate(client);
+        const list = observe(["campaigns", "list"]);
+        await vi.waitFor(() => expect(client.getQueryData(["campaigns", "list"])).toBe(1));
+        gate.invalidate({ queryKey: ["campaigns"] });
+        await vi.waitFor(() => expect(list.fn).toHaveBeenCalledTimes(2));
+        list.unsubscribe();
+        gate.dispose();
+    });
+
+    it("defers a hidden tab's refetches to one on return, keeping the unread badge live", async () => {
+        const gate = createHiddenTabGate(client);
+        const list = observe(["campaigns", "list"]);
+        const badge = observe(["unibox", "unseen-count"]);
+        const overview = observe(["unibox", "overview"]);
+        await vi.waitFor(() => expect(client.isFetching()).toBe(0));
+
+        setVisibility("hidden");
+        for (let i = 0; i < 5; i++) {
+            gate.invalidate({ queryKey: ["campaigns", "list"] });
+            gate.invalidate({ queryKey: ["unibox"] });
+        }
+        await vi.waitFor(() => expect(badge.fn).toHaveBeenCalledTimes(6));
+        expect(list.fn).toHaveBeenCalledTimes(1);
+        expect(overview.fn).toHaveBeenCalledTimes(1);
+        expect(client.getQueryState(["campaigns", "list"])?.isInvalidated).toBe(true);
+
+        setVisibility("visible");
+        await vi.waitFor(() => expect(list.fn).toHaveBeenCalledTimes(2));
+        await vi.waitFor(() => expect(overview.fn).toHaveBeenCalledTimes(2));
+        setVisibility("hidden");
+        setVisibility("visible");
+        await Promise.resolve();
+        expect(list.fn).toHaveBeenCalledTimes(2);
+        for (const o of [list, badge, overview]) o.unsubscribe();
+        gate.dispose();
     });
 });
 
