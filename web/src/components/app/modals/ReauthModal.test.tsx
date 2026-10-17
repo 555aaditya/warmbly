@@ -1,5 +1,10 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import ConfirmProvider from "@/hooks/ConfirmProvider";
+import { useConfirm } from "@/hooks/context/confirm";
+import Client from "@/lib/api/client/Client";
+import { deleteGrant } from "@/lib/api/client/app/emails/imports/mailboxGrants";
+import getToken from "@/lib/helper/getToken";
 import type ReauthMethods from "@/lib/api/models/auth/ReauthMethods";
 import ReauthModal from "./ReauthModal";
 
@@ -11,6 +16,8 @@ const beginSSO = vi.fn();
 const finishSSO = vi.fn();
 
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => navigate }));
+vi.mock("@/lib/api/client/Client", () => ({ default: { request: vi.fn() } }));
+vi.mock("@/lib/helper/getToken", () => ({ default: vi.fn() }));
 vi.mock("@/lib/api/hooks/auth/useLogout", () => ({ default: () => ({ mutateAsync: logout, isPending: false }) }));
 vi.mock("@/lib/api/client/auth/reauth", () => ({ default: (...a: unknown[]) => reauth(...a) }));
 vi.mock("@/lib/api/client/auth/reauth/methods", () => ({ default: () => methods() }));
@@ -36,9 +43,30 @@ function ask() {
     return { resolve, reject };
 }
 
+function RemoveGrant() {
+    const confirm = useConfirm();
+    return <button onClick={() => confirm.show("Remove this admin grant?", () => deleteGrant("test-grant"))}>Remove grant</button>;
+}
+
+function removalDialog() {
+    return screen.getByText("Remove this admin grant?").closest('[role="alertdialog"]') as HTMLElement;
+}
+
+function overlayLayer(dialog: HTMLElement) {
+    const layer = dialog.parentElement?.className.match(/z-\[(\d+)\]/)?.[1];
+    expect(layer).toBeDefined();
+    return Number(layer);
+}
+
 describe("ReauthModal", () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        vi.mocked(getToken).mockReturnValue({
+            access_token: "access-token",
+            access_token_expires_at: new Date(Date.now() + 60_000),
+            refresh_token: "refresh-token",
+            refresh_token_expires_at: new Date(Date.now() + 120_000),
+        });
     });
     afterEach(() => {
         vi.restoreAllMocks();
@@ -141,5 +169,60 @@ describe("ReauthModal", () => {
         fireEvent.keyDown(window, { key: "Escape" });
         expect(first.reject).toHaveBeenCalled();
         expect(second.reject).toHaveBeenCalled();
+    });
+
+    it("places identity confirmation above an awaiting grant removal and retries the delete once", async () => {
+        methods.mockResolvedValue({ ...none, password: true });
+        reauth.mockResolvedValue({ valid_for_seconds: 300 });
+        vi.mocked(Client.request)
+            .mockRejectedValueOnce({ status: 403, code: "reauth_required" })
+            .mockResolvedValueOnce({ data: undefined });
+        render(<ConfirmProvider><RemoveGrant /><ReauthModal /></ConfirmProvider>);
+
+        fireEvent.click(screen.getByRole("button", { name: "Remove grant" }));
+        fireEvent.click(within(removalDialog()).getByRole("button", { name: "Confirm" }));
+        const password = await screen.findByLabelText("Password");
+        const identity = screen.getByRole("alertdialog", { name: "Confirm it is you" });
+        expect(overlayLayer(identity)).toBeGreaterThan(overlayLayer(removalDialog()));
+        expect(within(removalDialog()).getByRole("button", { name: "Confirm" })).toBeDisabled();
+        expect(Client.request).toHaveBeenCalledTimes(1);
+
+        fireEvent.change(password, { target: { value: "test-password" } });
+        fireEvent.click(within(identity).getByRole("button", { name: "Confirm" }));
+
+        await waitFor(() => expect(Client.request).toHaveBeenCalledTimes(2));
+        expect(reauth).toHaveBeenCalledWith({ password: "test-password", code: undefined });
+        expect(vi.mocked(Client.request).mock.calls.map(([config]) => [config.method, config.url]))
+            .toEqual([["DELETE", "/emails/grants/test-grant"], ["DELETE", "/emails/grants/test-grant"]]);
+        await waitFor(() => expect(screen.queryAllByRole("alertdialog")).toHaveLength(0));
+    });
+
+    it("leaves grant removal retryable without resending when identity confirmation is cancelled", async () => {
+        methods.mockResolvedValue({ ...none, password: true });
+        vi.mocked(Client.request).mockRejectedValueOnce({ status: 403, code: "reauth_required" });
+        render(<ConfirmProvider><RemoveGrant /><ReauthModal /></ConfirmProvider>);
+
+        fireEvent.click(screen.getByRole("button", { name: "Remove grant" }));
+        fireEvent.click(within(removalDialog()).getByRole("button", { name: "Confirm" }));
+        await screen.findByLabelText("Password");
+        fireEvent.keyDown(window, { key: "Escape" });
+
+        await waitFor(() => expect(within(removalDialog()).getByRole("button", { name: "Confirm" })).toBeEnabled());
+        expect(Client.request).toHaveBeenCalledTimes(1);
+        expect(reauth).not.toHaveBeenCalled();
+        await waitFor(() => expect(screen.queryByRole("alertdialog", { name: "Confirm it is you" })).not.toBeInTheDocument());
+    });
+
+    it("does not treat a permission refusal as an identity check or retry the deletion", async () => {
+        vi.mocked(Client.request).mockRejectedValueOnce({ status: 403, code: "forbidden", message: "Not allowed" });
+        render(<ConfirmProvider><RemoveGrant /><ReauthModal /></ConfirmProvider>);
+
+        fireEvent.click(screen.getByRole("button", { name: "Remove grant" }));
+        fireEvent.click(within(removalDialog()).getByRole("button", { name: "Confirm" }));
+
+        await waitFor(() => expect(within(removalDialog()).getByRole("button", { name: "Confirm" })).toBeEnabled());
+        expect(Client.request).toHaveBeenCalledTimes(1);
+        expect(methods).not.toHaveBeenCalled();
+        expect(screen.queryByRole("alertdialog", { name: "Confirm it is you" })).not.toBeInTheDocument();
     });
 });

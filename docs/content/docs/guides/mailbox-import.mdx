@@ -247,6 +247,8 @@ The grant is checked again every hour. When Google stops honoring it (the entry 
 
 Connecting mailboxes through a grant and deleting a grant both reach a whole domain's mail, so like recording one they need a recent confirmation of your sign-in.
 
+To remove a grant, open **Add account > Google > Whole Workspace domain** or **Microsoft > Whole organization**, use the grant's **More** menu, and choose **Remove grant**. Confirm the removal, then complete **Confirm it is you** if prompted. The removal waits for this identity check and continues automatically when it succeeds. A `403` with code `reauth_required` means this check is needed, not that the domain is owned by another instance. Removing the grant stops its mailboxes on this instance; it does not delete mailboxes connected with app passwords on a separate self-hosted instance.
+
 </Fold>
 
 <Fold>

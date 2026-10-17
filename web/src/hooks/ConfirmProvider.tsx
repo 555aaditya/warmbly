@@ -1,10 +1,4 @@
-// Confirm provider — brae-density modal.
-//
-// Sits at z-[200] so it stacks above every other dialog in the app
-// (folder/tag list modal is z-[110], page-level overlays are z-[100]).
-// Without this, deleting an item from inside the folders modal would
-// pop the confirm BEHIND the modal — invisible, and the click would
-// land on the folders backdrop and dismiss it.
+// Above page dialogs, below the identity check an awaited action may need.
 
 import React from "react";
 import { AnimatePresence, motion } from "framer-motion";
