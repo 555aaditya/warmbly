@@ -106,6 +106,8 @@ var transientMailErrorCodes = []string{
 	// temporary server error and never deactivates the mailbox, so a pass
 	// that completed afterwards disproves it like any other outage.
 	string(errx.MailErrorCodeImapUnknown),
+	string(errx.MailErrorCodeSendingTooFast),
+	string(errx.MailErrorCodeQuotaExceeded),
 }
 
 func (s *JobsService) resolveTransientMailErrors(ctx context.Context, emailID uuid.UUID, syncedAt *time.Time, generation uuid.UUID) error {

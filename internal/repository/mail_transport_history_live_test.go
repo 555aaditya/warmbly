@@ -34,7 +34,7 @@ func TestLiveMailTransportNativeDomainExcludesHistory(t *testing.T) {
 			t.Fatal(err)
 		}
 		var preserved int
-		if err := f.pool.QueryRow(t.Context(), `SELECT COUNT(*) FROM email_account_errors WHERE id=ANY($1::uuid[]) AND created_at=$2 AND resolved_at IS NULL AND observation_source='unknown' AND task_id=$3`, ids, at, f.task).Scan(&preserved); err != nil || preserved != 2 {
+		if err := f.pool.QueryRow(t.Context(), `SELECT COUNT(*) FROM email_account_errors WHERE id=ANY($1::uuid[]) AND created_at=$2 AND (resolved_at IS NOT NULL)=$4 AND observation_source='unknown' AND task_id=$3`, ids, at, f.task, op == models.MailTransportSend).Scan(&preserved); err != nil || preserved != 2 {
 			t.Fatal("recovery altered historical report/task evidence", op, preserved, err)
 		}
 		var nativeResolved bool

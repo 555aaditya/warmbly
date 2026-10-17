@@ -112,10 +112,13 @@ func (r *emailAccountErrorRepository) CreateOnce(ctx context.Context, data *Crea
 		        THEN 'worker' ELSE 'receipt' END AS source
 		), candidate AS (
 		    SELECT observation.*, recovery.recovered_at
-		    FROM observation LEFT JOIN email_account_transport_recovery recovery
-		        ON recovery.email_account_id=$1 AND recovery.operation=$13
-		        AND $3 IN ('SERVER_UNREACHABLE','CONNECTION_LOST','RESOURCE_NOT_FOUND','IMAP_UNKNOWN')
-		        AND observation.at < recovery.recovered_at - INTERVAL '1 second'
+		    FROM observation LEFT JOIN LATERAL (
+		        SELECT MAX(recovered_at) AS recovered_at
+		        FROM email_account_transport_recovery
+		        WHERE email_account_id=$1 AND (operation=$13 OR $13='unknown')
+		        HAVING COUNT(*)=CASE WHEN $13='unknown' THEN 2 ELSE 1 END
+		            AND observation.at < MIN(recovered_at) - INTERVAL '1 second'
+		    ) recovery ON $3 IN ('SERVER_UNREACHABLE','CONNECTION_LOST','RESOURCE_NOT_FOUND','IMAP_UNKNOWN','SENDING_TOO_FAST','QUOTA_EXCEEDED')
 		)
 		INSERT INTO email_account_errors AS existing (
 			id, email_account_id, user_id, error_code, severity, resolve_method,
@@ -141,14 +144,14 @@ func (r *emailAccountErrorRepository) CreateOnce(ctx context.Context, data *Crea
 		ON CONFLICT (email_account_id,error_code,operation)
 		WHERE resolved_at IS NULL AND observation_source IN ('worker','receipt') DO UPDATE
 		SET created_at=CASE WHEN existing.user_id=EXCLUDED.user_id
-		    AND existing.error_code IN ('SERVER_UNREACHABLE','CONNECTION_LOST','RESOURCE_NOT_FOUND','IMAP_UNKNOWN')
+		    AND existing.error_code IN ('SERVER_UNREACHABLE','CONNECTION_LOST','RESOURCE_NOT_FOUND','IMAP_UNKNOWN','SENDING_TOO_FAST','QUOTA_EXCEEDED')
 		    THEN GREATEST(existing.created_at,EXCLUDED.created_at) ELSE existing.created_at END,
 		    task_id=CASE WHEN existing.user_id=EXCLUDED.user_id
-		    AND existing.error_code IN ('SERVER_UNREACHABLE','CONNECTION_LOST','RESOURCE_NOT_FOUND','IMAP_UNKNOWN')
+		    AND existing.error_code IN ('SERVER_UNREACHABLE','CONNECTION_LOST','RESOURCE_NOT_FOUND','IMAP_UNKNOWN','SENDING_TOO_FAST','QUOTA_EXCEEDED')
 		    THEN COALESCE(existing.task_id,EXCLUDED.task_id) ELSE existing.task_id END,
 		    observation_source=CASE WHEN existing.user_id=EXCLUDED.user_id
 		    AND EXCLUDED.created_at >= existing.created_at
-		    AND existing.error_code IN ('SERVER_UNREACHABLE','CONNECTION_LOST','RESOURCE_NOT_FOUND','IMAP_UNKNOWN')
+		    AND existing.error_code IN ('SERVER_UNREACHABLE','CONNECTION_LOST','RESOURCE_NOT_FOUND','IMAP_UNKNOWN','SENDING_TOO_FAST','QUOTA_EXCEEDED')
 		    THEN EXCLUDED.observation_source ELSE existing.observation_source END,
 		    received_at=CASE WHEN existing.user_id=EXCLUDED.user_id
 		    THEN GREATEST(existing.received_at,EXCLUDED.received_at) ELSE existing.received_at END,

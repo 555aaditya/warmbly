@@ -90,7 +90,7 @@ func TestSyncStateClearsTransientMailErrors(t *testing.T) {
 	if errRepo.operation != models.MailTransportSync {
 		t.Fatal("sync recovery did not carry explicit operation scope")
 	}
-	want := map[string]bool{"SERVER_UNREACHABLE": true, "CONNECTION_LOST": true, "RESOURCE_NOT_FOUND": true, "IMAP_UNKNOWN": true}
+	want := map[string]bool{"SERVER_UNREACHABLE": true, "CONNECTION_LOST": true, "RESOURCE_NOT_FOUND": true, "IMAP_UNKNOWN": true, "SENDING_TOO_FAST": true, "QUOTA_EXCEEDED": true}
 	for _, code := range errRepo.resolvedCodes {
 		if !want[code] {
 			t.Errorf("resolved %q, which a completed sync does not disprove", code)
