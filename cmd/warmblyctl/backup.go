@@ -306,6 +306,9 @@ func runRestore(ctx context.Context, args []string) error {
 	}
 	fmt.Println("  database    restored")
 	if err := analyzeDatabase(ctx, dsn); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		warn("the database restored, but ANALYZE did not finish, so queries plan without statistics until autovacuum gathers them. Run ANALYZE by hand:\n%s", err)
 	} else {
 		fmt.Println("  statistics  analyzed")

@@ -1148,7 +1148,7 @@ func (r *campaignProgressRepository) GetCampaignProgress(ctx context.Context, ca
 		SELECT
 			(SELECT COUNT(DISTINCT contact_id) FROM campaign_leads WHERE campaign_id = $1) AS total_contacts,
 			(SELECT COUNT(*) FROM sequences WHERE campaign_id = $1 AND kind = 'email') AS total_sequences,
-			COUNT(*) FILTER (WHERE ccp.sent_at IS NOT NULL AND ` + progressIsEmailStep("ccp") + `) AS emails_sent,
+			COUNT(*) FILTER (WHERE ccp.sent_at IS NOT NULL AND es.id IS NOT NULL) AS emails_sent,
 			COUNT(*) FILTER (WHERE ccp.opened_at IS NOT NULL AND NOT ccp.opened_machine) AS emails_opened,
 			COUNT(*) FILTER (WHERE ccp.clicked_at IS NOT NULL) AS emails_clicked,
 			COUNT(*) FILTER (WHERE ccp.replied_at IS NOT NULL) AS emails_replied,
