@@ -9,10 +9,37 @@ import (
 	"github.com/warmbly/warmbly/internal/models"
 )
 
+// AdvisorSection names a snapshot section that loads on its own.
+type AdvisorSection string
+
+const (
+	AdvisorSectionCampaigns AdvisorSection = "campaigns"
+	AdvisorSectionSteps     AdvisorSection = "steps"
+	AdvisorSectionLists     AdvisorSection = "lists"
+	AdvisorSectionOrg       AdvisorSection = "org"
+)
+
+// SectionFailed reports whether sec did not load this run.
+func (s *AdvisorSnapshot) SectionFailed(sec AdvisorSection) bool {
+	_, failed := s.Failed[sec]
+	return failed
+}
+
+func (s *AdvisorSnapshot) fail(sec AdvisorSection, err error) {
+	if err == nil {
+		return
+	}
+	if s.Failed == nil {
+		s.Failed = map[AdvisorSection]error{}
+	}
+	s.Failed[sec] = err
+}
+
 // LoadSnapshot reads one org's advisor view. Every section is best-effort: a
 // single failing rollup must not cost the org its whole evaluation, because a
-// partial snapshot still produces correct findings for the parts that loaded
-// (detectors are written to no-op on absent data rather than guess).
+// partial snapshot still produces correct findings for the parts that loaded.
+// A section that fails is recorded in Failed, so the detectors that read it
+// are held for the run rather than run on empty data.
 func (r *advisorRepository) LoadSnapshot(ctx context.Context, orgID uuid.UUID, now time.Time) (*AdvisorSnapshot, error) {
 	snap := &AdvisorSnapshot{
 		OrganizationID: orgID,
@@ -29,10 +56,14 @@ func (r *advisorRepository) LoadSnapshot(ctx context.Context, orgID uuid.UUID, n
 	}
 	snap.Mailboxes = mailboxes
 
-	snap.Campaigns, _ = r.loadCampaigns(ctx, orgID)
-	snap.Steps, _ = r.loadSteps(ctx, orgID)
-	snap.Lists, _ = r.loadListStats(ctx, orgID)
-	snap.Org, _ = r.loadOrgStats(ctx, orgID)
+	snap.Campaigns, err = r.loadCampaigns(ctx, orgID)
+	snap.fail(AdvisorSectionCampaigns, err)
+	snap.Steps, err = r.loadSteps(ctx, orgID)
+	snap.fail(AdvisorSectionSteps, err)
+	snap.Lists, err = r.loadListStats(ctx, orgID)
+	snap.fail(AdvisorSectionLists, err)
+	snap.Org, err = r.loadOrgStats(ctx, orgID)
+	snap.fail(AdvisorSectionOrg, err)
 
 	return snap, nil
 }
@@ -77,15 +108,19 @@ func (r *advisorRepository) loadMailboxes(ctx context.Context, orgID uuid.UUID, 
 			  AND t.completed_at > NOW() - INTERVAL '30 days'
 			  AND ` + taskDispatchedEmail + `
 		) sent ON true
-		LEFT JOIN LATERAL (
+		-- One pass per org: no index bounds a single mailbox's events, so a lateral rescanned the window per mailbox.
+		LEFT JOIN (
 			SELECT
+				t2.email_account_id,
 				COUNT(*) FILTER (WHERE de.event_type = 'bounce')    AS bounces,
 				COUNT(*) FILTER (WHERE de.event_type = 'complaint') AS complaints
 			FROM deliverability_events de
 			JOIN tasks t2 ON t2.id = de.task_id
-			WHERE t2.email_account_id = ea.id
+			WHERE t2.email_account_id IN (SELECT id FROM email_accounts WHERE organization_id = $1)
+			  AND de.event_type IN ('bounce', 'complaint')
 			  AND de.created_at > NOW() - INTERVAL '30 days'
-		) dl ON true
+			GROUP BY t2.email_account_id
+		) dl ON dl.email_account_id = ea.id
 		LEFT JOIN LATERAL (
 			SELECT
 				COALESCE(SUM(emails_sent), 0)    AS sent7,

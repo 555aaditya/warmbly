@@ -112,12 +112,13 @@ func (e *Evidence) Explain(ctx context.Context, contactID uuid.UUID) *models.Con
 }
 
 // CreditCleanDeliveries turns sends that never bounced into evidence, then
-// rescores the contacts credited. Returns how many contacts changed.
-func (e *Evidence) CreditCleanDeliveries(ctx context.Context, limit int) (int, error) {
+// rescores the contacts credited. Returns how many contacts changed. A
+// lookback > 0 only considers steps sent within it before the window.
+func (e *Evidence) CreditCleanDeliveries(ctx context.Context, limit int, lookback time.Duration) (int, error) {
 	if e == nil || e.repo == nil {
 		return 0, nil
 	}
-	ids, err := e.repo.CreditCleanDeliveries(ctx, time.Duration(config.VerificationDeliveryWindowHours)*time.Hour, limit)
+	ids, err := e.repo.CreditRecentCleanDeliveries(ctx, time.Duration(config.VerificationDeliveryWindowHours)*time.Hour, lookback, limit)
 	if err != nil {
 		return 0, err
 	}

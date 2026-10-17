@@ -188,6 +188,10 @@ func (s *service) Evaluate(ctx context.Context, orgID uuid.UUID, trigger string)
 		return nil, err
 	}
 
+	for sec, serr := range snapshot.Failed {
+		log.Printf("advisor: org %s: %s section did not load, keeping its findings: %v", orgID, sec, serr)
+	}
+
 	snapshot.TrackingHost = s.trackingHost
 	if s.domainAuth != nil {
 		snapshot.DomainAuthEnforced, snapshot.DomainAuthGrace = s.domainAuth.DomainAuth(ctx)
@@ -213,8 +217,9 @@ func (s *service) Evaluate(ctx context.Context, orgID uuid.UUID, trigger string)
 		stored = append(stored, row)
 	}
 
-	// Anything the detectors did not produce this pass is no longer true.
-	closed, err := s.repo.ResolveMissing(ctx, orgID, keep)
+	// Anything the detectors did not produce this pass is no longer true,
+	// except what a detector held for a section that did not load.
+	closed, err := s.repo.ResolveMissing(ctx, orgID, keep, heldDetectors(snapshot, settings))
 	if err != nil {
 		log.Printf("advisor: resolve missing for org %s: %v", orgID, err)
 	}

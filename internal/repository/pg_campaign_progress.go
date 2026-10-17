@@ -1155,6 +1155,8 @@ func (r *campaignProgressRepository) GetCampaignProgress(ctx context.Context, ca
 			COUNT(*) FILTER (WHERE ccp.bounced_at IS NOT NULL) AS emails_bounced,
 			COUNT(*) FILTER (WHERE ccp.complained_at IS NOT NULL) AS emails_complained
 		FROM campaign_contact_progress ccp
+		-- At most one match per row (sequences.id is the key), so no row is duplicated or dropped.
+		LEFT JOIN sequences es ON es.id = ccp.sequence_id AND es.kind = 'email'
 		WHERE ccp.campaign_id = $1
 	`
 
@@ -1409,6 +1411,9 @@ func (r *campaignProgressRepository) FindRoutedPairs(ctx context.Context, campai
 	// soon as the batch is full. The ordering, holds, due/not-due and
 	// sender-pacing decisions below are exactly the ones the single-query scan
 	// made; only the shape of the SQL work changed.
+	// Each chunk first reads only its leads' latest sent step, so a lead whose
+	// flow has ended or whose next step cannot be due yet is never hydrated;
+	// a pass that finds nothing due walks again unpruned for the next-due time.
 
 	// p1args carries phase one's bound parameters. The custom-field key is the
 	// only part of this ORDER BY that comes from a customer, so it is bound
@@ -1475,78 +1480,134 @@ func (r *campaignProgressRepository) FindRoutedPairs(ctx context.Context, campai
 
 	hydrateQuery := routedLeadsQuery("", " AND cl.contact_id = ANY($3)")
 	chunkSize := config.CampaignRoutedCandidateChunk
+	floors := router.dueFloors()
+	// inputs keeps every hydrated lead, so the next-due walk below reuses them.
+	inputs := make(map[uuid.UUID]routeInput)
+	hydrate := func(ids []uuid.UUID) error {
+		hydrated, herr := r.hydrateRoutedLeads(ctx, hydrateQuery, campaignID, ids)
+		for id, in := range hydrated {
+			inputs[id] = in
+		}
+		return herr
+	}
+	// notYetDue are the leads skipped because no route out of their step can be
+	// due yet; they matter only to next-due, so only a pass with no pair reads them.
+	var notYetDue []uuid.UUID
 	for start := 0; start < len(ordered); start += chunkSize {
 		end := start + chunkSize
 		if end > len(ordered) {
 			end = len(ordered)
 		}
 		window := ordered[start:end]
-		hydrated, herr := r.hydrateRoutedLeads(ctx, hydrateQuery, campaignID, window)
-		if herr != nil {
+		facts, ferr := r.leadRouteFacts(ctx, campaignID, window)
+		if ferr != nil {
+			return nil, nil, false, ferr
+		}
+		// An inert lead adds neither a pair nor a next-due time, so it is never hydrated.
+		want := make([]uuid.UUID, 0, len(window))
+		for _, contactID := range window {
+			f, ok := facts[contactID]
+			switch {
+			case !ok || router.inert(f, excludeNewLeads):
+			case !router.mayBeDue(f, floors):
+				notYetDue = append(notYetDue, contactID)
+			default:
+				want = append(want, contactID)
+			}
+		}
+		if len(want) == 0 {
+			continue
+		}
+		if herr := hydrate(want); herr != nil {
 			return nil, nil, false, herr
 		}
-		// Route the window in its phase-one order so the batch keeps routing
-		// order across chunk boundaries.
-		for _, contactID := range window {
-			in, ok := hydrated[contactID]
-			if !ok {
-				// A pre-send gate (bounced, failed past the ceiling, suppressed,
-				// unsubscribed, undeliverable) dropped the lead in hydration,
-				// exactly as the single-query WHERE would have. It is not a
-				// candidate, so it contributes no next-due time either.
-				continue
-			}
-			if in.lastSeq == nil && excludeNewLeads {
-				continue
-			}
-			res := router.route(campaignID, contactID, in)
-			// Held with no end: there is nothing to wake up for, so it must not
-			// be reported as a next-due time either — that would park the
-			// campaign's chain on a moment that never arrives. Checked before the
-			// condition window, which a held lead can also be sitting in.
-			if res.Hold != nil && res.Hold.Until == nil {
-				continue
-			}
-			if res.WaitUntil != nil {
-				// Not decidable yet — remember the soonest window so the scheduler
-				// can re-check exactly then instead of guessing or completing.
-				noteDue(*res.WaitUntil, false)
-				continue
-			}
-			if res.Target == nil {
-				continue // reached the end / a STOP / a step already received
-			}
-			// When is this step due? Skip it (but remember when) if not yet: the
-			// contacts behind this one may be sendable right now.
-			if res.DueAt != nil && res.DueAt.After(router.dueBy) {
-				noteDue(*res.DueAt, false)
-				continue
-			}
-			// Due, but the mailbox this lead's conversation belongs to has
-			// nothing left today. Wait for it — the address a contact has already
-			// heard from is worth more than sending the follow-up a few hours
-			// earlier from a stranger. Only an email step waits: an action or
-			// wait node sends nothing, so no mailbox has to be free for it.
-			if back, ok := paced.reopening(in.sender); ok && router.isEmailStep(*res.Target) {
-				noteDue(back, true)
-				continue
-			}
-			pairs = append(pairs, ContactSequencePair{ContactID: contactID, SequenceID: *res.Target, IsNewLead: res.IsNewLead, Instant: res.Instant, NotBefore: res.DueAt, AssignedSender: in.sender})
-			if len(pairs) >= limit {
-				// A full batch makes the deferral times collected so far
-				// irrelevant: the caller is sending, not waiting. Stop before
-				// hydrating any further chunk.
-				return pairs, nil, false, nil
-			}
+		if routeWindow(campaignID, router, want, inputs, excludeNewLeads, paced, limit, &pairs, noteDue) {
+			return pairs, nil, false, nil
 		}
 	}
 	// A due pair makes the deferral times irrelevant: the caller is sending.
 	if len(pairs) > 0 {
 		return pairs, nil, false, nil
 	}
+	if len(notYetDue) > 0 {
+		// Nothing is due: hydrate the skipped leads and walk everyone in order for next-due.
+		nextDue, waitingOnSender = nil, false
+		for start := 0; start < len(notYetDue); start += chunkSize {
+			end := start + chunkSize
+			if end > len(notYetDue) {
+				end = len(notYetDue)
+			}
+			if herr := hydrate(notYetDue[start:end]); herr != nil {
+				return nil, nil, false, herr
+			}
+		}
+		if routeWindow(campaignID, router, ordered, inputs, excludeNewLeads, paced, limit, &pairs, noteDue) || len(pairs) > 0 {
+			return pairs, nil, false, nil
+		}
+	}
 	// Nobody sendable now. Hand back the soonest moment somebody will be so the
 	// scheduler defers until then rather than completing.
 	return nil, nextDue, waitingOnSender, nil
+}
+
+// routeWindow routes one hydrated window in order, appending due pairs and
+// noting next-due times. It reports true once the batch holds limit pairs.
+func routeWindow(campaignID uuid.UUID, router *campaignRouter, window []uuid.UUID, hydrated map[uuid.UUID]routeInput, excludeNewLeads bool, paced PacedSenders, limit int, pairs *[]ContactSequencePair, noteDue func(time.Time, bool)) bool {
+	// Route the window in its phase-one order so the batch keeps routing
+	// order across chunk boundaries.
+	for _, contactID := range window {
+		in, ok := hydrated[contactID]
+		if !ok {
+			// A pre-send gate (bounced, failed past the ceiling, suppressed,
+			// unsubscribed, undeliverable) dropped the lead in hydration,
+			// exactly as the single-query WHERE would have. It is not a
+			// candidate, so it contributes no next-due time either.
+			continue
+		}
+		if in.lastSeq == nil && excludeNewLeads {
+			continue
+		}
+		res := router.route(campaignID, contactID, in)
+		// Held with no end: there is nothing to wake up for, so it must not
+		// be reported as a next-due time either — that would park the
+		// campaign's chain on a moment that never arrives. Checked before the
+		// condition window, which a held lead can also be sitting in.
+		if res.Hold != nil && res.Hold.Until == nil {
+			continue
+		}
+		if res.WaitUntil != nil {
+			// Not decidable yet — remember the soonest window so the scheduler
+			// can re-check exactly then instead of guessing or completing.
+			noteDue(*res.WaitUntil, false)
+			continue
+		}
+		if res.Target == nil {
+			continue // reached the end / a STOP / a step already received
+		}
+		// When is this step due? Skip it (but remember when) if not yet: the
+		// contacts behind this one may be sendable right now.
+		if res.DueAt != nil && res.DueAt.After(router.dueBy) {
+			noteDue(*res.DueAt, false)
+			continue
+		}
+		// Due, but the mailbox this lead's conversation belongs to has
+		// nothing left today. Wait for it — the address a contact has already
+		// heard from is worth more than sending the follow-up a few hours
+		// earlier from a stranger. Only an email step waits: an action or
+		// wait node sends nothing, so no mailbox has to be free for it.
+		if back, ok := paced.reopening(in.sender); ok && router.isEmailStep(*res.Target) {
+			noteDue(back, true)
+			continue
+		}
+		*pairs = append(*pairs, ContactSequencePair{ContactID: contactID, SequenceID: *res.Target, IsNewLead: res.IsNewLead, Instant: res.Instant, NotBefore: res.DueAt, AssignedSender: in.sender})
+		if len(*pairs) >= limit {
+			// A full batch makes the deferral times collected so far
+			// irrelevant: the caller is sending, not waiting. Stop before
+			// hydrating any further chunk.
+			return true
+		}
+	}
+	return false
 }
 
 // orderedCandidateIDs enumerates a campaign's leads in routing order without
@@ -1576,6 +1637,52 @@ func (r *campaignProgressRepository) orderedCandidateIDs(ctx context.Context, or
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+// leadFacts is what routing needs to tell whether a lead can act at all: when
+// it entered, and the step(s) holding its latest sent_at.
+type leadFacts struct {
+	addedAt *time.Time
+	// lastAt is the latest sent_at, nil for a lead with nothing sent.
+	lastAt *time.Time
+	// lastSeqs are every step sent at lastAt, since routing may read any of them.
+	lastSeqs []uuid.UUID
+}
+
+// leadRouteFacts reads leadFacts for a chunk of leads; one absent from the
+// result is no longer a lead of the campaign.
+func (r *campaignProgressRepository) leadRouteFacts(ctx context.Context, campaignID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]leadFacts, error) {
+	rows, err := resultDB(ctx, r.db).Query(ctx, `
+		SELECT cl.contact_id, cl.added_at, p.sequence_id, p.sent_at
+		FROM campaign_leads cl
+		LEFT JOIN campaign_contact_progress p
+		  ON p.campaign_id = cl.campaign_id AND p.contact_id = cl.contact_id AND p.sent_at IS NOT NULL
+		WHERE cl.campaign_id = $1 AND cl.contact_id = ANY($2)`, campaignID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[uuid.UUID]leadFacts, len(ids))
+	for rows.Next() {
+		var contactID uuid.UUID
+		var addedAt, sentAt *time.Time
+		var seq *uuid.UUID
+		if serr := rows.Scan(&contactID, &addedAt, &seq, &sentAt); serr != nil {
+			return nil, serr
+		}
+		f := out[contactID]
+		f.addedAt = addedAt
+		if seq != nil && sentAt != nil {
+			switch {
+			case f.lastAt == nil || sentAt.After(*f.lastAt):
+				f.lastAt, f.lastSeqs = sentAt, []uuid.UUID{*seq}
+			case sentAt.Equal(*f.lastAt):
+				f.lastSeqs = append(f.lastSeqs, *seq)
+			}
+		}
+		out[contactID] = f
+	}
+	return out, rows.Err()
 }
 
 // hydrateRoutedLeads runs the shared routedLeadsQuery for one bounded chunk of
@@ -2150,6 +2257,72 @@ func (cr *campaignRouter) isEmailStep(id uuid.UUID) bool {
 	return ok && cr.steps[idx].kind == "email"
 }
 
+// dueFloors maps each step to the shortest delay route() can put on any step
+// after it; a step with no live target out of it is absent.
+func (cr *campaignRouter) dueFloors() map[uuid.UUID]time.Duration {
+	out := make(map[uuid.UUID]time.Duration, len(cr.steps))
+	for _, s := range cr.steps {
+		for i := range s.bc.Branches {
+			b := &s.bc.Branches[i]
+			if b.TargetSequenceID == nil {
+				continue
+			}
+			ti, live := cr.idxByID[*b.TargetSequenceID]
+			if !live {
+				continue
+			}
+			d := 24 * time.Hour * time.Duration(BranchWaitAfter(cr.steps[ti].waitAfter, branchIsInstant(b)))
+			if s.waitMinutes > 0 {
+				d += time.Duration(s.waitMinutes) * time.Minute
+			}
+			if cur, ok := out[s.id]; !ok || d < cur {
+				out[s.id] = d
+			}
+		}
+	}
+	return out
+}
+
+// mayBeDue is false only when route() cannot return a step due by dueBy for
+// any lead with these facts: holds and history only ever push DueAt later.
+func (cr *campaignRouter) mayBeDue(f leadFacts, floors map[uuid.UUID]time.Duration) bool {
+	if f.lastAt == nil {
+		return cr.entryDelay <= 0 || !cr.enteredAt(f.addedAt).Add(cr.entryDelay).After(cr.dueBy)
+	}
+	for _, seq := range f.lastSeqs {
+		if d, ok := floors[seq]; ok && !f.lastAt.Add(d).After(cr.dueBy) {
+			return true
+		}
+	}
+	return false
+}
+
+// inert is true for a lead FindRoutedPairs neither sends nor waits for: a new
+// lead while new leads are excluded, or one whose current step has no branches.
+func (cr *campaignRouter) inert(f leadFacts, excludeNewLeads bool) bool {
+	if f.lastAt == nil {
+		return excludeNewLeads
+	}
+	for _, seq := range f.lastSeqs {
+		if idx, ok := cr.idxByID[seq]; ok && len(cr.steps[idx].bc.Branches) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// endSteps are the steps with no outgoing branch, where every lead stops.
+func (cr *campaignRouter) endSteps() []uuid.UUID {
+	// Never nil: pgx sends a nil slice as NULL, and <> ALL(NULL) drops every row.
+	out := []uuid.UUID{}
+	for _, s := range cr.steps {
+		if len(s.bc.Branches) == 0 {
+			out = append(out, s.id)
+		}
+	}
+	return out
+}
+
 // enteredAt is when a lead entered the campaign. campaign_leads.added_at is
 // nullable and deliberately not backfilled, so a lead that predates the column
 // falls back to the campaign's own creation time — which keeps turning an entry
@@ -2548,7 +2721,9 @@ func (r *campaignProgressRepository) LeadSupply(ctx context.Context, campaignID 
 	if router == nil {
 		return out, nil
 	}
-	rows, err := resultDB(ctx, r.db).Query(ctx, routedLeadsQuery("c.created_at ASC", ""), campaignID, config.CampaignSendMaxAttempts)
+	// Order-free (only counts and a minimum), and a lead whose last step ends the
+	// flow routes to nothing, so neither is paid for.
+	rows, err := resultDB(ctx, r.db).Query(ctx, routedLeadsQuery("", " AND (lp.sequence_id IS NULL OR lp.sequence_id <> ALL($3))"), campaignID, config.CampaignSendMaxAttempts, router.endSteps())
 	if err != nil {
 		return nil, err
 	}

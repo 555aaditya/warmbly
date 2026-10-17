@@ -2001,7 +2001,8 @@ func main() {
 		// snapshot instead of running the planner (lead supply, per-mailbox
 		// history) on the request. A no-op without the snapshot store or planner.
 		if campaignService != nil {
-			go campaignService.StartSendPlanSnapshotter(ctx, time.Minute)
+			interval, maxAge := sendPlanSnapshotTiming()
+			go campaignService.StartSendPlanSnapshotter(ctx, interval, maxAge)
 		}
 
 		// Segment-linked campaigns: enrol contacts that drifted into a linked
@@ -2672,6 +2673,20 @@ func localTasksPollInterval() time.Duration {
 		return time.Second
 	}
 	return d
+}
+
+// sendPlanSnapshotTiming reads SEND_PLAN_SNAPSHOT_INTERVAL (default 1m) and
+// SEND_PLAN_SNAPSHOT_MAX_AGE (default three intervals), both Go durations.
+func sendPlanSnapshotTiming() (time.Duration, time.Duration) {
+	interval, err := time.ParseDuration(getenvDefault("SEND_PLAN_SNAPSHOT_INTERVAL", "1m"))
+	if err != nil || interval <= 0 {
+		interval = time.Minute
+	}
+	maxAge, err := time.ParseDuration(os.Getenv("SEND_PLAN_SNAPSHOT_MAX_AGE"))
+	if err != nil || maxAge <= 0 {
+		maxAge = 3 * interval
+	}
+	return interval, maxAge
 }
 
 // wsHealthURL derives the realtime service's HTTP /health URL from the

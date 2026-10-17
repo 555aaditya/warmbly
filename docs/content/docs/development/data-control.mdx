@@ -222,7 +222,7 @@ docker compose -p warmbly exec backend warmblyctl restore --file /data/blobs/war
 docker compose -p warmbly restart
 ```
 
-The restore empties the schema and replays the dump, so it replaces everything currently on that instance and asks you to type `restore` first.
+The restore empties the schema and replays the dump, so it replaces everything currently on that instance and asks you to type `restore` first. It then runs `ANALYZE`, since a dump carries no planner statistics; a failure there only warns.
 
 Before it does anything it compares the bundle's `CREDENTIALS_ENCRYPTION_KEY` and `KMS_LOCAL_MASTER_KEY` against the destination's and refuses to continue when they differ, printing the two lines to put in `.env`. That check is the point of the command: without it a restore looks like it worked and every mailbox fails to authenticate days later, with no error that names the cause.
 

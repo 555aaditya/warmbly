@@ -7,7 +7,12 @@ import { useUserProfile } from './context/user'
 import { markSelfMutation } from '@/lib/realtime/selfActivity'
 import { announceCampaignDeleted } from '@/lib/realtime/campaignDeleted'
 import { MAILBOX_REMOVAL_KEYS } from '@/lib/api/hooks/app/emails/invalidateAfterMailboxRemoval'
-import { createDeliveryDeduper, createRefreshCoalescer } from '@/lib/realtime/refreshCoalescer'
+import {
+  createDeliveryDeduper,
+  createHiddenTabGate,
+  createRefreshCoalescer,
+  type QueryMatch,
+} from '@/lib/realtime/refreshCoalescer'
 
 // What an inbox event moves besides its own thread; refreshed through the coalescer, never per event.
 const INBOX_AGGREGATES: QueryKey[] = [
@@ -33,13 +38,17 @@ export function useRealtimeEvents() {
   const updateDeal = useAppStore((s) => s.updateDeal)
   const setSubscription = useAppStore((s) => s.setSubscription)
 
+  // Every realtime invalidation goes through this, so a hidden tab refetches once on return instead of per event.
+  const [gate] = useState(() => createHiddenTabGate(queryClient))
+  useEffect(() => () => gate.dispose(), [gate])
+
   const invalidate = useCallback(
     (queryKeys: QueryKey[]) => {
       for (const queryKey of queryKeys) {
-        void queryClient.invalidateQueries({ queryKey })
+        gate.invalidate({ queryKey })
       }
     },
-    [queryClient],
+    [gate],
   )
 
   // Warmup deliveries arrive all day across a whole pool, so their refreshes
@@ -67,13 +76,16 @@ export function useRealtimeEvents() {
   }, [])
 
   // One aggregate refresh per quiet interval; per-thread work once per delivery, not per channel.
-  const [inboxRefresh] = useState(() => createRefreshCoalescer(queryClient))
+  const [inboxRefresh] = useState(() => createRefreshCoalescer(queryClient, { invalidate: gate.invalidate }))
   const [isDuplicateDelivery] = useState(() => createDeliveryDeduper())
   useEffect(() => () => inboxRefresh.dispose(), [inboxRefresh])
   // Mailbox events arrive in bursts (a fleet reconnect, a pool re-evaluation),
   // and each one refetches the whole mailbox list and every status chunk.
-  const [accountRefresh] = useState(() => createRefreshCoalescer(queryClient))
+  const [accountRefresh] = useState(() => createRefreshCoalescer(queryClient, { invalidate: gate.invalidate }))
   useEffect(() => () => accountRefresh.dispose(), [accountRefresh])
+  // One send publishes several campaign events within a second or two; they share one refetch.
+  const [campaignRefresh] = useState(() => createRefreshCoalescer(queryClient, { invalidate: gate.invalidate }))
+  useEffect(() => () => campaignRefresh.dispose(), [campaignRefresh])
 
   const handleRealtimeEvent = useCallback(
     (payload: Record<string, unknown>) => {
@@ -304,7 +316,7 @@ export function useRealtimeEvents() {
         if (campaignId) {
           const status = getString('status')
           updateCampaign(campaignId, status ? { status } : {})
-          invalidate([
+          campaignRefresh.add([
             ['campaigns', campaignId],
             ['campaigns', campaignId, 'logs'],
             ['analytics', 'campaigns', campaignId],
@@ -312,15 +324,23 @@ export function useRealtimeEvents() {
             ['analytics', 'campaigns', campaignId, 'hourly'],
           ])
         }
-        invalidate([
+        campaignRefresh.add([
           ['campaigns', 'list'],
           ['analytics'],
         ])
-        // Other contacts' campaign-state (a scheduler preview per campaign) is left alone.
-        void queryClient.invalidateQueries({
-          queryKey: ['contacts'],
-          predicate: (q) => !contactId || q.queryKey[2] !== 'campaign-state' || q.queryKey[1] === contactId,
-        })
+        // A reply can open a CRM task or deal (reply intents, reply actions), which publish no event of their own.
+        if (includes('EMAIL_REPLIED')) campaignRefresh.add([['crm', 'tasks'], ['crm', 'deals']])
+        // Sends and progress record no verification evidence; opens, clicks, replies and bounces do.
+        const movesVerification = !includes('EMAIL_SENT', 'TASK_PROGRESS')
+        const contactsMatch: QueryMatch = (q) => {
+          const [, scope, part] = q.queryKey
+          // Custom field keys are never written by a send, open, click, reply or bounce.
+          if (scope === 'custom-fields') return false
+          if (scope === 'verification') return movesVerification
+          // Other contacts' campaign-state (a scheduler preview per campaign) is left alone.
+          return !contactId || part !== 'campaign-state' || scope === contactId
+        }
+        campaignRefresh.add([['contacts']], contactsMatch)
         return
       }
 
@@ -373,8 +393,14 @@ export function useRealtimeEvents() {
         return
       }
 
-      if (includes('CRM_TASK', 'TASK')) {
+      if (includes('CRM_TASK')) {
         invalidate([['crm', 'tasks'], ['crm', 'deals']])
+        return
+      }
+
+      // Campaign task status and progress pulse: system-created CRM tasks and deals publish nothing of their own, so refresh coalesced.
+      if (event.startsWith('TASK_')) {
+        campaignRefresh.add([['crm', 'tasks'], ['crm', 'deals']])
         return
       }
 
@@ -598,7 +624,7 @@ export function useRealtimeEvents() {
           invalidate([['campaigns', entityId], ['segments', 'campaign', entityId]])
           // A campaign write can enrol leads (linking a segment), so only the
           // contact lists scoped to that campaign move, not every list.
-          void queryClient.invalidateQueries({
+          gate.invalidate({
             predicate: (q) => {
               const [root, kind, options] = q.queryKey as [unknown, unknown, { campaign_ids?: string[] } | undefined]
               return root === 'contacts' && kind === 'list' && !!options?.campaign_ids?.includes(entityId)
@@ -626,7 +652,9 @@ export function useRealtimeEvents() {
     [
       accountRefresh,
       addUniboxEmail,
+      campaignRefresh,
       currentOrg?.id,
+      gate,
       inboxRefresh,
       invalidate,
       isDuplicateDelivery,

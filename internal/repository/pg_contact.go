@@ -2084,9 +2084,10 @@ func (r *contactRepository) SearchCounts(ctx context.Context, orgID string) (*mo
 			COUNT(*) FILTER (WHERE COALESCE(cl.campaign_count, 0) = 0)
 		FROM contacts c
 		LEFT JOIN (
-			SELECT contact_id, COUNT(campaign_id) AS campaign_count
-			FROM campaign_leads
-			GROUP BY contact_id
+			SELECT l.contact_id, COUNT(l.campaign_id) AS campaign_count
+			FROM campaign_leads l
+			JOIN contacts lc ON lc.id = l.contact_id AND lc.organization_id = $1
+			GROUP BY l.contact_id
 		) cl ON c.id = cl.contact_id
 		WHERE c.organization_id = $1
 	`

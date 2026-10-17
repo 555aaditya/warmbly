@@ -499,6 +499,8 @@ Before anything is written it compares the bundle's `CREDENTIALS_ENCRYPTION_KEY`
 
 Blobs are unpacked over the blob root additively: files the bundle knows about are overwritten, anything else is left alone.
 
+Once the dump has loaded, the restore runs `ANALYZE`, because a dump carries no planner statistics. If that step fails the restore still completes and prints a warning; run `ANALYZE` in `psql` yourself afterwards.
+
 [Data control](/development/data-control/#moving-an-instance) walks the whole move to a new host.
 
 ## org list

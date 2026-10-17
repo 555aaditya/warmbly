@@ -40,6 +40,7 @@ func mailboxDetectors() []Detector {
 			Key:      "mailbox_concentration",
 			Category: models.AdvisorCategoryMailbox,
 			About:    "How many mailboxes carry the org's cold volume. Spreading sending across more mailboxes and more sending identities is the core safety property of the platform; concentrating it into one or two mailboxes gives up that protection.",
+			Reads:    []repository.AdvisorSection{repository.AdvisorSectionOrg},
 			Run:      detectMailboxConcentration,
 		},
 		{
