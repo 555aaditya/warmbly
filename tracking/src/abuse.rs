@@ -109,7 +109,7 @@ pub fn is_scanner(user_agent: Option<&str>) -> bool {
     };
     let ua = DEVICE_UA_NAMES
         .iter()
-        .fold(ua.to_ascii_lowercase(), |ua, name| ua.replace(name, ""));
+        .fold(ua.to_ascii_lowercase(), |ua, name| ua.replace(name, " "));
     SCANNER_UA_MARKERS.iter().any(|marker| ua.contains(marker))
 }
 
@@ -149,11 +149,15 @@ mod tests {
     }
 
     #[test]
-    fn a_fetcher_naming_a_phone_is_still_a_scanner() {
+    fn removing_a_phone_name_neither_hides_nor_makes_a_marker() {
         assert!(is_scanner(Some(
             "Mozilla/5.0 (Linux; Android 11; CUBOT_X50) compatible; Googlebot/2.1"
         )));
         assert!(is_scanner(Some("cubotbot/1.0")));
+        // The name is replaced by a separator, so its neighbours never join into a marker.
+        assert!(!is_scanner(Some(
+            "Mozilla/5.0 (Linux; Android 11; bcubotot)"
+        )));
     }
 
     #[test]
