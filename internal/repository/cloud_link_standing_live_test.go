@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"testing"
@@ -100,19 +101,62 @@ func TestLiveCloudStandingFreshnessIsBoundedWithoutInventingAProviderBlock(t *te
 			}
 		}
 	}
+	// The gates above fail closed; what acts on reputation reads real evidence only.
+	handle, _ := liveContactDB(t)
+	lifecycle := NewSendLifecycleRepository(handle)
+	assertActsOn := func(want models.WarmupHealthState, unknown bool) {
+		t.Helper()
+		cand, err := lifecycle.GetLifecycleCandidate(ctx, f.sender)
+		if err != nil || cand.HealthState != want || cand.CloudEvidenceUnknown != unknown {
+			t.Fatalf("lifecycle candidate = %+v, %v; want %q with unknown=%v", cand, err, want, unknown)
+		}
+		known, gotUnknown, err := f.warmup.GetKnownHealthState(ctx, f.sender)
+		if wantKnown := cmp.Or(want, models.WarmupHealthHealthy); err != nil || known != wantKnown || gotUnknown != unknown {
+			t.Fatalf("known standing = %s, %v, %v; want %s with unknown=%v", known, gotUnknown, err, wantKnown, unknown)
+		}
+		wantWarnings := 0
+		if unknown || want == models.WarmupHealthWatch {
+			wantWarnings = 1
+		}
+		summary, xerr := NewAnalyticsRepository(handle).GetAccountHealthSummary(ctx, f.org, nil)
+		if xerr != nil || summary.ErrorAccounts != 0 || summary.WarningAccounts != wantWarnings {
+			t.Fatalf("summary = %+v, %v; want %d warning and no error", summary, xerr, wantWarnings)
+		}
+		risk, err := NewWorkerRepository(f.pool).ListRiskCandidates(ctx, 100000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, c := range risk {
+			if c.EmailAccountID == f.sender {
+				found = c.HealthState == want && c.CloudEvidenceUnknown == unknown
+			}
+		}
+		if !found {
+			t.Fatalf("risk candidate does not read %q with unknown=%v", want, unknown)
+		}
+		states, err := f.warmup.GetHealthStates(ctx, []uuid.UUID{f.sender})
+		if err != nil || states[f.sender].CloudStatusOnly != unknown || states[f.sender].CloudReportMissing != unknown {
+			t.Fatalf("send gate read = %+v, %v; want CloudStatusOnly and CloudReportMissing %v", states[f.sender], err, unknown)
+		}
+	}
 	assertState(models.WarmupHealthBlocked, "cloud_evidence_unavailable")
+	assertActsOn("", true)
 	if _, err := links.SetStanding(ctx, f.sender, &models.WarmupHealthInfo{State: "healthy"}, false); err != nil {
 		t.Fatal(err)
 	}
 	assertState(models.WarmupHealthHealthy, "")
+	assertActsOn(models.WarmupHealthHealthy, false)
 	if _, err := f.pool.Exec(ctx, `UPDATE cloud_link_mailboxes SET standing_observed_at=NOW()+INTERVAL '1 minute' WHERE email_account_id=$1`, f.sender); err != nil {
 		t.Fatal(err)
 	}
 	assertState(models.WarmupHealthBlocked, "cloud_evidence_unavailable")
+	assertActsOn("", true)
 	if _, err := f.pool.Exec(ctx, `UPDATE cloud_link_mailboxes SET standing_observed_at = NOW() - INTERVAL '16 minutes' WHERE email_account_id = $1`, f.sender); err != nil {
 		t.Fatal(err)
 	}
 	assertState(models.WarmupHealthBlocked, "cloud_evidence_unavailable")
+	assertActsOn("", true)
 	var stored string
 	if err := f.pool.QueryRow(ctx, `SELECT health_state FROM cloud_link_mailboxes WHERE email_account_id = $1`, f.sender).Scan(&stored); err != nil || stored != "healthy" {
 		t.Fatalf("availability invented provider evidence: %s, %v", stored, err)
@@ -121,10 +165,231 @@ func TestLiveCloudStandingFreshnessIsBoundedWithoutInventingAProviderBlock(t *te
 		t.Fatal(err)
 	}
 	assertState(models.WarmupHealthWatch, "")
+	assertActsOn(models.WarmupHealthWatch, false)
 	if err := links.InvalidateStanding(ctx, f.sender); err != nil {
 		t.Fatal(err)
 	}
 	assertState(models.WarmupHealthBlocked, "cloud_evidence_unavailable")
+	assertActsOn("", true)
+}
+
+// A stale Cloud report must not outrank a real hold: the gates still fail
+// closed, and what acts on reputation still sees the quarantine.
+func TestLiveCloudUnknownEvidenceDoesNotHideARealHold(t *testing.T) {
+	f := newPoolLinkFixture(t)
+	ctx := context.Background()
+	links := NewCloudLinkRepository(f.pool, nil)
+	handle, _ := liveContactDB(t)
+	if _, err := links.Enroll(ctx, f.sender, f.sender, liveCloudLink(t, f), false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := links.SetStanding(ctx, f.sender, &models.WarmupHealthInfo{State: "healthy"}, false); err != nil {
+		t.Fatal(err)
+	}
+	until := time.Now().Add(48 * time.Hour)
+	if _, err := f.pool.Exec(ctx, `INSERT INTO warmup_reputation_ledger (organization_id, email, cloud_health_state, cloud_blocked_until, cloud_health_reason, standing_until)
+	 VALUES ($1, $2, 'quarantined', $3, 'complaints', NOW())`, f.org, f.senderTo, until); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE cloud_link_mailboxes SET standing_observed_at = NOW() - INTERVAL '16 minutes' WHERE email_account_id = $1`, f.sender); err != nil {
+		t.Fatal(err)
+	}
+
+	// The gate reads the real quarantine, open-ended: the missing report outlasts the ledger's end.
+	if state, gateUntil, err := f.warmup.GetHealthState(ctx, f.sender); err != nil || state != models.WarmupHealthQuarantined || gateUntil != nil {
+		t.Fatalf("send gate = %s until %v, %v; want the ledger quarantine with no end", state, gateUntil, err)
+	}
+	cand, err := NewSendLifecycleRepository(handle).GetLifecycleCandidate(ctx, f.sender)
+	if err != nil || cand.HealthState != models.WarmupHealthQuarantined || !cand.CloudEvidenceUnknown {
+		t.Fatalf("lifecycle candidate = %+v, %v; want quarantined with unknown cloud evidence", cand, err)
+	}
+	if state, unknown, err := f.warmup.GetKnownHealthState(ctx, f.sender); err != nil || state != models.WarmupHealthQuarantined || !unknown {
+		t.Fatalf("known standing = %s, %v, %v; want quarantined with unknown cloud evidence", state, unknown, err)
+	}
+	summary, xerr := NewAnalyticsRepository(handle).GetAccountHealthSummary(ctx, f.org, nil)
+	if xerr != nil || summary.ErrorAccounts != 1 {
+		t.Fatalf("summary = %+v, %v; want the quarantined mailbox in error", summary, xerr)
+	}
+	risk, err := NewWorkerRepository(f.pool).ListRiskCandidates(ctx, 100000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, c := range risk {
+		if c.EmailAccountID == f.sender {
+			found = c.HealthState == models.WarmupHealthQuarantined && c.CloudEvidenceUnknown
+		}
+	}
+	if !found {
+		t.Fatal("risk candidate does not see the quarantine beside unknown cloud evidence")
+	}
+	assertCloudStatus(t, f, models.WarmupHealthQuarantined, "complaints")
+	if states, err := f.warmup.GetHealthStates(ctx, []uuid.UUID{f.sender}); err != nil || states[f.sender].CloudStatusOnly || states[f.sender].State != models.WarmupHealthQuarantined ||
+		!states[f.sender].CloudReportMissing || states[f.sender].BlockedUntil != nil {
+		t.Fatalf("send gate read = %+v, %v; want the real quarantine, open-ended", states[f.sender], err)
+	}
+	snap, err := NewAdvisorRepository(handle).LoadSnapshot(ctx, f.org, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range snap.Mailboxes {
+		if m.ID == f.sender && (m.PoolHealth != string(models.WarmupHealthQuarantined) || m.PoolHealthReason != "complaints" || !m.PoolBlocked) {
+			t.Fatalf("advisor standing = %s (%s, blocked %v), want the ledger quarantine", m.PoolHealth, m.PoolHealthReason, m.PoolBlocked)
+		}
+	}
+
+	// A stale Cloud report of the same state that has ended must not stand in for the live hold.
+	if _, err := f.pool.Exec(ctx, `UPDATE cloud_link_mailboxes SET health_state = 'quarantined', blocked_until = NOW() - INTERVAL '1 hour', health_reason = 'bounces' WHERE email_account_id = $1`, f.sender); err != nil {
+		t.Fatal(err)
+	}
+	assertCloudStatus(t, f, models.WarmupHealthQuarantined, "complaints")
+
+	// Nor may a fresh one that ends before the ledger's: the status shows the end the gate enforces.
+	earlier := time.Now().Add(time.Hour)
+	if _, err := f.pool.Exec(ctx, `UPDATE cloud_link_mailboxes SET blocked_until = $2, standing_observed_at = NOW() WHERE email_account_id = $1`, f.sender, earlier); err != nil {
+		t.Fatal(err)
+	}
+	assertCloudStatus(t, f, models.WarmupHealthQuarantined, "complaints")
+	if got, _ := f.warmup.GetCloudStanding(ctx, f.sender); !sameInstant(got.BlockedUntil, &until) {
+		t.Fatalf("status ends %v, want the ledger's %v", got.BlockedUntil, until)
+	}
+}
+
+// assertCloudStatus checks what the drawer and the mailbox list show for the sender.
+func assertCloudStatus(t *testing.T, f *poolLinkFixture, want models.WarmupHealthState, reason string) {
+	t.Helper()
+	ctx := context.Background()
+	one, err := f.warmup.GetCloudStanding(ctx, f.sender)
+	if err != nil || one == nil || one.State != string(want) || one.Reason != reason || one.Source != models.WarmupHealthSourceCloud {
+		t.Fatalf("GetCloudStanding = %+v, %v; want %s (%s) from cloud", one, err, want, reason)
+	}
+	many, err := f.warmup.GetCloudStandings(ctx, []uuid.UUID{f.sender})
+	if got := many[f.sender]; err != nil || got == nil || got.State != string(want) || got.Reason != reason {
+		t.Fatalf("GetCloudStandings = %+v, %v; want %s (%s)", got, err, want, reason)
+	}
+	links := NewCloudLinkRepository(f.pool, nil)
+	m, err := links.GetByAccount(ctx, f.sender)
+	if err != nil || m == nil {
+		t.Fatalf("GetByAccount = %+v, %v", m, err)
+	}
+	listed, err := links.(CloudStatusReader).CloudStatuses(ctx, []models.CloudLinkMailbox{*m})
+	if got := listed[f.sender]; err != nil || got == nil || got.State != string(want) || got.Reason != reason {
+		t.Fatalf("Settings status = %+v, %v; want %s (%s)", got, err, want, reason)
+	}
+}
+
+// A live Cloud hold whose report went stale is still real evidence: it is not
+// unknown, so the lifecycle and risk keep acting on it.
+func TestLiveCloudStaleLiveHoldStaysKnown(t *testing.T) {
+	for _, state := range []models.WarmupHealthState{models.WarmupHealthQuarantined, models.WarmupHealthBlocked} {
+		t.Run(string(state), func(t *testing.T) {
+			f := newPoolLinkFixture(t)
+			ctx := context.Background()
+			links := NewCloudLinkRepository(f.pool, nil)
+			handle, _ := liveContactDB(t)
+			if _, err := links.Enroll(ctx, f.sender, f.sender, liveCloudLink(t, f), false); err != nil {
+				t.Fatal(err)
+			}
+			hold := &models.WarmupHealthInfo{State: string(state), Reason: "complaints"}
+			if state == models.WarmupHealthQuarantined {
+				until := time.Now().Add(72 * time.Hour)
+				hold.BlockedUntil = &until
+			}
+			if _, err := links.SetStanding(ctx, f.sender, hold, false); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.pool.Exec(ctx, `UPDATE cloud_link_mailboxes SET standing_observed_at = NOW() - INTERVAL '20 minutes' WHERE email_account_id = $1`, f.sender); err != nil {
+				t.Fatal(err)
+			}
+			assertKnownHold(t, f, handle, state)
+			assertCloudStatus(t, f, state, "complaints")
+			// The report is stale, so the hold must not end at its date while it stays stale.
+			if gs, until, err := f.warmup.GetHealthState(ctx, f.sender); err != nil || gs != state || until != nil {
+				t.Fatalf("send gate = %s until %v, %v; want %s with no end", gs, until, err, state)
+			}
+			if states, err := f.warmup.GetHealthStates(ctx, []uuid.UUID{f.sender}); err != nil || !states[f.sender].CloudReportMissing || states[f.sender].BlockedUntil != nil {
+				t.Fatalf("send gate read = %+v, %v; want it open-ended on the stale report", states[f.sender], err)
+			}
+		})
+	}
+}
+
+// assertKnownHold checks that lifecycle, risk and the send gate read a real hold, not unknown evidence.
+func assertKnownHold(t *testing.T, f *poolLinkFixture, handle *db.DB, want models.WarmupHealthState) {
+	t.Helper()
+	ctx := context.Background()
+	cand, err := NewSendLifecycleRepository(handle).GetLifecycleCandidate(ctx, f.sender)
+	if err != nil || cand.HealthState != want || cand.CloudEvidenceUnknown {
+		t.Fatalf("lifecycle candidate = %+v, %v; want %s with known evidence", cand, err, want)
+	}
+	if state, unknown, err := f.warmup.GetKnownHealthState(ctx, f.sender); err != nil || state != want || unknown {
+		t.Fatalf("known standing = %s, %v, %v; want %s with known evidence", state, unknown, err, want)
+	}
+	risk, err := NewWorkerRepository(f.pool).ListRiskCandidates(ctx, 100000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, c := range risk {
+		if c.EmailAccountID == f.sender {
+			found = c.HealthState == want && !c.CloudEvidenceUnknown
+		}
+	}
+	if !found {
+		t.Fatalf("risk candidate does not read %s with known evidence", want)
+	}
+	if states, err := f.warmup.GetHealthStates(ctx, []uuid.UUID{f.sender}); err != nil || states[f.sender].State != want || states[f.sender].CloudStatusOnly {
+		t.Fatalf("send gate read = %+v, %v; want %s as a real hold", states[f.sender], err, want)
+	}
+}
+
+// An enrollment that is not active, or a link being disconnected, is unknown
+// evidence for everything that acts on reputation, unless Cloud holds the mailbox.
+func TestLiveCloudPendingEnrollmentAndDisconnectAreUnknown(t *testing.T) {
+	f := newPoolLinkFixture(t)
+	ctx := context.Background()
+	links := NewCloudLinkRepository(f.pool, nil)
+	handle, _ := liveContactDB(t)
+	instance := liveCloudLink(t, f)
+	lifecycle := NewSendLifecycleRepository(handle)
+	assertUnknown := func(label string) {
+		t.Helper()
+		cand, err := lifecycle.GetLifecycleCandidate(ctx, f.sender)
+		if err != nil || cand.HealthState != "" || !cand.CloudEvidenceUnknown {
+			t.Fatalf("%s: lifecycle candidate = %+v, %v; want unknown with no state", label, cand, err)
+		}
+		if state, unknown, err := f.warmup.GetKnownHealthState(ctx, f.sender); err != nil || state != models.WarmupHealthHealthy || !unknown {
+			t.Fatalf("%s: known standing = %s, %v, %v; want unknown", label, state, unknown, err)
+		}
+		if states, err := f.warmup.GetHealthStates(ctx, []uuid.UUID{f.sender}); err != nil || states[f.sender].State != models.WarmupHealthBlocked || !states[f.sender].CloudStatusOnly {
+			t.Fatalf("%s: send gate read = %+v, %v; want held on the missing report", label, states[f.sender], err)
+		}
+	}
+	if _, err := links.Enroll(ctx, f.sender, f.sender, instance, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := links.SetStanding(ctx, f.sender, &models.WarmupHealthInfo{State: "healthy"}, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []string{"pending_enroll", "pending_remove"} {
+		if _, err := f.pool.Exec(ctx, `UPDATE cloud_link_mailboxes SET enrollment_state = $2, standing_observed_at = NOW() WHERE email_account_id = $1`, f.sender, state); err != nil {
+			t.Fatal(err)
+		}
+		assertUnknown(state)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE cloud_link_mailboxes SET enrollment_state = 'active', standing_observed_at = NOW() WHERE email_account_id = $1`, f.sender); err != nil {
+		t.Fatal(err)
+	}
+	if err := links.SetDisconnectPending(ctx, instance); err != nil {
+		t.Fatal(err)
+	}
+	assertUnknown("disconnect pending")
+
+	until := time.Now().Add(48 * time.Hour)
+	if _, err := f.pool.Exec(ctx, `UPDATE cloud_link_mailboxes SET health_state = 'quarantined', blocked_until = $2, health_reason = 'complaints' WHERE email_account_id = $1`, f.sender, until); err != nil {
+		t.Fatal(err)
+	}
+	assertKnownHold(t, f, handle, models.WarmupHealthQuarantined)
 }
 
 func TestLiveCloudPositiveObservationCannotClearAHoldFromAnotherLink(t *testing.T) {

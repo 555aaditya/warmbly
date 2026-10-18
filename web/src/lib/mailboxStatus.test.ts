@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mailboxColdActivity } from "./mailboxStatus";
+import { cloudStandingUnavailable, mailboxColdActivity } from "./mailboxStatus";
 
 describe("cold rotation activity", () => {
     it.each(["resting", "reserve"] as const)("shows %s without a campaign on this instance", (state) => {
@@ -18,5 +18,14 @@ describe("cold rotation activity", () => {
 
     it("does not call a mailbox sending just because it is available for cold rotation", () => {
         expect(mailboxColdActivity({ in_campaign: false, send_lifecycle: { state: "active" } })).toEqual({ resting: false, sending: false });
+    });
+});
+
+describe("Cloud standing availability", () => {
+    it("tells a missing Cloud report from a real block", () => {
+        expect(cloudStandingUnavailable({ reason: "cloud_evidence_unavailable" })).toBe(true);
+        expect(cloudStandingUnavailable({ reason: "complaints" })).toBe(false);
+        expect(cloudStandingUnavailable(null)).toBe(false);
+        expect(cloudStandingUnavailable(undefined)).toBe(false);
     });
 });

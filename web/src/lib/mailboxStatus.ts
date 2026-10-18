@@ -10,6 +10,11 @@ export function mailboxColdActivity(status?: Pick<AccountStatus, "send_lifecycle
     return { resting, sending: !!status?.in_campaign && !resting };
 }
 
+// The standing Warmbly Cloud stands in for while it has no current report: sends wait, but it is no verdict.
+export function cloudStandingUnavailable(h?: { reason?: string } | null) {
+    return h?.reason === "cloud_evidence_unavailable";
+}
+
 // Account activity is not proof of deliverability or reputation readiness.
 export default function mailboxDisplayStatus(box: Inbox): MailboxDisplayStatus {
     if (box.status !== "active") return "inactive";
