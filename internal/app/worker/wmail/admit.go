@@ -190,7 +190,7 @@ func (w *WMail) storeNew(ctx context.Context, msg *models.EmailMessageData, data
 	// practice, and deciding that here by skipping the second would be this
 	// function guessing at a MIME question the parsers already answer.
 	bounce := w.bounceReport(msg)
-	complaint := w.complaintReport(msg)
+	complaint := w.complaintReport(ctx, msg)
 	var reportAbout string
 	switch {
 	case bounce != nil:

@@ -1,7 +1,9 @@
 package wmail
 
 import (
+	"context"
 	"strings"
+	"time"
 
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/pkg/arf"
@@ -71,19 +73,21 @@ func headerFlagValue(flags []string, name string) string {
 // feedback report for one of our sends. A complaint never arrives
 // synchronously; it comes back as mail, long after the send succeeded.
 //
-// IMAP and Gmail expose the report's machine-readable parts, so both work.
-// Microsoft Graph returns one rendered body and no parts, so a report synced
-// through Graph carries only its human notice and is not detected; reading
-// those needs a separate MIME fetch, which is not built.
+// IMAP and Gmail expose the report's machine-readable parts in the synced body.
+// Microsoft Graph syncs one rendered body, so a report that reads as nothing
+// there is parsed again from the message's raw MIME.
 // Like bounceReport, the event names the send the report is about so the
 // arrival event can carry it.
-func (w *WMail) complaintReport(msg *models.EmailMessageData) *models.JobEventInboundComplaint {
+func (w *WMail) complaintReport(ctx context.Context, msg *models.EmailMessageData) *models.JobEventInboundComplaint {
 	from := strings.Join(msg.From, " ")
 	if !arf.Detect(from, msg.Subject, headerFlagValue(msg.Flags, "Content-Type")) {
 		return nil
 	}
 
 	report := arf.Parse(msg.BodyPlain + "\n" + msg.BodyHTML)
+	if !report.IsComplaint || report.OriginalMessageID == "" {
+		report = w.graphComplaintMIME(ctx, msg, report)
+	}
 	if !report.IsComplaint || report.OriginalMessageID == "" {
 		return nil
 	}
@@ -95,4 +99,24 @@ func (w *WMail) complaintReport(msg *models.EmailMessageData) *models.JobEventIn
 		ComplainedRecipient: report.ComplainedRecipient,
 		Provider:            report.UserAgent,
 	}
+}
+
+// complaintMIMEBytes bounds the raw fetch; a report returns the original send, which is small.
+const complaintMIMEBytes = 1 << 20
+
+// graphComplaintMIME reads a feedback report's parts from a Graph message's raw MIME. Any other
+// mailbox, or a fetch that fails, keeps what the synced body said.
+func (w *WMail) graphComplaintMIME(ctx context.Context, msg *models.EmailMessageData, fallback arf.Report) arf.Report {
+	if w.EmailType != models.InboxProviderOutlook || w.GraphData == nil || w.GraphData.Client == nil || msg.GmailID == "" {
+		return fallback
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	raw, err := w.GraphData.Client.DiagnosticRawMessage(ctx, msg.GmailID, complaintMIMEBytes)
+	if err != nil {
+		return fallback
+	}
+	report := arf.ParseMIME(raw)
+	clear(raw)
+	return report
 }
