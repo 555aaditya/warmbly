@@ -29211,7 +29211,7 @@
       "post": {
         "operationId": "integrations_salesforce_sources_run",
         "summary": "Run a Salesforce import now",
-        "description": "Starts the import. A second request while one is running returns the running state. Retries are naturally safe. Requires the `INTEGRATIONS` API permission, or `use_integrations` for JWT callers.",
+        "description": "Starts the import. A request while an import is already running returns 409 with code `import_running`. Requires the `INTEGRATIONS` API permission, or `use_integrations` for JWT callers.",
         "tags": [
           "integrations"
         ],
@@ -29293,8 +29293,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "409": {
+            "description": "An import is already running.",
             "content": {
               "application/json": {
                 "schema": {
@@ -29305,6 +29305,16 @@
           },
           "429": {
             "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -30541,7 +30551,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ApolloImportSourceInput"
+                "$ref": "#/components/schemas/ApolloImportSourceCreateInput"
               }
             }
           }
@@ -30660,7 +30670,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ApolloImportSourceInput"
+                "$ref": "#/components/schemas/ApolloImportSourceUpdateInput"
               }
             }
           }
@@ -30843,7 +30853,7 @@
       "post": {
         "operationId": "integrations_apollo_sources_run",
         "summary": "Run an Apollo import now",
-        "description": "Starts the import and returns the updated source. Retries are naturally safe. Requires the `INTEGRATIONS` API permission, or `use_integrations` for JWT callers.",
+        "description": "Starts the import and returns the updated source. A request while an import is already running returns 409 with code `import_running`. Requires the `INTEGRATIONS` API permission, or `use_integrations` for JWT callers.",
         "tags": [
           "integrations"
         ],
@@ -30925,8 +30935,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "409": {
+            "description": "An import is already running.",
             "content": {
               "application/json": {
                 "schema": {
@@ -30937,6 +30947,16 @@
           },
           "429": {
             "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -30971,6 +30991,18 @@
               "format": "uuid"
             },
             "description": "Connection id."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "description": "Maximum number of enrichment runs to return."
           }
         ],
         "responses": {
@@ -48301,48 +48333,6 @@
           "updated_at"
         ]
       },
-      "ApolloImportSourceInput": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "list_id": {
-            "type": "string"
-          },
-          "list_name": {
-            "type": "string"
-          },
-          "campaign_id": {
-            "oneOf": [
-              {
-                "type": "string",
-                "format": "uuid"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "An explicit `null` on update clears it."
-          },
-          "category_ids": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          "verified_only": {
-            "type": "boolean"
-          },
-          "recurring": {
-            "type": "boolean"
-          },
-          "enabled": {
-            "type": "boolean"
-          }
-        }
-      },
       "ApolloPreview": {
         "type": "object",
         "properties": {
@@ -48531,9 +48521,37 @@
           "overwrite": {
             "type": "boolean",
             "description": "Replace fields that already hold a value."
+          },
+          "contacts": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Contact ids to enrich."
+          },
+          "all": {
+            "type": "boolean",
+            "description": "Select every contact matching `filters` instead of `contacts`."
+          },
+          "filters": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ContactSearchRequest"
+              }
+            ],
+            "description": "The same body `POST /contacts/search` takes. Used when `all` is true."
+          },
+          "exclude": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Contact ids dropped from the resolved set. Ignored unless `all` is true."
           }
         },
-        "description": "Select contacts by `contact_ids`, or with the same selection fields the bulk contact endpoints take."
+        "description": "Select contacts with `contacts`, or with `all` plus `filters` and `exclude`, as the bulk contact endpoints do. `contact_ids` is accepted as an alias of `contacts`."
       },
       "ApolloKeyRequest": {
         "type": "object",
@@ -48700,6 +48718,67 @@
           }
         },
         "description": "Every field present replaces its value."
+      },
+      "ApolloImportSourceUpdateInput": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "list_id": {
+            "type": "string"
+          },
+          "list_name": {
+            "type": "string"
+          },
+          "campaign_id": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "An explicit `null` on update clears it."
+          },
+          "category_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "verified_only": {
+            "type": "boolean"
+          },
+          "recurring": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApolloImportSourceCreateInput": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ApolloImportSourceUpdateInput"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "list_id": {
+                "type": "string",
+                "maxLength": 64
+              }
+            },
+            "required": [
+              "list_id"
+            ]
+          }
+        ]
       }
     }
   }
