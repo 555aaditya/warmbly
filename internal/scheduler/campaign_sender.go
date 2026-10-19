@@ -249,8 +249,10 @@ func (s *schedulerService) healthFor(ctx context.Context, p *campaignPass, id uu
 	}
 	h := healthRead{}
 	if s.warmupRepo != nil {
-		if state, until, err := s.warmupRepo.GetHealthState(ctx, id); err == nil {
-			h = healthRead{state: state, blockedUntil: until, known: true}
+		if states, err := s.warmupRepo.GetHealthStates(ctx, []uuid.UUID{id}); err == nil {
+			if state, ok := states[id]; ok {
+				h = healthRead{state: state.State, blockedUntil: state.BlockedUntil, known: true, cloudStatus: state.CloudStatusOnly, cloudMissing: state.CloudReportMissing}
+			}
 		}
 	}
 	p.health[id] = h
