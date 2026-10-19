@@ -176,6 +176,8 @@ func TestGraphComplaintRetriesBeforeAdmission(t *testing.T) {
 				var events []captured
 				var states []models.SyncState
 				w := newGraphTestMail(t, srv, &events, &states)
+				store := &retainedArrivalStore{body: map[string][]byte{}}
+				w.Storage = store
 				if !backfill {
 					w.tracker.state.BackfillStatus = models.SyncBackfillComplete
 				}
@@ -193,7 +195,7 @@ func TestGraphComplaintRetriesBeforeAdmission(t *testing.T) {
 				for _, event := range events {
 					complaintEmitted = complaintEmitted || event.eventType == models.JobEventTypeInboundComplaint
 				}
-				if fetches != 1 || len(mapping.data) != 0 || len(importedIDs(events)) != 0 || complaintEmitted || !cursorHeld {
+				if fetches != 1 || len(mapping.data) != 0 || len(importedIDs(events)) != 0 || complaintEmitted || !cursorHeld || len(store.body) != 0 {
 					t.Fatalf("failed fetch admitted the report: fetches=%d maps=%v events=%v cursor=%s", fetches, mapping.data, events, w.GraphData.Client.DeltaLinks[msgraph.FolderInbox])
 				}
 				for range 2 {
