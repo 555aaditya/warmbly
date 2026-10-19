@@ -2,9 +2,12 @@ package wmail
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
+	"github.com/warmbly/warmbly/internal/client/msgraph"
+	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/pkg/arf"
 	"github.com/warmbly/warmbly/internal/pkg/dsn"
@@ -78,18 +81,22 @@ func headerFlagValue(flags []string, name string) string {
 // there is parsed again from the message's raw MIME.
 // Like bounceReport, the event names the send the report is about so the
 // arrival event can carry it.
-func (w *WMail) complaintReport(ctx context.Context, msg *models.EmailMessageData) *models.JobEventInboundComplaint {
+func (w *WMail) complaintReport(ctx context.Context, msg *models.EmailMessageData) (*models.JobEventInboundComplaint, error) {
 	from := strings.Join(msg.From, " ")
 	if !arf.Detect(from, msg.Subject, headerFlagValue(msg.Flags, "Content-Type")) {
-		return nil
+		return nil, nil
 	}
 
 	report := arf.Parse(msg.BodyPlain + "\n" + msg.BodyHTML)
 	if !report.IsComplaint || report.OriginalMessageID == "" {
-		report = w.graphComplaintMIME(ctx, msg, report)
+		var err error
+		report, err = w.graphComplaintMIME(ctx, msg, report)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if !report.IsComplaint || report.OriginalMessageID == "" {
-		return nil
+		return nil, nil
 	}
 
 	return &models.JobEventInboundComplaint{
@@ -98,25 +105,28 @@ func (w *WMail) complaintReport(ctx context.Context, msg *models.EmailMessageDat
 		OriginalMessageID:   strings.Trim(report.OriginalMessageID, "<>"),
 		ComplainedRecipient: report.ComplainedRecipient,
 		Provider:            report.UserAgent,
-	}
+	}, nil
 }
 
 // complaintMIMEBytes bounds the raw fetch; a report returns the original send, which is small.
 const complaintMIMEBytes = 1 << 20
 
-// graphComplaintMIME reads a feedback report's parts from a Graph message's raw MIME. Any other
-// mailbox, or a fetch that fails, keeps what the synced body said.
-func (w *WMail) graphComplaintMIME(ctx context.Context, msg *models.EmailMessageData, fallback arf.Report) arf.Report {
+// A temporary raw-fetch failure must hold admission so the provider re-offers the report.
+func (w *WMail) graphComplaintMIME(ctx context.Context, msg *models.EmailMessageData, fallback arf.Report) (arf.Report, error) {
 	if w.EmailType != models.InboxProviderOutlook || w.GraphData == nil || w.GraphData.Client == nil || msg.GmailID == "" {
-		return fallback
+		return fallback, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	raw, err := w.GraphData.Client.DiagnosticRawMessage(ctx, msg.GmailID, complaintMIMEBytes)
 	if err != nil {
-		return fallback
+		var mailErr *errx.MailError
+		if errors.Is(err, msgraph.ErrRawMessageTooLarge) || errors.As(err, &mailErr) && mailErr.Failure != nil && mailErr.Failure.Disposition == errx.SendPermanent {
+			return fallback, nil
+		}
+		return arf.Report{}, err
 	}
 	report := arf.ParseMIME(raw)
 	clear(raw)
-	return report
+	return report, nil
 }

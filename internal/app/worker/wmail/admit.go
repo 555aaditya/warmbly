@@ -190,7 +190,10 @@ func (w *WMail) storeNew(ctx context.Context, msg *models.EmailMessageData, data
 	// practice, and deciding that here by skipping the second would be this
 	// function guessing at a MIME question the parsers already answer.
 	bounce := w.bounceReport(msg)
-	complaint := w.complaintReport(ctx, msg)
+	complaint, err := w.complaintReport(ctx, msg)
+	if err != nil {
+		return err
+	}
 	var reportAbout string
 	switch {
 	case bounce != nil:
@@ -221,7 +224,7 @@ func (w *WMail) storeNew(ctx context.Context, msg *models.EmailMessageData, data
 	if err := w.EmailMessageMapRepository.Add(ctx, mapping); err != nil {
 		return err
 	}
-	err := w.onEvent(models.JobEventTypeNewEmail, arrival)
+	err = w.onEvent(models.JobEventTypeNewEmail, arrival)
 	if err != nil {
 		// The entry would mark a message that never reached the unibox as
 		// known, and every later pass would skip it; drop it so it is re-offered.

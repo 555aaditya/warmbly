@@ -2,6 +2,7 @@ package arf
 
 import (
 	"encoding/base64"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -71,4 +72,46 @@ func TestParseMIMEOnlyCountsAbuseReports(t *testing.T) {
 	if r := ParseMIME([]byte("not a message")); r.IsComplaint {
 		t.Error("garbage parsed as a report")
 	}
+}
+
+func TestParseMIMEBoundsTraversal(t *testing.T) {
+	wrap := func(raw []byte, boundary string) []byte {
+		return []byte("Content-Type: multipart/mixed; boundary=" + boundary + "\r\n\r\n--" + boundary + "\r\n" + string(raw) + "\r\n--" + boundary + "--\r\n")
+	}
+	valid := rawReport("abuse", "7bit", returnedSend)
+	if got := ParseMIME(wrap(valid, "outer")); !got.IsComplaint {
+		t.Fatal("ordinary nested report rejected")
+	}
+	t.Run("depth", func(t *testing.T) {
+		raw := valid
+		for depth := range maxMIMEDepth {
+			raw = wrap(raw, fmt.Sprintf("outer%d", depth))
+		}
+		if got := ParseMIME(raw); got != (Report{}) {
+			t.Fatalf("deep report accepted: %+v", got)
+		}
+	})
+	t.Run("part count", func(t *testing.T) {
+		var raw strings.Builder
+		raw.WriteString("Content-Type: multipart/mixed; boundary=outer\r\n\r\n")
+		for range maxMIMEParts {
+			raw.WriteString("--outer\r\nContent-Type: text/plain\r\n\r\nnotice\r\n")
+		}
+		raw.WriteString("--outer\r\n" + string(valid) + "\r\n--outer--\r\n")
+		if got := ParseMIME([]byte(raw.String())); got != (Report{}) {
+			t.Fatalf("over-parted report accepted: %+v", got)
+		}
+	})
+	t.Run("raw bytes", func(t *testing.T) {
+		raw := append(append([]byte{}, valid...), []byte(strings.Repeat("x", maxMIMEBytes))...)
+		if got := ParseMIME(raw); got != (Report{}) {
+			t.Fatalf("oversized report accepted: %+v", got)
+		}
+	})
+	t.Run("no partial report on malformed trailing part", func(t *testing.T) {
+		raw := strings.Replace(string(valid), "--b1--", "--b1\r\nnot a header\r\n\r\n--b1--", 1)
+		if got := ParseMIME([]byte(raw)); got != (Report{}) {
+			t.Fatalf("partial malformed report accepted: %+v", got)
+		}
+	})
 }
