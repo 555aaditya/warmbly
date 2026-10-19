@@ -28,7 +28,8 @@ func (d Decision) Changed(current models.SendLifecycle) bool { return d.Next != 
 // Decide maps warmup health onto the cold lifecycle. Rests only at quarantined
 // and blocked: watch and throttled are spam placement, which slows cold volume
 // through the send budget and never takes a mailbox out of rotation.
-func Decide(current models.SendLifecycle, since *time.Time, health models.WarmupHealthState, now time.Time) Decision {
+// health is real evidence only; cloudUnknown means Warmbly Cloud has no current report.
+func Decide(current models.SendLifecycle, since *time.Time, health models.WarmupHealthState, cloudUnknown bool, now time.Time) Decision {
 	if !current.AutoManaged() {
 		return Decision{Next: current}
 	}
@@ -38,6 +39,12 @@ func Decide(current models.SendLifecycle, since *time.Time, health models.Warmup
 		// Still out: the probation clock starts once it is back in.
 		return Decision{Next: models.SendLifecycleResting, RestartProbation: current == models.SendLifecycleResting,
 			Reason: "warmup health is " + string(health) + "; out of cold rotation until it recovers"}
+	}
+
+	// A missing report never starts a rest, and time without one is not probation.
+	if cloudUnknown {
+		return Decision{Next: current, RestartProbation: current == models.SendLifecycleResting,
+			Reason: "Warmbly Cloud has not reported a current status"}
 	}
 
 	// No pool, no signal: never rest, and let a resting clock run rather than strand the mailbox.

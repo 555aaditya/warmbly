@@ -5,7 +5,7 @@ import { browseString, mailboxSort, mailboxTab, type MailboxTab } from "@/lib/br
 import { useSearchParams } from "@/hooks/useSearchParams";
 import useMailboxTagFilter from "@/hooks/useMailboxTagFilter";
 import groupMailboxes from "@/lib/groupMailboxes";
-import { mailboxColdActivity } from "@/lib/mailboxStatus";
+import { cloudStandingUnavailable as cloudHealthUnavailable, mailboxColdActivity } from "@/lib/mailboxStatus";
 import { useAppStore } from "@/stores/useAppStore";
 import toast from "react-hot-toast/headless";
 import { useQueryClient } from "@tanstack/react-query";
@@ -251,7 +251,7 @@ export default function AddressesPage() {
             next.set(s.id, cur);
             const before = prev.get(s.id);
             if (before && (HEALTH_RANK[cur] ?? 0) > (HEALTH_RANK[before] ?? 0)) {
-                const reason = s.warmup_health?.reason || s.health?.issues?.[0];
+                const reason = (!cloudHealthUnavailable(s.warmup_health) && s.warmup_health?.reason) || s.health?.issues?.[0];
                 toast.error(`${s.email} health dropped to ${cur}${reason ? ` — ${reason}` : ""}`);
             }
         }
