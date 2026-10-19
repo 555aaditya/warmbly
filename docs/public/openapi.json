@@ -27986,8 +27986,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -27996,8 +27996,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -28085,8 +28085,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -28095,8 +28095,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -28192,8 +28192,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -28202,8 +28202,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -28291,8 +28291,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -28301,8 +28301,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -28407,8 +28407,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -28417,8 +28417,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -28523,8 +28523,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -28533,8 +28533,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -28639,8 +28639,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -28649,8 +28649,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -28748,8 +28748,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -28758,8 +28758,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -28855,8 +28855,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -28865,8 +28865,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -28880,7 +28880,7 @@
       "post": {
         "operationId": "integrations_salesforce_sources_create",
         "summary": "Create a Salesforce import source",
-        "description": "Saves a list view or campaign as a repeatable import. Supports `Idempotency-Key`. Requires the `INTEGRATIONS` API permission, or `manage_settings` for JWT callers.",
+        "description": "Creates an enabled list-view or campaign import and immediately starts its first run, importing contacts and enrolling them in `campaign_id` when supplied. Creation cannot stage a disabled source; `enabled` is only editable afterward. Supports `Idempotency-Key`. Requires the `INTEGRATIONS` API permission, or `manage_settings` for JWT callers.",
         "tags": [
           "integrations"
         ],
@@ -28909,7 +28909,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SalesforceImportSourceInput"
+                "$ref": "#/components/schemas/SalesforceImportSourceCreateInput"
               }
             }
           }
@@ -28965,8 +28965,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -28975,8 +28975,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -29028,7 +29028,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SalesforceImportSourceInput"
+                "$ref": "#/components/schemas/SalesforceImportSourceUpdateInput"
               }
             }
           }
@@ -29084,8 +29084,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -29094,8 +29094,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -29184,8 +29184,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -29194,8 +29194,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -29440,8 +29440,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -29450,8 +29450,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -29549,8 +29549,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -29559,8 +29559,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -29648,8 +29648,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -29658,8 +29658,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -29747,8 +29747,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -29757,8 +29757,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -29856,8 +29856,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -29866,8 +29866,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -29958,8 +29958,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -29968,8 +29968,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -30057,8 +30057,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -30067,8 +30067,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -30166,8 +30166,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -30176,8 +30176,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -30273,8 +30273,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -30283,8 +30283,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -30390,8 +30390,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -30400,8 +30400,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -30497,8 +30497,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -30507,8 +30507,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -30522,7 +30522,7 @@
       "post": {
         "operationId": "integrations_apollo_sources_create",
         "summary": "Create an Apollo import source",
-        "description": "Saves an Apollo list as a repeatable import. Supports `Idempotency-Key`. Requires the `INTEGRATIONS` API permission, or `manage_settings` for JWT callers.",
+        "description": "Creates an enabled Apollo list import and immediately starts its first run, importing contacts and enrolling them in `campaign_id` when supplied. Creation cannot stage a disabled source; `enabled` is only editable afterward. Supports `Idempotency-Key`. Requires the `INTEGRATIONS` API permission, or `manage_settings` for JWT callers.",
         "tags": [
           "integrations"
         ],
@@ -30607,8 +30607,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -30617,8 +30617,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -30726,8 +30726,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -30736,8 +30736,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -30826,8 +30826,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -30836,8 +30836,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -31064,8 +31064,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -31074,8 +31074,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -31174,8 +31174,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -31184,8 +31184,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -31283,8 +31283,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -31293,8 +31293,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -31382,8 +31382,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -31392,8 +31392,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -31407,7 +31407,7 @@
       "patch": {
         "operationId": "integrations_clay_update",
         "summary": "Update Clay settings",
-        "description": "Every field present replaces its value, so a retry converges. Requires the `INTEGRATIONS` API permission, or `manage_settings` for JWT callers.",
+        "description": "Non-null fields replace their values; omitted or null fields leave the existing value unchanged. Send an empty string to clear `webhook_url` or `auth_token`, and an empty array to clear `events`. Requires the `INTEGRATIONS` API permission, or `manage_settings` for JWT callers.",
         "tags": [
           "integrations"
         ],
@@ -31489,8 +31489,8 @@
               }
             }
           },
-          "503": {
-            "description": "Not available on this instance.",
+          "429": {
+            "description": "Rate limited.",
             "content": {
               "application/json": {
                 "schema": {
@@ -31499,8 +31499,8 @@
               }
             }
           },
-          "429": {
-            "description": "Rate limited.",
+          "503": {
+            "description": "Not available on this instance.",
             "content": {
               "application/json": {
                 "schema": {
@@ -47831,7 +47831,7 @@
           "source_id"
         ]
       },
-      "SalesforceImportSourceInput": {
+      "SalesforceImportSourceCreateInput": {
         "type": "object",
         "properties": {
           "name": {
@@ -47874,11 +47874,47 @@
           },
           "recurring": {
             "type": "boolean"
+          }
+        },
+        "required": [
+          "source_kind",
+          "source_id"
+        ],
+        "description": "Creates an enabled source and starts its first import immediately. Source identifiers cannot be changed after creation."
+      },
+      "SalesforceImportSourceUpdateInput": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "campaign_id": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "An explicit `null` clears it; omission leaves it unchanged."
+          },
+          "category_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "recurring": {
+            "type": "boolean"
           },
           "enabled": {
             "type": "boolean"
           }
-        }
+        },
+        "description": "Edits targets and scheduling only. To change source_kind, object, source_id or source_label, create a new import source."
       },
       "SalesforceActivity": {
         "type": "object",
@@ -48698,7 +48734,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Omission or null leaves the URL unchanged. An empty string clears it."
           },
           "auth_token": {
             "oneOf": [
@@ -48708,7 +48745,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Omission or null leaves the token unchanged. An empty string clears it."
           },
           "events": {
             "type": "array",
@@ -48717,18 +48755,12 @@
             }
           }
         },
-        "description": "Every field present replaces its value."
+        "description": "Non-null fields replace their values. Omitted or null fields are unchanged. Empty strings clear webhook_url/auth_token; an empty array clears events."
       },
       "ApolloImportSourceUpdateInput": {
         "type": "object",
         "properties": {
           "name": {
-            "type": "string"
-          },
-          "list_id": {
-            "type": "string"
-          },
-          "list_name": {
             "type": "string"
           },
           "campaign_id": {
@@ -48759,26 +48791,53 @@
           "enabled": {
             "type": "boolean"
           }
-        }
+        },
+        "description": "Edits targets, filters and scheduling only. To change list_id or list_name, create a new import source."
       },
       "ApolloImportSourceCreateInput": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/ApolloImportSourceUpdateInput"
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
           },
-          {
-            "type": "object",
-            "properties": {
-              "list_id": {
+          "list_id": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "list_name": {
+            "type": "string"
+          },
+          "campaign_id": {
+            "oneOf": [
+              {
                 "type": "string",
-                "maxLength": 64
+                "format": "uuid"
+              },
+              {
+                "type": "null"
               }
-            },
-            "required": [
-              "list_id"
-            ]
+            ],
+            "description": "Campaign to enrol imported contacts in."
+          },
+          "category_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "verified_only": {
+            "type": "boolean",
+            "default": true
+          },
+          "recurring": {
+            "type": "boolean"
           }
-        ]
+        },
+        "required": [
+          "list_id"
+        ],
+        "description": "Creates an enabled source and starts its first import immediately. The list cannot be changed after creation."
       }
     }
   }
