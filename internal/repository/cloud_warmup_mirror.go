@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
 	"github.com/warmbly/warmbly/internal/models"
@@ -49,41 +50,49 @@ func (r *cloudLinkRepository) MirrorCloudWarmupSettings(ctx context.Context, obs
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
-	// observedAt orders a slow listing behind a newer relay without holding the reconciliation lock.
+	// Stamping first locks each observation row, so an older report racing a newer one is re-checked and dropped.
+	stamp := `UPDATE cloud_link_mailboxes SET settings_observed_at = $1
+		 WHERE email_account_id = ANY($2::uuid[]) AND enrollment_state <> 'pending_remove'
+		   AND (settings_observed_at IS NULL OR settings_observed_at < $1)
+		RETURNING email_account_id`
+	accepted, err := scanIDs(tx.Query(ctx, stamp, observedAt, ids))
+	if err != nil {
+		db.CaptureError(err, stamp, nil, "query")
+		return nil, err
+	}
+	if len(accepted) == 0 {
+		return nil, tx.Commit(ctx)
+	}
 	query := `
 		UPDATE email_accounts ea
 		   SET warmup_base = s.base, warmup_max = s.max, warmup_increase = s.inc, warmup_reply_rate = s.reply,
 		       warmup_start_time = s.start_at::time, warmup_end_time = s.end_at::time, warmup_days = s.days, updated_at = now()
-		  FROM unnest($2::uuid[], $3::int[], $4::int[], $5::int[], $6::smallint[], $7::text[], $8::text[], $9::smallint[])
+		  FROM unnest($1::uuid[], $2::int[], $3::int[], $4::int[], $5::smallint[], $6::text[], $7::text[], $8::smallint[])
 		       AS s(id, base, max, inc, reply, start_at, end_at, days)
-		  JOIN cloud_link_mailboxes c ON c.email_account_id = s.id
-		 WHERE ea.id = s.id AND c.enrollment_state <> 'pending_remove'
-		   AND (c.settings_observed_at IS NULL OR c.settings_observed_at < $1)
+		 WHERE ea.id = s.id AND s.id = ANY($9::uuid[])
 		   AND (ea.warmup_base, ea.warmup_max, ea.warmup_increase, ea.warmup_reply_rate, ea.warmup_start_time, ea.warmup_end_time, ea.warmup_days)
 		       IS DISTINCT FROM (s.base, s.max, s.inc, s.reply, s.start_at::time, s.end_at::time, s.days)
 		RETURNING ea.id`
-	rows, err := tx.Query(ctx, query, observedAt, ids, bases, maxes, increases, replies, starts, ends, days)
+	changed, err := scanIDs(tx.Query(ctx, query, ids, bases, maxes, increases, replies, starts, ends, days, accepted))
 	if err != nil {
 		db.CaptureError(err, query, nil, "query")
 		return nil, err
 	}
-	var changed []uuid.UUID
+	return changed, tx.Commit(ctx)
+}
+
+func scanIDs(rows pgx.Rows, err error) ([]uuid.UUID, error) {
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []uuid.UUID
 	for rows.Next() {
 		var id uuid.UUID
 		if err := rows.Scan(&id); err != nil {
-			rows.Close()
 			return nil, err
 		}
-		changed = append(changed, id)
+		ids = append(ids, id)
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if _, err := tx.Exec(ctx, `UPDATE cloud_link_mailboxes SET settings_observed_at = $1
-		 WHERE email_account_id = ANY($2::uuid[]) AND enrollment_state <> 'pending_remove'
-		   AND (settings_observed_at IS NULL OR settings_observed_at < $1)`, observedAt, ids); err != nil {
-		return nil, err
-	}
-	return changed, tx.Commit(ctx)
+	return ids, rows.Err()
 }

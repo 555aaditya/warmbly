@@ -27,7 +27,8 @@ func (s *JobsService) StartCloudSettingsSync(ctx context.Context, interval time.
 }
 
 func (s *JobsService) syncCloudSettings(ctx context.Context, syncer CloudSettingsSyncer) error {
-	runCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	// Each link has its own deadline inside the sync; this only bounds the whole pass below the interval.
+	runCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	changed, xerr := syncer.SyncWarmupSettings(runCtx)
 	for _, id := range changed {

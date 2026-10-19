@@ -13,6 +13,9 @@ import (
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
+// settingsSyncLinkTimeout bounds one link's listing, timezone pushes and mirror write.
+const settingsSyncLinkTimeout = time.Minute
+
 var (
 	errSettingsUnreported = errx.NewWithIdentifier(errx.ServiceUnavailable, "cloud_link_bad_response", "Warmbly Cloud did not report this mailbox's warmup settings. Try again in a moment.")
 	errLinkDisconnecting  = errx.NewWithIdentifier(errx.Conflict, "cloud_link_disconnecting", "This workspace is disconnecting from Warmbly Cloud. Try again once it has finished.")
@@ -159,35 +162,44 @@ func (s *service) SyncWarmupSettings(ctx context.Context) ([]uuid.UUID, *errx.Er
 		if len(group) == 0 || l.DisconnectPending {
 			continue
 		}
-		observedAt := time.Now()
-		var states []models.PoolLinkMailboxState
-		if xerr := s.clientFor(l).do(ctx, http.MethodGet, "/instance/mailboxes", nil, &states); xerr != nil {
-			log.Warn().Str("instance_id", l.InstanceID.String()).Str("code", xerr.Identifier).Msg("cloud link: warmup settings could not be refreshed")
-			lastErr = xerr
-			continue
-		}
-		byRemote := make(map[uuid.UUID]*models.PoolLinkMailboxState, len(states))
-		for j := range states {
-			byRemote[states[j].RemoteID] = &states[j]
-		}
-		reported := map[uuid.UUID]models.PoolLinkWarmupSettings{}
-		for _, m := range group {
-			state := byRemote[m.RemoteID]
-			if m.EnrollmentState == "pending_remove" || state == nil || !state.Settings.Reported() {
-				continue
-			}
-			reported[m.EmailAccountID] = state.Settings
-			s.pushTimezone(ctx, l, m, state.Settings.Timezone)
-		}
-		ids, err := s.mirror(ctx, observedAt, reported)
-		if err != nil {
-			log.Warn().Err(err).Str("instance_id", l.InstanceID.String()).Msg("cloud link: warmup settings could not be mirrored")
-			lastErr = errx.InternalError()
-			continue
-		}
+		ids, xerr := s.syncLinkSettings(ctx, l, group)
 		changed = append(changed, ids...)
+		if xerr != nil {
+			lastErr = xerr
+		}
 	}
 	return changed, lastErr
+}
+
+// syncLinkSettings mirrors one link's mailboxes under its own deadline, so a slow link cannot starve the rest.
+func (s *service) syncLinkSettings(ctx context.Context, l *models.CloudLink, group []models.CloudLinkMailbox) ([]uuid.UUID, *errx.Error) {
+	ctx, cancel := context.WithTimeout(ctx, settingsSyncLinkTimeout)
+	defer cancel()
+	observedAt := time.Now()
+	var states []models.PoolLinkMailboxState
+	if xerr := s.clientFor(l).do(ctx, http.MethodGet, "/instance/mailboxes", nil, &states); xerr != nil {
+		log.Warn().Str("instance_id", l.InstanceID.String()).Str("code", xerr.Identifier).Msg("cloud link: warmup settings could not be refreshed")
+		return nil, xerr
+	}
+	byRemote := make(map[uuid.UUID]*models.PoolLinkMailboxState, len(states))
+	for j := range states {
+		byRemote[states[j].RemoteID] = &states[j]
+	}
+	reported := map[uuid.UUID]models.PoolLinkWarmupSettings{}
+	for _, m := range group {
+		state := byRemote[m.RemoteID]
+		if m.EnrollmentState == "pending_remove" || state == nil || !state.Settings.Reported() {
+			continue
+		}
+		reported[m.EmailAccountID] = state.Settings
+		s.pushTimezone(ctx, l, m, state.Settings.Timezone)
+	}
+	ids, err := s.mirror(ctx, observedAt, reported)
+	if err != nil {
+		log.Warn().Err(err).Str("instance_id", l.InstanceID.String()).Msg("cloud link: warmup settings could not be mirrored")
+		return nil, errx.InternalError()
+	}
+	return ids, nil
 }
 
 // pushTimezone keeps the cloud reading the warmup window in the zone this instance owns.

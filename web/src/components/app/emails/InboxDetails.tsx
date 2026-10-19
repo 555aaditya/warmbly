@@ -424,7 +424,11 @@ function Detail({ mailbox, onClose, initialTab, tabIntentKey, onTabIntentConsume
     // Fields the user has edited since the last save; a refresh never overwrites them.
     const touched = React.useRef(new Set<keyof Inbox>());
     const update = (patch: Partial<Inbox>) => {
-        for (const k of Object.keys(patch)) touched.current.add(k as keyof Inbox);
+        // A field put back to the stored value is untouched again, so a refresh can still reach it.
+        for (const k of Object.keys(patch) as (keyof Inbox)[]) {
+            if (JSON.stringify(patch[k]) === JSON.stringify(mailbox[k])) touched.current.delete(k);
+            else touched.current.add(k);
+        }
         setForm((f) => ({ ...f, ...patch }));
     };
     // A refetch carries newer values into the untouched fields, so Save never writes an older one back.
@@ -476,6 +480,8 @@ function Detail({ mailbox, onClose, initialTab, tabIntentKey, onTabIntentConsume
             setForm((f) => {
                 const next = { ...f } as Record<string, unknown>;
                 for (const k of Object.keys(patch) as (keyof Inbox)[]) {
+                    // A field edited again while the save was in flight keeps the newer value.
+                    if (JSON.stringify(f[k]) !== JSON.stringify(patch[k])) continue;
                     touched.current.delete(k);
                     next[k] = saved[k];
                 }

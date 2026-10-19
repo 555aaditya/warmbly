@@ -189,7 +189,7 @@ Each registered key may make 30 protected calls per hour. Past that the call ans
 
 #### Warmbly Cloud warmup refusals
 
-A mailbox warmed by Warmbly Cloud has its warmup settings changed through the cloud (see [warmup settings](/guides/warmbly-cloud/#warmup-settings)). `PATCH /emails/:id` and the warmup start, pause and resume routes answer with these when that cannot happen. In every case nothing is saved on the instance. A replay with the same `Idempotency-Key` returns the stored answer, so retry with a new key.
+A mailbox warmed by Warmbly Cloud has its warmup settings changed through the cloud (see [warmup settings](/guides/warmbly-cloud/#warmup-settings)). `PATCH /emails/:id` and the warmup start, pause and resume routes answer with these when that cannot happen. In every case the rest of the patch is not applied on the instance. After `cloud_warmup_not_applied`, the mailbox's copy of its Warmbly Cloud settings is still refreshed to what Warmbly Cloud reported. A replay with the same `Idempotency-Key` returns the stored answer, so retry with a new key.
 
 | `code` | Status | Meaning |
 |--------|--------|---------|
