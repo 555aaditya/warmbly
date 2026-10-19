@@ -129,6 +129,7 @@ func (s *emailService) relayCloudWarmup(ctx context.Context, orgID, emailAccount
 		return true, nil
 	}
 	// The timezone stays this instance's; it travels with a Cloud change so the window is read in it.
+	want.Timezone = account.ClockTimezone()
 	if u.Timezone != nil {
 		if want.Timezone = strings.TrimSpace(*u.Timezone); want.Timezone == "" {
 			want.Timezone = account.OrgTimezone
