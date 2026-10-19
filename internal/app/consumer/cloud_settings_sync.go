@@ -31,8 +31,10 @@ func (s *JobsService) syncCloudSettings(ctx context.Context, syncer CloudSetting
 	runCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	changed, xerr := syncer.SyncWarmupSettings(runCtx)
+	cancel()
+	// The columns are already committed and the next pass will not report them again, so publish past the deadline.
 	for _, id := range changed {
-		s.publishAccountSynced(runCtx, id)
+		s.publishAccountSynced(ctx, id)
 	}
 	if len(changed) > 0 {
 		log.Info().Int("mailboxes", len(changed)).Msg("cloud settings sync: warmup settings changed in Warmbly Cloud")
