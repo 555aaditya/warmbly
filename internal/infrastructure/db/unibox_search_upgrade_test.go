@@ -45,7 +45,7 @@ func TestLiveUniboxSearchUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	if err := m.Migrate(314); err != nil {
+	if err := m.Migrate(315); err != nil {
 		t.Fatal(err)
 	}
 	conn, err := pgx.Connect(t.Context(), u.String())
@@ -59,13 +59,15 @@ func TestLiveUniboxSearchUpgrade(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	user, org, mailbox, message := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	user, org, mailbox, message, retiredTask := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	exec(`INSERT INTO users(id,email,first_name,last_name) VALUES($1,'search@upgrade.test','Search','Upgrade')`, user)
 	exec(`INSERT INTO organizations(id,name,owner_user_id) VALUES($1,'Search upgrade',$2)`, org, user)
 	exec(`INSERT INTO email_accounts(id,user_id,organization_id,email,name,signature_plain,signature_html,provider)
 		VALUES($1,$2,$3,'mailbox@upgrade.test','Search','','','smtp_imap')`, mailbox, user, org)
 	exec(`INSERT INTO unibox_emails(id,user_id,email_id,from_addr,to_addr,cc,subject,body_text)
 		VALUES($1,$2,$3,ARRAY['Existing Sender <sender@upgrade.test>'],ARRAY['Recipient'],ARRAY['Copy'],'History','Original body')`, message, user, mailbox)
+	exec(`INSERT INTO tasks(id,email_account_id,task_type,status,message_id,send_result_state,warmup_send_retired_at)
+		VALUES($1,$2,'warmup','cancelled','<retired@upgrade.test>','unknown','2026-10-20T00:00:00Z')`, retiredTask, mailbox)
 	if err := m.Up(); err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +88,7 @@ func TestLiveUniboxSearchUpgrade(t *testing.T) {
 		}
 	}
 	check()
-	if err := m.Migrate(314); err != nil {
+	if err := m.Migrate(315); err != nil {
 		t.Fatal("rollback", err)
 	}
 	var removed bool
@@ -95,8 +97,18 @@ func TestLiveUniboxSearchUpgrade(t *testing.T) {
 		AND to_regclass('public.idx_unibox_emails_date') IS NULL`).Scan(&removed); err != nil || !removed {
 		t.Fatal("rollback left search objects", removed, err)
 	}
+	checkRetirement := func() {
+		t.Helper()
+		var retained bool
+		if err := conn.QueryRow(t.Context(), `SELECT warmup_send_retired_at='2026-10-20T00:00:00Z'::timestamptz
+			AND status='cancelled' AND send_result_state='unknown' FROM tasks WHERE id=$1`, retiredTask).Scan(&retained); err != nil || !retained {
+			t.Fatal("search migration changed warmup retirement evidence", retained, err)
+		}
+	}
+	checkRetirement()
 	if err := m.Up(); err != nil {
 		t.Fatal("reapply", err)
 	}
 	check()
+	checkRetirement()
 }
