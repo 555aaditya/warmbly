@@ -723,7 +723,7 @@ func uniboxSearchQuery(orgID uuid.UUID, params *models.MailSearchParams) (string
 	inner := fmt.Sprintf(`
 		SELECT %s, ue.automated
 		FROM unibox_emails ue
-		WHERE ue.email_id IN (SELECT id FROM email_accounts WHERE organization_id = $1)`, strings.Join(previewCols, ", "))
+		WHERE ue.email_id = ANY(ARRAY(SELECT id FROM email_accounts WHERE organization_id = $1))`, strings.Join(previewCols, ", "))
 
 	// Folder scoping. nil = every working folder; IncludeArchived widens that
 	// to everything except junk, which is what "All mail" means.
@@ -803,16 +803,15 @@ func uniboxSearchQuery(orgID uuid.UUID, params *models.MailSearchParams) (string
 		args = append(args, q)
 		argPos++
 
-		match := fmt.Sprintf(`ue.search_tsv @@ websearch_to_tsquery('english', $%d)
-				OR to_tsvector('english'::regconfig, ue.body_text) @@ websearch_to_tsquery('english', $%d)`, webPos, webPos)
+		tsQuery := fmt.Sprintf(`websearch_to_tsquery('english', $%d)`, webPos)
 
 		if prefix := prefixTSQuery(q); prefix != "" {
-			match += fmt.Sprintf(`
-				OR ue.search_tsv @@ to_tsquery('english', $%d)
-				OR to_tsvector('english'::regconfig, ue.body_text) @@ to_tsquery('english', $%d)`, argPos, argPos)
+			tsQuery += fmt.Sprintf(` || to_tsquery('english', $%d)`, argPos)
 			args = append(args, prefix)
 			argPos++
 		}
+		match := fmt.Sprintf(`ue.search_tsv @@ (%s)
+			OR to_tsvector('english'::regconfig, ue.body_text) @@ (%s)`, tsQuery, tsQuery)
 
 		// Without a literal word trigram, GIN would recheck every message body.
 		if participantSearchable(q) {
@@ -876,10 +875,10 @@ func uniboxSearchQuery(orgID uuid.UUID, params *models.MailSearchParams) (string
 	// Probe only a candidate's thread, instead of windowing every matching body.
 	query := fmt.Sprintf(`WITH matched AS NOT MATERIALIZED (%s), page AS MATERIALIZED (
 		SELECT b.* FROM matched b
-		WHERE (b.thread_id = '' OR b.id = (
-			SELECT newer.id FROM matched newer
+		WHERE (b.thread_id = '' OR NOT EXISTS (
+			SELECT 1 FROM matched newer
 			WHERE newer.thread_id = b.thread_id
-			ORDER BY newer.internal_date DESC, newer.id DESC LIMIT 1
+			  AND (newer.internal_date, newer.id) > (b.internal_date, b.id)
 		))`, inner)
 
 	// Awaiting reply: the representative (latest) message is from one of

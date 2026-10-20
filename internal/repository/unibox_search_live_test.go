@@ -165,9 +165,97 @@ func TestLiveUniboxReadStreamErrors(t *testing.T) {
 	}
 }
 
+func TestLiveUniboxSearchFiltersAndTies(t *testing.T) {
+	handle := liveUniboxFolderDB(t)
+	f := newUniboxFolderFixture(t, handle.Pool)
+	repo := NewUniboxRepository(handle)
+	now := time.Now().UTC().Truncate(time.Second)
+	ours := f.mailboxAddress(t, repo)
+	second := *f
+	second.mailbox = visibilityMailbox(t, handle.Pool, f, now)
+	thread := "filtered-search"
+	old := f.scopedMessage(t, repo, thread, "Alex <"+ours+">", models.FolderSent, now.Add(-2*time.Minute))
+	received := f.scopedMessage(t, repo, thread, "them@example.com", models.FolderInbox, now.Add(-time.Minute))
+	latest := second.scopedMessage(t, repo, thread, "Alex <"+ours+">", models.FolderSent, now)
+	category := visibilityCategory(t, NewGroupRepostory(handle, models.Categories), f, "Search label")
+	if _, err := repo.SetThreadLabels(t.Context(), f.org, f.user, thread, []uuid.UUID{category}); err != nil {
+		t.Fatal(err)
+	}
+	q, sent, incoming, direction := "scope", models.FolderSent, models.FolderInbox, "received"
+	yes := true
+	boundary := now.Add(-90 * time.Second)
+	for _, tc := range []struct {
+		name   string
+		params models.MailSearchParams
+		id     uuid.UUID
+		count  int64
+	}{
+		{"all mailboxes", models.MailSearchParams{}, latest, 3},
+		{"mailbox", models.MailSearchParams{EmailAccountIDs: []uuid.UUID{f.mailbox}}, received, 2},
+		{"second mailbox", models.MailSearchParams{EmailAccountIDs: []uuid.UUID{second.mailbox}}, latest, 1},
+		{"since", models.MailSearchParams{Since: &boundary}, latest, 2},
+		{"until", models.MailSearchParams{Until: &boundary}, old, 1},
+		{"sent", models.MailSearchParams{Folder: &sent}, latest, 2},
+		{"inbox", models.MailSearchParams{Folder: &incoming}, received, 1},
+		{"sender", models.MailSearchParams{Sender: &ours}, latest, 2},
+		{"direction", models.MailSearchParams{Direction: &direction}, received, 1},
+		{"awaiting reply", models.MailSearchParams{AwaitingReply: &yes}, latest, 3},
+		{"not awaiting in mailbox", models.MailSearchParams{AwaitingReply: &yes, EmailAccountIDs: []uuid.UUID{f.mailbox}}, uuid.Nil, 0},
+		{"category", models.MailSearchParams{CategoryIDs: []uuid.UUID{category}}, latest, 3},
+		{"unknown category", models.MailSearchParams{CategoryIDs: []uuid.UUID{uuid.New()}}, uuid.Nil, 0},
+		{"uncategorized", models.MailSearchParams{Uncategorized: &yes}, uuid.Nil, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.params.Subject, tc.params.PageSize = &q, 50
+			res, err := repo.Search(t.Context(), f.org, &tc.params)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.id == uuid.Nil {
+				if len(res.Data) != 0 {
+					t.Fatalf("expected no matching conversation: %+v", res.Data)
+				}
+				return
+			}
+			if len(res.Data) != 1 || res.Data[0].ID != tc.id || res.Data[0].MessageCount != tc.count || !res.Data[0].HasUnread || len(res.Data[0].Labels) != 1 || res.Data[0].Labels[0].ID != category {
+				t.Fatalf("unexpected representative or thread state: %+v", res.Data)
+			}
+		})
+	}
+	if _, err := repo.UpsertSnoozes(t.Context(), f.org, f.user, []string{thread}, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	for _, snoozed := range []*bool{nil, &yes} {
+		res, err := repo.Search(t.Context(), f.org, &models.MailSearchParams{Subject: &q, Snoozed: snoozed, PageSize: 50})
+		if err != nil || (snoozed == nil && len(res.Data) != 0) || (snoozed != nil && (len(res.Data) != 1 || res.Data[0].ID != latest)) {
+			t.Fatalf("snoozed=%v result=%+v error=%v", snoozed, res, err)
+		}
+	}
+	first := f.scopedMessage(t, repo, "search-tie", "them@example.com", models.FolderInbox, now)
+	last := f.scopedMessage(t, repo, "search-tie", "them@example.com", models.FolderInbox, now)
+	if first.String() > last.String() {
+		last = first
+	}
+	res, err := repo.Search(t.Context(), f.org, &models.MailSearchParams{Subject: &q, PageSize: 50})
+	if err != nil || len(res.Data) != 1 || res.Data[0].ID != last || res.Data[0].MessageCount != 2 {
+		t.Fatalf("date tie result=%+v error=%v", res, err)
+	}
+}
+
 func TestLiveUniboxSearchBroadQueryPlan(t *testing.T) {
 	handle := liveUniboxFolderDB(t)
 	f := newUniboxFolderFixture(t, handle.Pool)
+	mailboxes := []uuid.UUID{f.mailbox}
+	for range 7 {
+		mailboxes = append(mailboxes, visibilityMailbox(t, handle.Pool, f, time.Now()))
+	}
+	rare := newUniboxFolderFixture(t, handle.Pool)
+	repo := NewUniboxRepository(handle)
+	rareID := rare.message(t, repo, models.FolderInbox)
+	if _, err := handle.Exec(t.Context(), `UPDATE unibox_emails SET
+		from_addr=ARRAY['rareleaf@isolated.test'], body_text='Rarebodypineapple' WHERE id=$1`, rareID); err != nil {
+		t.Fatal(err)
+	}
 	rows := 20000
 	if value := os.Getenv("WARMBLY_UNIBOX_SEARCH_ROWS"); value != "" {
 		var err error
@@ -176,21 +264,32 @@ func TestLiveUniboxSearchBroadQueryPlan(t *testing.T) {
 			t.Fatal("WARMBLY_UNIBOX_SEARCH_ROWS must be at least 1000")
 		}
 	}
-	if _, err := handle.Exec(t.Context(), `INSERT INTO unibox_emails
+	for start := 1; start <= rows; start += 10000 {
+		if _, err := handle.Exec(t.Context(), `INSERT INTO unibox_emails
 		(id,user_id,email_id,thread_id,message_id,from_addr,to_addr,subject,snippet,body_text,internal_date,seen,folder)
-		SELECT gen_random_uuid(),$1,$2,'broad-' || (g/4)::text,g::text || '@search.test',
+		SELECT gen_random_uuid(),$1,($2::uuid[])[1 + ((g-1) % cardinality($2::uuid[]))],
+		'broad-' || (g/4)::text,g::text || '@search.test',
 		ARRAY['Sender <sender@search.test>'],ARRAY['Recipient <recipient@search.test>'],
 		'Reply about a project','A project update',repeat('A detailed review of the project and next steps. ',40),
 		NOW() - g * INTERVAL '1 second',g%2=0,'inbox'
-		FROM generate_series(1,$3::int) g`, f.user, f.mailbox, rows); err != nil {
-		t.Fatal(err)
+		FROM generate_series($3::int,$4::int) g`, f.user, mailboxes, start, min(start+9999, rows)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := handle.Exec(t.Context(), "ANALYZE unibox_emails"); err != nil {
 		t.Fatal(err)
 	}
-	for _, q := range []string{"re", "reply", "absentneedle@nonexistent.test"} {
-		t.Run(q, func(t *testing.T) {
-			query, args := uniboxSearchQuery(f.org, &models.MailSearchParams{Subject: &q, PageSize: 50})
+	for _, tc := range []struct {
+		query string
+		org   uuid.UUID
+		want  int
+	}{
+		{"re", f.org, 50}, {"reply", f.org, 50}, {"det", f.org, 50}, {"detailed", f.org, 50},
+		{"sender@search.test", f.org, 50}, {"absentneedle@nonexistent.test", f.org, 0},
+		{"rareleaf@isolated.test", rare.org, 1}, {"rarebodypi", rare.org, 1},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			query, args := uniboxSearchQuery(tc.org, &models.MailSearchParams{Subject: &tc.query, PageSize: 50})
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
 			start := time.Now()
@@ -208,14 +307,28 @@ func TestLiveUniboxSearchBroadQueryPlan(t *testing.T) {
 				fmt.Fprintln(&plan, line)
 			}
 			if err := planRows.Err(); err != nil {
+				planned, planErr := handle.Query(t.Context(), "EXPLAIN "+query, args...)
+				if planErr == nil {
+					defer planned.Close()
+					for planned.Next() {
+						var line string
+						if planned.Scan(&line) == nil {
+							t.Log(line)
+						}
+					}
+				}
 				t.Fatal(err)
 			}
-			t.Logf("%d messages, query %q: %s\n%s", rows, q, time.Since(start), plan.String())
+			t.Logf("%d messages, query %q: %s\n%s", rows, tc.query, time.Since(start), plan.String())
 			if strings.Contains(plan.String(), "WindowAgg") || !strings.Contains(plan.String(), "CTE page") {
 				t.Fatal("search must page before aggregating thread state")
 			}
-			if q == "absentneedle@nonexistent.test" && !strings.Contains(plan.String(), "idx_unibox_emails_participants_trgm") {
+			if tc.query == "absentneedle@nonexistent.test" && !strings.Contains(plan.String(), "idx_unibox_emails_participants_trgm") {
 				t.Fatal("participant search did not use its trigram index")
+			}
+			res, err := repo.Search(ctx, tc.org, &models.MailSearchParams{Subject: &tc.query, PageSize: 50})
+			if err != nil || res == nil || len(res.Data) != tc.want || (tc.want == 1 && res.Data[0].ID != rareID) {
+				t.Fatalf("unexpected search result=%+v error=%v", res, err)
 			}
 		})
 	}
