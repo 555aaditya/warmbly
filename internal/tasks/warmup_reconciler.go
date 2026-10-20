@@ -23,6 +23,17 @@ const warmupReconcileBatch = 500
 // campaign does not itself enqueue a task, so without this pass a freshly
 // enabled mailbox would never start warming.
 func (s *tasksService) ReconcileWarmupSchedules(ctx context.Context, limit int) (int, error) {
+	if recovery, ok := s.taskRepo.(interface {
+		RecoverAbandonedWarmupPreparations(context.Context, time.Time, int) (int, error)
+	}); ok {
+		n, err := recovery.RecoverAbandonedWarmupPreparations(ctx, time.Now().Add(-10*time.Minute), limit)
+		if err != nil {
+			return 0, err
+		}
+		if n > 0 {
+			log.Info().Int("recovered", n).Msg("warmup reconcile retired abandoned preparations")
+		}
+	}
 	var recoverBatch func(context.Context, time.Time, int) (int, int, error)
 	if recovery, ok := s.taskRepo.(interface {
 		RecoverUnstartedWarmupDispatchBatch(context.Context, time.Time, int) (int, int, error)

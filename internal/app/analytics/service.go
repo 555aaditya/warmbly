@@ -367,6 +367,16 @@ func (s *analyticsService) assembleAccountStatus(ctx context.Context, email *mod
 		errs = make([]models.AccountError, 0)
 	}
 	describeAccountErrors(email, errs)
+	hold, held := reads.sendHolds[email.ID]
+	if held {
+		for i := range errs {
+			if errs[i].Operation == models.MailTransportSync || (errs[i].ErrorCode != string(errx.MailErrorCodeServerUnreachable) && errs[i].ErrorCode != string(errx.MailErrorCodeConnectionLost)) {
+				continue
+			}
+			action := sendRecoveryHoldMessage(hold)
+			errs[i].ActionRequired = &action
+		}
+	}
 
 	// Calculate health, then fold in warmup-pool reputation so the single
 	// score the user sees reflects spam placement / complaints / throttling.
@@ -377,6 +387,16 @@ func (s *analyticsService) assembleAccountStatus(ctx context.Context, email *mod
 		placement = &r
 	}
 	applyWarmupPlacement(&health, placement)
+	if held {
+		health.Status = "error"
+		health.Score = min(health.Score, 50)
+		health.Issues = append(health.Issues, sendRecoveryHoldMessage(hold))
+	} else if reads.sendHoldsUnavailable {
+		if health.Status == "healthy" {
+			health.Status = "warning"
+		}
+		health.Issues = append(health.Issues, "Sending status is unavailable; mailbox send safety holds could not be checked.")
+	}
 
 	// Build warmup status if warmup has ever been enabled (active or paused).
 	var warmupStatus *models.WarmupStatusInfo
@@ -424,6 +444,17 @@ func (s *analyticsService) assembleAccountStatus(ctx context.Context, email *mod
 		InCampaign:    inCampaign,
 		ColdRamp:      coldRamp,
 		SendLifecycle: lifecycle,
+	}
+}
+
+func sendRecoveryHoldMessage(hold repository.SendRecoveryHold) string {
+	switch hold.Reason {
+	case "unknown":
+		return "Sending is paused because the previous send outcome is unconfirmed. Warmbly will not retry it automatically, to avoid duplicate mail. Provider confirmation is required to resolve this hold; a successful inbox sync does not confirm the send."
+	case "authentication":
+		return "Sending is paused after an authentication failure. Repair the sending credentials and confirm outbound recovery before releasing this hold."
+	default:
+		return "Sending is paused by a send safety hold. Resolve the held send before this mailbox can send again."
 	}
 }
 

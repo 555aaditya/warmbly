@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,6 +20,126 @@ type warmupRecoveryRepository interface {
 	repository.OutboundAdmissionRepository
 	repository.WarmupDispatchRepository
 	RecoverUnstartedWarmupDispatches(context.Context, time.Time, int) (int, error)
+	RecoverAbandonedWarmupPreparations(context.Context, time.Time, int) (int, error)
+}
+
+func (f *warmupRecoveryFixture) abandonedPreparation(t *testing.T) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	f.exec(t, `INSERT INTO tasks(id,email_account_id,task_type,status,message_id,scheduled_at,updated_at)
+		VALUES($1,$2,'warmup','active','',NOW()-INTERVAL '2 hours',NOW()-INTERVAL '2 hours')`, id, f.sender.ID)
+	f.exec(t, `INSERT INTO warmup_tasks(task_id) VALUES($1)`, id)
+	return id
+}
+
+func TestLiveWarmupRecoveryCancelsAbandonedPreparationWithoutTouchingUnknownSends(t *testing.T) {
+	f := newWarmupRecoveryFixture(t)
+	orphan := f.abandonedPreparation(t)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	total := 0
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			n, err := f.r.RecoverAbandonedWarmupPreparations(t.Context(), f.before, 100)
+			if err != nil {
+				t.Error(err)
+			}
+			mu.Lock()
+			total += n
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	var status, uncertain string
+	var held bool
+	if err := f.pool.QueryRow(t.Context(), `SELECT t.status,e.send_recovery_hold,old.send_result_state
+		FROM tasks t JOIN email_accounts e ON e.id=t.email_account_id JOIN tasks old ON old.id=e.send_recovery_task_id
+		WHERE t.id=$1`, orphan).Scan(&status, &held, &uncertain); err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || status != "cancelled" || !held || uncertain != "unknown" {
+		t.Fatalf("recovered=%d status=%s held=%t unknown=%s", total, status, held, uncertain)
+	}
+	if _, err := f.r.AuthorizeWarmupDispatch(t.Context(), orphan, f.sender.ID, f.worker); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("cancelled preparation can still authorize: %v", err)
+	}
+	next := uuid.New()
+	f.exec(t, `INSERT INTO tasks(id,email_account_id,task_type,status,message_id,scheduled_at) VALUES($1,$2,'warmup','pending','',NOW())`, next, f.sender.ID)
+	f.exec(t, `INSERT INTO warmup_tasks(task_id) VALUES($1)`, next)
+	if claimed, err := f.r.(repository.WarmupLineageRepository).ClaimWarmupTask(t.Context(), next, time.Now()); err != nil || !claimed {
+		t.Fatalf("abandoned active task still blocks the next task: claimed=%t err=%v", claimed, err)
+	}
+	holds, err := f.svc.emailRepo.(interface {
+		GetSendRecoveryHolds(context.Context, []uuid.UUID) (map[uuid.UUID]repository.SendRecoveryHold, error)
+	}).GetSendRecoveryHolds(t.Context(), []uuid.UUID{f.sender.ID, f.atWorkspace})
+	if err != nil || len(holds) != 1 || holds[f.sender.ID].Reason != "unknown" {
+		t.Fatalf("hold read must retain only requested held mailboxes: holds=%v err=%v", holds, err)
+	}
+	f.exec(t, `UPDATE email_accounts SET send_recovery_hold=false,send_recovery_reason=NULL,send_recovery_task_id=NULL WHERE id=$1`, f.sender.ID)
+	f.exec(t, `UPDATE tasks SET message_id='<late-preparer@test.local>' WHERE id=$1`, orphan)
+	f.exec(t, `UPDATE warmup_tasks SET lineage_version=1 WHERE task_id=$1`, orphan)
+	f.exec(t, `INSERT INTO warmup_tokens(token,task_id,sender_account_id,recipient_account_id) VALUES(gen_random_uuid(),$1,$2,$3)`, orphan, f.sender.ID, f.atWorkspace)
+	if _, err := f.r.AuthorizeWarmupDispatch(t.Context(), orphan, f.sender.ID, f.worker); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("delayed preparation revived a cancelled task after the hold lifted: %v", err)
+	}
+}
+
+func TestLiveSendHoldReportingDoesNotFlagNormalInFlightSends(t *testing.T) {
+	f := newWarmupRecoveryFixture(t)
+	reader := f.svc.emailRepo.(interface {
+		GetSendRecoveryHolds(context.Context, []uuid.UUID) (map[uuid.UUID]repository.SendRecoveryHold, error)
+	})
+	f.exec(t, `UPDATE tasks SET completed_at=NOW(),send_reserved_at=NOW() WHERE id=$1`, f.task)
+	holds, err := reader.GetSendRecoveryHolds(t.Context(), []uuid.UUID{f.sender.ID})
+	if err != nil || len(holds) != 0 {
+		t.Fatalf("normal in-flight admission hold is not an error: holds=%v err=%v", holds, err)
+	}
+	f.exec(t, `UPDATE tasks SET send_result_applied_at=NOW() WHERE id=$1`, f.task)
+	holds, err = reader.GetSendRecoveryHolds(t.Context(), []uuid.UUID{f.sender.ID})
+	if err != nil || holds[f.sender.ID].Reason != "unknown" {
+		t.Fatalf("settled unknown outcome must be visible immediately: holds=%v err=%v", holds, err)
+	}
+	f.exec(t, `UPDATE email_accounts SET send_recovery_hold=false,send_recovery_reason=NULL,send_recovery_task_id=NULL WHERE id=$1`, f.sender.ID)
+	holds, err = reader.GetSendRecoveryHolds(t.Context(), []uuid.UUID{f.sender.ID})
+	if err != nil || len(holds) != 0 {
+		t.Fatalf("a resolved hold must disappear without stale warning state: holds=%v err=%v", holds, err)
+	}
+}
+
+func TestLiveWarmupRecoveryPreservesPreparationWithAnySendEvidence(t *testing.T) {
+	for _, tc := range []struct{ name, update string }{
+		{"recent preparation", `UPDATE tasks SET updated_at=NOW() WHERE id=$1`},
+		{"generated message", `UPDATE tasks SET message_id='<prepared@test.local>' WHERE id=$1`},
+		{"reserved", `UPDATE tasks SET send_reserved_at=NOW() WHERE id=$1`},
+		{"unknown outcome", `UPDATE tasks SET send_result_state='unknown' WHERE id=$1`},
+		{"provider evidence", `UPDATE tasks SET send_result_evidence='{}' WHERE id=$1`},
+		{"outbound nonce", `UPDATE tasks SET send_executor_nonce=gen_random_uuid() WHERE id=$1`},
+		{"outbound started", `UPDATE tasks SET send_executor_started_at=NOW() WHERE id=$1`},
+		{"outbound result", `UPDATE tasks SET send_executor_result='{}' WHERE id=$1`},
+		{"dispatch nonce", `UPDATE warmup_tasks SET dispatch_nonce=gen_random_uuid() WHERE task_id=$1`},
+		{"dispatch started", `UPDATE warmup_tasks SET dispatch_started_at=NOW() WHERE task_id=$1`},
+		{"dispatch result", `UPDATE warmup_tasks SET dispatch_result='{}' WHERE task_id=$1`},
+		{"charged", `UPDATE warmup_tasks SET warmup_charged_date=CURRENT_DATE,warmup_reply_charged=false WHERE task_id=$1`},
+		{"token", `INSERT INTO warmup_tokens(token,task_id,sender_account_id,recipient_account_id) SELECT gen_random_uuid(),id,email_account_id,$2 FROM tasks WHERE id=$1`},
+		{"outbound attempt", `INSERT INTO outbound_attempts(nonce,task_id,email_account_id,provider,attempted_at,recipient_count) SELECT gen_random_uuid(),id,email_account_id,'smtp_imap',NOW(),1 FROM tasks WHERE id=$1`},
+		{"receipt", `INSERT INTO warmup_received(email_account_id,internal_id,sender_account_id,message_id,task_id) SELECT $2,gen_random_uuid(),email_account_id,'<receipt@test.local>',id FROM tasks WHERE id=$1`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newWarmupRecoveryFixture(t)
+			id := f.abandonedPreparation(t)
+			if strings.Contains(tc.update, "$2") {
+				f.exec(t, tc.update, id, f.atWorkspace)
+			} else {
+				f.exec(t, tc.update, id)
+			}
+			n, err := f.r.RecoverAbandonedWarmupPreparations(t.Context(), f.before, 100)
+			if err != nil || n != 0 {
+				t.Fatalf("unsafe preparation recovery: n=%d err=%v", n, err)
+			}
+		})
+	}
 }
 
 func TestLiveWarmupSafetyHoldReschedulesInsteadOfBlockingTheDispatcher(t *testing.T) {

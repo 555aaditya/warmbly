@@ -35,6 +35,33 @@ func (r *reconcileRecoveryRepo) RecoverUnstartedWarmupDispatches(_ context.Conte
 
 type reconcileEmptyEmailRepo struct{ repository.EmailRepository }
 
+type abandonedPreparationRecoveryRepo struct {
+	reconcileRecoveryRepo
+	preparationCalls int
+	preparationErr   error
+}
+
+func (r *abandonedPreparationRecoveryRepo) RecoverAbandonedWarmupPreparations(_ context.Context, before time.Time, limit int) (int, error) {
+	if d := time.Since(before); d < 9*time.Minute || d > 11*time.Minute || limit != 500 {
+		return 0, errors.New("changed the preparation safety window or batch size")
+	}
+	r.preparationCalls++
+	return 1, r.preparationErr
+}
+
+func TestWarmupReconcilerRecoversAbandonedPreparationsBeforeReseeding(t *testing.T) {
+	r := &abandonedPreparationRecoveryRepo{}
+	s := &tasksService{taskRepo: r, emailRepo: &reconcileEmptyEmailRepo{}}
+	if _, err := s.ReconcileWarmupSchedules(t.Context(), 500); err != nil || r.preparationCalls != 1 || r.calls != 1 {
+		t.Fatalf("preparations=%d dispatches=%d err=%v", r.preparationCalls, r.calls, err)
+	}
+	want := errors.New("preparation recovery unavailable")
+	r.preparationErr = want
+	if _, err := s.ReconcileWarmupSchedules(t.Context(), 500); !errors.Is(err, want) || r.calls != 1 {
+		t.Fatalf("failed preparation recovery must stop reseeding: dispatches=%d err=%v", r.calls, err)
+	}
+}
+
 type concurrentlyRetiredRecoveryRepo struct {
 	reconcileRecoveryRepo
 }
