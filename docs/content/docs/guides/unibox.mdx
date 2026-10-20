@@ -167,6 +167,8 @@ Counts come from the server in one request, so they always match the rows. The c
 
 Search (press `/`) covers the sender and recipients, the subject, and the text of the messages themselves, so a name, an address, or a phrase from the middle of an email all find the conversation. A half-typed word matches as a prefix, so results narrow as you type rather than appearing only once a word is finished. Quoted phrases match exactly, `OR` widens, and a `-word` excludes.
 
+Participant substring matching starts once the query contains at least three consecutive letters or numbers. Shorter queries still search subject and message words, including prefixes. Search is case-insensitive, and `%`, `_`, and `\` are literal characters, not participant wildcards. If a search cannot finish, the list shows an error instead of claiming there are no matches.
+
 It searches the scope you are in. When that finds nothing, the empty state offers **Search all mail**, which widens to every folder and keeps what you typed. Changing view yourself clears the box, so a query typed for one scope never silently filters the next.
 
 The filter button next to the title opens a small panel that narrows the list on the spot: read state, a date range (today, the last 7 or 30 days, or two dates), sender, labels, mailboxes (or a whole tag of them), and sort order. Anything you add shows as a chip under the search box, and each chip removes itself with one click. A view that already fixes one of these, such as Unread or a single mailbox, does not offer that control again.

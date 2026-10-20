@@ -1,6 +1,13 @@
 package repository
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/models"
+)
 
 // prefixTSQuery builds a tsquery from whatever lands in a search box, so the
 // cases that matter are the hostile ones: to_tsquery is a parser and raises on
@@ -51,5 +58,37 @@ func TestPrefixTSQueryCapsTerms(t *testing.T) {
 func TestEscapeLikePattern(t *testing.T) {
 	if got, want := escapeLikePattern(`100%_done\later`), `100\%\_done\\later`; got != want {
 		t.Fatalf("escapeLikePattern = %q, want %q", got, want)
+	}
+}
+
+func TestParticipantSearchable(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  bool
+	}{
+		{"", false}, {"ab", false}, {"a.b", false}, {"ab cd", false},
+		{"%_\\", false}, {"éé", false}, {"東京", false},
+		{"abc", true}, {"Élodie", true}, {"東京駅", true},
+		{"a@domain.test", true}, {"%abc_", true}, {"123", true},
+	} {
+		if got := participantSearchable(tc.input); got != tc.want {
+			t.Errorf("participantSearchable(%q) = %v, want %v", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestUniboxSearchQueryBindsOnlyUsedParameters(t *testing.T) {
+	for _, input := range []string{"ab", "a.b", "%", "a_", "foobar", "a@domain.test", "alpha\nbeta"} {
+		t.Run(input, func(t *testing.T) {
+			query, args := uniboxSearchQuery(uuid.New(), &models.MailSearchParams{Subject: &input, PageSize: 50})
+			for i := range args {
+				if !strings.Contains(query, fmt.Sprintf("$%d", i+1)) {
+					t.Errorf("unused argument %d in %s", i+1, query)
+				}
+			}
+			if strings.Contains(query, "public.unibox_participants(") != participantSearchable(input) {
+				t.Fatal("participant predicate does not match trigram eligibility")
+			}
+		})
 	}
 }
