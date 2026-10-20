@@ -53,6 +53,22 @@ func TestSendSafetyHoldCannotAppearHealthyOrPromiseAutomaticSendRetries(t *testi
 	}
 }
 
+func TestUnknownWarmupHoldExplainsAutomaticRetirementWithoutPromisingResend(t *testing.T) {
+	id := uuid.New()
+	s := &analyticsService{}
+	status := s.assembleAccountStatus(t.Context(), &models.Email{ID: id, Status: "active", Provider: "smtp_imap"},
+		&models.AccountDailyUsage{}, []models.AccountError{{ErrorCode: string(errx.MailErrorCodeServerUnreachable), Operation: models.MailTransportSend}},
+		nil, false, nil, false, &statusReads{sendHolds: map[uuid.UUID]repository.SendRecoveryHold{id: {Reason: "unknown", Warmup: true}}})
+	if status.Health.Status != "error" || status.Health.Score > 50 {
+		t.Fatalf("recovery has not completed: %+v", status.Health)
+	}
+	for _, message := range []string{status.Health.Issues[len(status.Health.Issues)-1], *status.Errors[0].ActionRequired} {
+		if !strings.Contains(message, "automatically") || !strings.Contains(message, "new sends") || !strings.Contains(message, "never retried") || strings.Contains(message, "Provider confirmation is required") {
+			t.Fatalf("incorrect warmup recovery guidance: %s", message)
+		}
+	}
+}
+
 type statusSendHoldReader struct {
 	repository.EmailRepository
 	calls int

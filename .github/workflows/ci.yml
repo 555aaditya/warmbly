@@ -289,8 +289,15 @@ jobs:
         env:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
         run: |
+          set -o pipefail
           go test -race ./internal/repository -run '^TestLive(Monitoring|LastWarmupSendFailure|PersistentMailboxLoadingFailure|DispatchRetry|LineageQueueRevisions|AdminPlatformOverview|WarmupRecoversOldPreparation|WarmupPreparationRecoveryRetains|WarmupFilingRequiresAcknowledgement|WarmupFilingAuthority|WarmupTimeWindow|WarmupInvalidWindow)' -count=1
-          go test -race ./internal/tasks -run '^Test(LiveWarmup(SafetyHoldReschedules|Recovery|TaskDoesNotApplyResults|DispatchDefersInvalidHours)|WarmupSenderDistinguishes)' -count=1
+          go test -race -v ./internal/tasks -run '^Test(LiveWarmup(SafetyHoldReschedules|Recovery|UnknownRetirement|TaskDoesNotApplyResults|DispatchDefersInvalidHours)|WarmupSenderDistinguishes)' -count=1 | tee warmup-recovery.log
+          if grep -q -- '--- SKIP: TestLiveWarmupUnknownRetirement' warmup-recovery.log; then exit 1; fi
+          for test in TestLiveWarmupUnknownRetirementPreservesEvidenceAndFencesReplayOnce TestLiveWarmupUnknownRetirementAllowsDistinctNewSendAndKeepsCooldown TestLiveWarmupUnknownRetirementAndDefinitiveResultSerialize TestLiveWarmupUnknownRetirementSkipsProtectedRowsWithoutStarvingLaterMailboxes TestLiveWarmupUnknownRetirementReconcilerSeedsOnceAndClearsActiveWarnings; do
+            grep -q -- "--- PASS: $test " warmup-recovery.log || exit 1
+          done
+          go test -race -v ./internal/infrastructure/db -run '^TestLiveWarmupUnknownRetirementUpgrade' -count=1 | tee warmup-retirement-upgrade.log
+          grep -q -- '--- PASS: TestLiveWarmupUnknownRetirementUpgrade ' warmup-retirement-upgrade.log
           go test -race ./internal/app/consumer -run '^TestLiveStoredSendResult' -count=1
 
       - name: Warmup database query-pressure regressions (PostgreSQL)

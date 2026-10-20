@@ -21,6 +21,7 @@ type warmupRecoveryRepository interface {
 	repository.WarmupDispatchRepository
 	RecoverUnstartedWarmupDispatches(context.Context, time.Time, int) (int, error)
 	RecoverAbandonedWarmupPreparations(context.Context, time.Time, int) (int, error)
+	RetireUnknownWarmupSends(context.Context, time.Time, int) (int, error)
 }
 
 func (f *warmupRecoveryFixture) abandonedPreparation(t *testing.T) uuid.UUID {

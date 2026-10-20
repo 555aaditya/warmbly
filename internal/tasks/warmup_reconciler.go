@@ -66,6 +66,17 @@ func (s *tasksService) ReconcileWarmupSchedules(ctx context.Context, limit int) 
 			log.Info().Int("recovered", recovered).Msg("warmup reconcile retired unstarted dispatches")
 		}
 	}
+	if recovery, ok := s.taskRepo.(interface {
+		RetireUnknownWarmupSends(context.Context, time.Time, int) (int, error)
+	}); ok {
+		n, err := recovery.RetireUnknownWarmupSends(ctx, time.Now().Add(-10*time.Minute), limit)
+		if err != nil {
+			return 0, err
+		}
+		if n > 0 {
+			log.Info().Int("retired", n).Msg("warmup reconcile permanently retired unknown sends without replay or refund")
+		}
+	}
 	if lineage, ok := s.taskRepo.(repository.WarmupLineageRepository); ok {
 		pending, err := lineage.UnqueuedWarmupTasks(ctx, limit)
 		if err != nil {

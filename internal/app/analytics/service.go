@@ -450,6 +450,9 @@ func (s *analyticsService) assembleAccountStatus(ctx context.Context, email *mod
 func sendRecoveryHoldMessage(hold repository.SendRecoveryHold) string {
 	switch hold.Reason {
 	case "unknown":
+		if hold.Warmup {
+			return "Sending is paused after an unconfirmed warmup send. Warmbly checks it automatically and, when safe, retires that message so new sends can resume. The uncertain message is never retried."
+		}
 		return "Sending is paused because the previous send outcome is unconfirmed. Warmbly will not retry it automatically, to avoid duplicate mail. Provider confirmation is required to resolve this hold; a successful inbox sync does not confirm the send."
 	case "authentication":
 		return "Sending is paused after an authentication failure. Repair the sending credentials and confirm outbound recovery before releasing this hold."

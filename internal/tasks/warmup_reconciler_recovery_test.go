@@ -35,6 +35,34 @@ func (r *reconcileRecoveryRepo) RecoverUnstartedWarmupDispatches(_ context.Conte
 
 type reconcileEmptyEmailRepo struct{ repository.EmailRepository }
 
+type unknownWarmupRecoveryRepo struct {
+	reconcileRecoveryRepo
+	retirementCalls int
+	retirementErr   error
+}
+
+func (r *unknownWarmupRecoveryRepo) RetireUnknownWarmupSends(_ context.Context, before time.Time, limit int) (int, error) {
+	if d := time.Since(before); d < 9*time.Minute || d > 11*time.Minute || limit != 500 || r.calls != 1 {
+		return 0, errors.New("unknown retirement must follow unstarted recovery with the safety window and batch bound")
+	}
+	r.retirementCalls++
+	return 1, r.retirementErr
+}
+
+func TestWarmupReconcilerRetiresUnknownSendsAfterUnstartedRecovery(t *testing.T) {
+	r := &unknownWarmupRecoveryRepo{}
+	s := &tasksService{taskRepo: r, emailRepo: &reconcileEmptyEmailRepo{}}
+	if _, err := s.ReconcileWarmupSchedules(t.Context(), 500); err != nil || r.retirementCalls != 1 {
+		t.Fatalf("retirements=%d err=%v", r.retirementCalls, err)
+	}
+	r.calls = 0
+	want := errors.New("retirement unavailable")
+	r.retirementErr = want
+	if _, err := s.ReconcileWarmupSchedules(t.Context(), 500); !errors.Is(err, want) || r.retirementCalls != 2 {
+		t.Fatalf("failed retirement must stop the recovery pass: retirements=%d err=%v", r.retirementCalls, err)
+	}
+}
+
 type abandonedPreparationRecoveryRepo struct {
 	reconcileRecoveryRepo
 	preparationCalls int
