@@ -326,7 +326,9 @@ func TestLiveUniboxSearchBroadQueryPlan(t *testing.T) {
 			if tc.query == "absentneedle@nonexistent.test" && !strings.Contains(plan.String(), "idx_unibox_emails_participants_trgm") {
 				t.Fatal("participant search did not use its trigram index")
 			}
-			res, err := repo.Search(ctx, tc.org, &models.MailSearchParams{Subject: &tc.query, PageSize: 50})
+			searchCtx, cancelSearch := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancelSearch()
+			res, err := repo.Search(searchCtx, tc.org, &models.MailSearchParams{Subject: &tc.query, PageSize: 50})
 			if err != nil || res == nil || len(res.Data) != tc.want || (tc.want == 1 && res.Data[0].ID != rareID) {
 				t.Fatalf("unexpected search result=%+v error=%v", res, err)
 			}
