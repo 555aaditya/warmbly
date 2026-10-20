@@ -146,6 +146,7 @@ func TestMonitoringPermissionsNilPanicAndErrorReasons(t *testing.T) {
 			return models.MonitoringSource{}, &pgconn.PgError{Code: "42501", Message: "secret"}
 		}},
 	})
+	s.now = func() time.Time { return time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC) }
 	out := s.Snapshot(t.Context(), models.AdminPermViewAnalytics)
 	for i, reason := range []string{"permission_denied", "dependency_missing", "collection_failed", "permission_denied"} {
 		if out.Sources[i].Reason != reason || out.Sources[i].Availability != models.MonitoringUnavailable || len(out.Sources[i].Metrics) != 0 {
