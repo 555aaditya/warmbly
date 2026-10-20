@@ -59,6 +59,11 @@ func TestLiveArchiveSendRecoveryLocalOriginResets(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	retiredTask := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO tasks(id,email_account_id,task_type,status,message_id,send_result_state,warmup_send_retired_at)
+		VALUES($1,$2,'warmup','cancelled','<retired@test.local>','unknown',NOW())`, retiredTask, mailbox); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := pool.Exec(ctx, `UPDATE email_accounts SET send_recovery_hold=true,send_recovery_reason='unknown',send_recovery_task_id=$2 WHERE id=$1`, mailbox, heldTask); err != nil {
 		t.Fatal(err)
 	}
@@ -102,8 +107,16 @@ func TestLiveArchiveSendRecoveryLocalOriginResets(t *testing.T) {
 	if _, err := pool.Exec(ctx, `DELETE FROM send_recovery_resolutions WHERE organization_id=$1`, f.org); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := pool.Exec(ctx, `DELETE FROM tasks WHERE id=$1`, retiredTask); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := svc.ImportFrom(ctx, f.org, bytes.NewReader(archive.Bytes()), ImportOptions{Groups: groups, Conflict: models.OrgImportConflictOverwrite, ActorUserID: f.owner}, nil); err != nil {
 		t.Fatal(err)
+	}
+	var retirementRetained bool
+	if err := pool.QueryRow(ctx, `SELECT warmup_send_retired_at IS NOT NULL AND status='cancelled' AND send_result_state='unknown'
+		AND send_result_applied_at IS NULL AND send_released_at IS NULL AND send_executor_nonce IS NULL FROM tasks WHERE id=$1`, retiredTask).Scan(&retirementRetained); err != nil || !retirementRetained {
+		t.Fatalf("retirement replay fence lost on archive roundtrip: retained=%t err=%v", retirementRetained, err)
 	}
 	var count, reset, confirmations, automatic int
 	if err := pool.QueryRow(ctx, `SELECT count(*),count(*) FILTER(WHERE recorded_locally_at IS NULL AND conflict_resolved_at IS NULL AND conflict_detected_at='2099-01-01Z'),

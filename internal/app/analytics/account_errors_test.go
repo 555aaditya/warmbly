@@ -1,6 +1,8 @@
 package analytics
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +12,92 @@ import (
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/repository"
 )
+
+func TestSendSafetyHoldCannotAppearHealthyOrPromiseAutomaticSendRetries(t *testing.T) {
+	for _, reason := range []string{"unknown", "authentication", "conflict", "permanent"} {
+		t.Run(reason, func(t *testing.T) {
+			id := uuid.New()
+			for _, withError := range []bool{false, true} {
+				var errs []models.AccountError
+				if withError {
+					errs = []models.AccountError{
+						{ErrorCode: string(errx.MailErrorCodeServerUnreachable), Operation: models.MailTransportSend},
+						{ErrorCode: string(errx.MailErrorCodeServerUnreachable), Operation: models.MailTransportSync},
+						{ErrorCode: string(errx.MailErrorCodeConnectionLost), Operation: models.MailTransportUnknown},
+					}
+				}
+				s := &analyticsService{}
+				status := s.assembleAccountStatus(context.Background(), &models.Email{ID: id, Status: "active", Provider: "smtp_imap"},
+					&models.AccountDailyUsage{}, errs, nil, false, nil, false,
+					&statusReads{sendHolds: map[uuid.UUID]repository.SendRecoveryHold{id: {Reason: reason}}})
+				if status.Health.Status != "error" || status.Health.Score > 50 || len(status.Health.Issues) == 0 {
+					t.Fatalf("held mailbox cannot look healthy, even without an error row: %+v", status.Health)
+				}
+				if !withError {
+					continue
+				}
+				if !strings.Contains(*status.Errors[1].ActionRequired, "retries automatically") {
+					t.Fatal("send hold must not stop independent sync recovery")
+				}
+				for _, i := range []int{0, 2} {
+					action := *status.Errors[i].ActionRequired
+					if strings.Contains(action, "retries automatically") || !strings.Contains(action, "paused") {
+						t.Fatalf("held sending must not promise retries: %s", action)
+					}
+					if reason == "unknown" && (!strings.Contains(action, "Provider confirmation") || !strings.Contains(action, "duplicate")) {
+						t.Fatalf("unknown outcome requires confirmation, not blind retry: %s", action)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestUnknownWarmupHoldExplainsAutomaticRetirementWithoutPromisingResend(t *testing.T) {
+	id := uuid.New()
+	s := &analyticsService{}
+	status := s.assembleAccountStatus(t.Context(), &models.Email{ID: id, Status: "active", Provider: "smtp_imap"},
+		&models.AccountDailyUsage{}, []models.AccountError{{ErrorCode: string(errx.MailErrorCodeServerUnreachable), Operation: models.MailTransportSend}},
+		nil, false, nil, false, &statusReads{sendHolds: map[uuid.UUID]repository.SendRecoveryHold{id: {Reason: "unknown", Warmup: true}}})
+	if status.Health.Status != "error" || status.Health.Score > 50 {
+		t.Fatalf("recovery has not completed: %+v", status.Health)
+	}
+	for _, message := range []string{status.Health.Issues[len(status.Health.Issues)-1], *status.Errors[0].ActionRequired} {
+		if !strings.Contains(message, "automatically") || !strings.Contains(message, "new sends") || !strings.Contains(message, "never retried") || strings.Contains(message, "Provider confirmation is required") {
+			t.Fatalf("incorrect warmup recovery guidance: %s", message)
+		}
+	}
+}
+
+type statusSendHoldReader struct {
+	repository.EmailRepository
+	calls int
+	ids   []uuid.UUID
+	holds map[uuid.UUID]repository.SendRecoveryHold
+	err   error
+}
+
+func (r *statusSendHoldReader) GetSendRecoveryHolds(_ context.Context, ids []uuid.UUID) (map[uuid.UUID]repository.SendRecoveryHold, error) {
+	r.calls++
+	r.ids = ids
+	return r.holds, r.err
+}
+
+func TestStatusReadsLoadSendHoldsOnceEvenWithoutWarmup(t *testing.T) {
+	ids := []uuid.UUID{uuid.New(), uuid.New()}
+	r := &statusSendHoldReader{holds: map[uuid.UUID]repository.SendRecoveryHold{ids[1]: {Reason: "unknown"}}}
+	s := &analyticsService{emailRepo: r}
+	reads := s.loadStatusReads(t.Context(), []models.Email{{ID: ids[0]}, {ID: ids[1]}}, nil)
+	if r.calls != 1 || len(r.ids) != 2 || r.ids[0] != ids[0] || r.ids[1] != ids[1] || reads.sendHolds[ids[1]].Reason != "unknown" {
+		t.Fatalf("status must batch holds for the authorized mailboxes: calls=%d ids=%v reads=%+v", r.calls, r.ids, reads)
+	}
+	r.err = errors.New("hold query unavailable")
+	reads = s.loadStatusReads(t.Context(), []models.Email{{ID: ids[0]}}, nil)
+	status := s.assembleAccountStatus(t.Context(), &models.Email{ID: ids[0], Status: "active"}, &models.AccountDailyUsage{}, nil, nil, false, nil, false, reads)
+	if status.Health.Status == "healthy" || !strings.Contains(strings.Join(status.Health.Issues, " "), "unavailable") {
+		t.Fatalf("failed hold read must not claim healthy: %+v", status.Health)
+	}
+}
 
 func TestAccountErrorsGroupIdenticalReportsWithoutHidingDistinctFailures(t *testing.T) {
 	now := time.Now().UTC()
