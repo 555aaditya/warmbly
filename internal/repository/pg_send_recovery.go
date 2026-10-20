@@ -115,6 +115,42 @@ type SendAdmission struct {
 	HoldReason   string
 }
 
+type SendRecoveryHold struct {
+	Reason string
+	Warmup bool
+}
+
+func (r *emailRepository) GetSendRecoveryHolds(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]SendRecoveryHold, error) {
+	// Normal in-flight sends also hold admission; only surface settled or stuck ones.
+	query := `SELECT ea.id,COALESCE(ea.send_recovery_reason,''),COALESCE(t.task_type='warmup',false) FROM email_accounts ea
+		LEFT JOIN tasks t ON t.id=ea.send_recovery_task_id AND t.email_account_id=ea.id
+		WHERE ea.id=ANY($1) AND ea.send_recovery_hold
+		AND (ea.send_recovery_reason IS DISTINCT FROM 'unknown' OR t.id IS NULL
+		 OR t.send_result_applied_at IS NOT NULL OR t.send_result_evidence IS NOT NULL
+		 OR COALESCE(t.send_reserved_at,t.completed_at,t.updated_at)<NOW()-INTERVAL '10 minutes')`
+	var rows pgx.Rows
+	var err error
+	if r.transportSnapshot != nil {
+		rows, err = r.transportSnapshot.Query(ctx, query, ids)
+	} else {
+		rows, err = r.DB.Query(ctx, query, ids)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	holds := make(map[uuid.UUID]SendRecoveryHold)
+	for rows.Next() {
+		var id uuid.UUID
+		var hold SendRecoveryHold
+		if err := rows.Scan(&id, &hold.Reason, &hold.Warmup); err != nil {
+			return nil, err
+		}
+		holds[id] = hold
+	}
+	return holds, rows.Err()
+}
+
 // GetSendAdmission is tenant-scoped mailbox/provider evidence, not domain or tenant-wide inference.
 func (r *taskRepository) GetSendAdmission(ctx context.Context, orgID, mailboxID uuid.UUID, provider models.InboxProvider, now time.Time) (*SendAdmission, error) {
 	a := &SendAdmission{MailboxID: mailboxID, Provider: provider, Scope: "mailbox"}
@@ -302,7 +338,7 @@ func refreshSendHold(ctx context.Context, tx pgx.Tx, mailboxID uuid.UUID, taskID
 	_, err := tx.Exec(ctx, `WITH next_hold AS (
 			SELECT id,reason FROM (
 			 SELECT t.id,'unknown' AS reason,1 AS priority,t.created_at FROM tasks t
-			 WHERE t.email_account_id=$1 AND t.send_result_state='unknown'
+			 WHERE t.email_account_id=$1 AND t.send_result_state='unknown' AND t.warmup_send_retired_at IS NULL
 			 UNION ALL
 			 SELECT t.id,'conflict',2,t.created_at FROM send_recovery_resolutions r JOIN tasks t ON t.id=r.recovery_task_id
 			 WHERE t.email_account_id=$1 AND (r.previous_reason='unknown' OR r.evidence_type='authoritative_result_conflict')

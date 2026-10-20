@@ -1629,7 +1629,8 @@ func (r *warmupRepository) ProcessWarmupReceipt(ctx context.Context, tokenID, re
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM warmup_tasks WHERE task_id=$1 AND lineage_version=1),
 		EXISTS(SELECT 1 FROM warmup_tasks w JOIN tasks sent ON sent.id=w.task_id
 		WHERE w.task_id=$1 AND w.lineage_version=1 AND (sent.status<>'completed' OR $2='')),
-		EXISTS(SELECT 1 FROM warmup_tokens WHERE token=$3 AND sent_retired_at IS NOT NULL)`, token.TaskID, token.SentMessageID, token.Token).Scan(&lineage, &awaitingSend, &retired); err != nil {
+		EXISTS(SELECT 1 FROM warmup_tokens WHERE token=$3 AND sent_retired_at IS NOT NULL)
+		OR EXISTS(SELECT 1 FROM tasks WHERE id=$1 AND warmup_send_retired_at IS NOT NULL)`, token.TaskID, token.SentMessageID, token.Token).Scan(&lineage, &awaitingSend, &retired); err != nil {
 		return false, err
 	}
 	if retired {
