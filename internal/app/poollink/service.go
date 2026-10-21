@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -581,7 +582,8 @@ func sameSMTPIMAPCredentials(stored *repository.SMTPCredentials, got *models.Smt
 	}
 	same := func(host string, port int, user, password string, svc *models.Service) bool {
 		return strings.EqualFold(strings.TrimSpace(host), strings.TrimSpace(svc.Host)) && port == svc.Port &&
-			strings.TrimSpace(user) == strings.TrimSpace(svc.Username) && password == svc.Password
+			strings.TrimSpace(user) == strings.TrimSpace(svc.Username) &&
+			subtle.ConstantTimeCompare([]byte(password), []byte(svc.Password)) == 1
 	}
 	return same(stored.SMTPHost, stored.SMTPPort, stored.SMTPUser, stored.SMTPPassword, got.SMTP) &&
 		same(stored.IMAPHost, stored.IMAPPort, stored.IMAPUser, stored.IMAPPassword, got.IMAP)
