@@ -262,7 +262,7 @@ func (r *taskRepository) RescheduleWarmupTask(ctx context.Context, id uuid.UUID,
 	return tx.Commit(ctx)
 }
 
-// ReplaceParkedWarmupTask moves a mailbox's plain pending warmup wakeup (no reply target, no parent) to at; the reconciler requeues the new revision.
+// ReplaceParkedWarmupTask moves a mailbox's pending warmup task to at. A plain wakeup moves either way; a reply only comes earlier, never before its 45-minute floor after the mail it answers. The reconciler requeues the new revision.
 func (r *taskRepository) ReplaceParkedWarmupTask(ctx context.Context, accountID uuid.UUID, at time.Time) (bool, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
@@ -272,9 +272,14 @@ func (r *taskRepository) ReplaceParkedWarmupTask(ctx context.Context, accountID 
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('warmup_task_' || $1::text))`, accountID); err != nil {
 		return false, err
 	}
-	tag, err := tx.Exec(ctx, `WITH moved AS (UPDATE tasks t SET scheduled_at=$2,updated_at=NOW() FROM warmup_tasks w
-        WHERE t.email_account_id=$1 AND t.task_type='warmup' AND t.status='pending' AND w.task_id=t.id
-        AND w.target_account_id IS NULL AND w.parent_task_id IS NULL AND w.dispatch_nonce IS NULL RETURNING t.id)
+	tag, err := tx.Exec(ctx, `WITH slot AS (SELECT t.id, w.parent_task_id IS NULL AS plain,
+            CASE WHEN w.parent_task_id IS NULL THEN $2::timestamptz ELSE GREATEST($2::timestamptz, COALESCE(
+                (SELECT wr.created_at+INTERVAL '45 minutes' FROM warmup_received wr WHERE wr.email_account_id=t.email_account_id AND wr.internal_id=w.parent_received_id), $2::timestamptz)) END AS at
+        FROM tasks t JOIN warmup_tasks w ON w.task_id=t.id
+        WHERE t.email_account_id=$1 AND t.task_type='warmup' AND t.status='pending' AND w.dispatch_nonce IS NULL
+        AND ((w.target_account_id IS NULL AND w.parent_task_id IS NULL) OR (w.parent_task_id IS NOT NULL AND w.target_account_id IS NOT NULL))),
+        moved AS (UPDATE tasks t SET scheduled_at=slot.at,updated_at=NOW() FROM slot
+        WHERE t.id=slot.id AND t.status='pending' AND (slot.plain OR t.scheduled_at>slot.at) RETURNING t.id)
         UPDATE warmup_tasks SET schedule_revision=schedule_revision+1 WHERE task_id IN (SELECT id FROM moved)`, accountID, at)
 	if err != nil {
 		return false, err
