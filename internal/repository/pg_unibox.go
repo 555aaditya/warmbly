@@ -667,8 +667,10 @@ func (r *uniboxRepository) GetBySender(ctx context.Context, userID uuid.UUID, se
 	query := fmt.Sprintf(`
 		SELECT %s
 		FROM unibox_emails
-		WHERE user_id = $1 AND $2 = ANY(from_addr)
-	`, strings.Join(mailFieldsPreview, ", "))
+		WHERE user_id = $1 AND ($2 = ANY(from_addr) OR EXISTS (
+			SELECT 1 FROM unnest(from_addr) a(addr) WHERE %s = lower(btrim($2))
+		))
+	`, strings.Join(mailFieldsPreview, ", "), bareAddrSQL("a.addr"))
 
 	args := []any{userID, sender}
 	argPos := 3
