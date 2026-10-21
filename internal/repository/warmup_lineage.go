@@ -105,11 +105,16 @@ func (r *taskRepository) BindWarmupSuccessor(ctx context.Context, parent, recipi
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('warmup_parent_' || $1::text))`, parent); err != nil {
 		return false, err
 	}
+	// One pending warmup task per mailbox: a reply takes the free slot, and is skipped when a reply already holds it.
 	var id uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT t.id FROM tasks t JOIN warmup_tasks w ON w.task_id=t.id
+	var bindable bool
+	err = tx.QueryRow(ctx, `SELECT t.id, (w.task_id IS NOT NULL AND w.target_account_id IS NULL AND w.parent_task_id IS NULL)
+        FROM tasks t LEFT JOIN warmup_tasks w ON w.task_id=t.id
         WHERE t.email_account_id=$1 AND t.task_type='warmup' AND t.status='pending'
-        AND w.target_account_id IS NULL AND w.parent_task_id IS NULL
-        ORDER BY t.scheduled_at NULLS FIRST LIMIT 1 FOR UPDATE OF t`, recipient).Scan(&id)
+        ORDER BY 2 DESC, t.scheduled_at NULLS FIRST LIMIT 1 FOR UPDATE OF t`, recipient).Scan(&id, &bindable)
+	if err == nil && !bindable {
+		return false, nil
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		id = uuid.New()
 		if _, err = tx.Exec(ctx, `INSERT INTO tasks(id,task_type,email_account_id,status,scheduled_at,message_id) VALUES($1,'warmup',$2,'pending',$3,'')`, id, recipient, at); err != nil {

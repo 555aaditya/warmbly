@@ -189,3 +189,40 @@ func TestSentFolderCopy(t *testing.T) {
 		})
 	}
 }
+
+func TestRecoveryEngagementOnlyRaises(t *testing.T) {
+	base := models.WarmupEngagementSettings{SpamRescueRate: 85, MarkReadRate: 95, MarkImportantRate: 30, StarRate: 20}
+	got := recoveryEngagement(base)
+	if got.SpamRescueRate != 100 || got.MarkImportantRate != recoveryImportantRate || got.MarkReadRate != 95 || got.StarRate != 20 {
+		t.Fatalf("recovery engagement = %+v", got)
+	}
+	high := recoveryEngagement(models.WarmupEngagementSettings{MarkReadRate: 100, MarkImportantRate: 80})
+	if high.MarkReadRate != 100 || high.MarkImportantRate != 80 {
+		t.Fatalf("recovery engagement lowered a configured rate: %+v", high)
+	}
+	// Every spam landing of a recovering sender is rescued, whatever the persona bias.
+	for i := 0; i < 200; i++ {
+		actions, _ := engagementPlan(uuid.New(), got)
+		if !slices.Contains(actions, models.WarmupActionRescueFromSpam) {
+			t.Fatalf("recovering sender's mail not rescued: %v", actions)
+		}
+	}
+}
+
+func TestRecoveryReplyChance(t *testing.T) {
+	cases := []struct {
+		rate       int
+		recovering bool
+		want       int
+	}{
+		{30, false, 30},
+		{30, true, recoveryReplyRate},
+		{80, true, 80},
+		{0, true, 0},
+	}
+	for _, c := range cases {
+		if got := recoveryReplyChance(c.rate, c.recovering); got != c.want {
+			t.Errorf("recoveryReplyChance(%d, %v) = %d, want %d", c.rate, c.recovering, got, c.want)
+		}
+	}
+}

@@ -46,13 +46,12 @@ type Plan struct {
 func (p Plan) Cut() bool { return p.Placements > 0 }
 
 // HealthVolumeMultiplier lives beside the ramp so the scheduler and the
-// dashboard cannot apply different bands.
+// dashboard cannot apply different bands. Watch keeps full warmup volume: its
+// placements already hold the ramp, and recovery engagement needs the mail.
 func HealthVolumeMultiplier(state models.WarmupHealthState) float64 {
 	switch state {
 	case models.WarmupHealthThrottled:
 		return 0.5
-	case models.WarmupHealthWatch:
-		return 0.7
 	default:
 		return 1.0
 	}

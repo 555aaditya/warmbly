@@ -538,7 +538,8 @@ func (s *JobsService) acceptWarmupEmail(ctx context.Context, e *models.JobEventN
 			return err
 		}
 	}
-	if err := s.scheduleWarmupReplyBack(ctx, token, e.Message.EmailID, e.Message.ID); err != nil {
+	recovering := s.senderRecovering(ctx, token.SenderAccountID)
+	if err := s.scheduleWarmupReplyBack(ctx, token, recovering, e.Message.EmailID, e.Message.ID); err != nil {
 		return err
 	}
 	if err := s.WarmupRepo.ConsumeWarmupToken(ctx, token.Token); err != nil {
@@ -561,7 +562,7 @@ func (s *JobsService) acceptWarmupEmail(ctx context.Context, e *models.JobEventN
 	}
 
 	// Perform warmup actions
-	rescued := s.performWarmupActions(ctx, e, recipient)
+	rescued := s.performWarmupActions(ctx, e, recipient, recovering)
 
 	s.recordWarmupPlacement(ctx, e, recipient, landed, rescued)
 	return nil
@@ -597,13 +598,17 @@ func (s *JobsService) recordWarmupPlacement(ctx context.Context, e *models.JobEv
 // doesn't behave in detectable lockstep, with a randomised recipient-side
 // dwell before the actions run. recipient is the receiving mailbox when the
 // caller has it. Reports whether a spam rescue was handed to the worker.
-func (s *JobsService) performWarmupActions(ctx context.Context, e *models.JobEventNewEmail, recipient *models.Email) (rescueQueued bool) {
+func (s *JobsService) performWarmupActions(ctx context.Context, e *models.JobEventNewEmail, recipient *models.Email, senderRecovering bool) (rescueQueued bool) {
 	if s.Publisher == nil {
 		return false
 	}
 
 	settings := s.getGenerationSettings(ctx)
-	actions, delaySeconds := engagementPlan(e.Message.EmailID, settings.Engagement)
+	engagement := settings.Engagement
+	if senderRecovering {
+		engagement = recoveryEngagement(engagement)
+	}
+	actions, delaySeconds := engagementPlan(e.Message.EmailID, engagement)
 
 	base := models.WarmupEmailAction{
 		UserID:             e.UserID,

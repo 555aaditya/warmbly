@@ -250,7 +250,7 @@ Configured diagnostic turns continue disclosed scenarios, not organic relationsh
 
 Replies thread properly with a real `Re:` subject and `In-Reply-To` header, and candidates must be between 45 minutes and seven days old, so nothing is answered instantly or revived indefinitely.
 
-Receiving warmup mail can also prompt an answer directly. When a verified warmup email arrives, the recipient sometimes points its next scheduled send back at whoever wrote, 25 minutes to 5 hours later and inside its own warmup hours. That is a re-pointing, not extra work: each mailbox has one warmup send queued at a time, so a reply-back moves that send earlier and aims it, and can never push a send the mailbox had already planned sooner. The chance is the recipient's own reply rate, drawn once when the reply is scheduled rather than again when it sends, and it stops before a thread reaches its message cap so replies cannot answer replies indefinitely. A reply crosses the free and paid tiers like the mail it answers: a paid mailbox answers a free partner that wrote to it, and a free mailbox answers a paid one while it is healthy and its workspace is in good standing.
+Receiving warmup mail can also prompt an answer directly. When a verified warmup email arrives, the recipient sometimes points its next scheduled send back at whoever wrote, 45 minutes to 5 hours later and inside its own warmup hours. That is a re-pointing, not extra work: each mailbox has one warmup send queued at a time, so a reply-back moves that send earlier and aims it, and can never push a send the mailbox had already planned sooner. When that send is already answering someone, the new email is not answered, so replies never crowd out new threads. The chance is the recipient's own reply rate (raised for a sender in [recovery](#recovery-engagement)), drawn once when the reply is scheduled rather than again when it sends, and it stops before a thread reaches its message cap so replies cannot answer replies indefinitely. A reply crosses the free and paid tiers like the mail it answers: a paid mailbox answers a free partner that wrote to it, and a free mailbox answers a paid one while it is healthy and its workspace is in good standing.
 
 Scheduling respects windows, provider feedback, shared limits and spacing. Jitter distributes load, not human identities. Receiving participation allows probabilistic spam rescue, reads, importance and stars or flags on verified warmup messages. Filing and selected spam rescues are requested immediately; reads, importance and stars are durably scheduled after a randomized dwell. Current receiving permission and worker assignment are checked again at execution time. These actions are automation, not human feedback or a guaranteed reputation improvement.
 
@@ -332,8 +332,8 @@ Pools enforce permission and restrictive complaint/bounce/authentication evidenc
 | State | Meaning | Effect |
 |-------|---------|--------|
 | `healthy` | Normal | Full volume |
-| `watch` | Mild concern | Spacing stretched modestly |
-| `throttled` | Probation | Volume cut, spacing widened until recovery |
+| `watch` | Mild concern | Warmup at full volume with recovery engagement; cold volume eased |
+| `throttled` | Probation | Volume cut, spacing widened, recovery engagement until recovery |
 | `quarantined` | Clear problem | Out of the shared pool for a cooldown |
 | `blocked` | Serious or repeated abuse | Out for longer, review required |
 
@@ -345,9 +345,13 @@ Watch and throttled standing are warnings, not connection failures. They do not 
 
 Spam placement is a folder outcome, not misconduct or evidence of diagnostic reputation benefit. It slows sending but does not alone quarantine or block a recipient:
 
-- `10%` puts the mailbox on watch: warmup and cold sending are spaced out a little more.
+- `10%` puts the mailbox on watch: warmup keeps its volume and pace (its ramp holds while spam landings are recent), the pool engages harder with its mail (see [recovery engagement](#recovery-engagement)), and cold volume is eased to `70%`.
 - `20%` throttles it: warmup keeps running at half volume with double spacing, and cold volume is halved.
 - A throttle steps down to watch below `15%`, then returns to healthy below `7.5%`, on its own. They lift below the line that set them rather than at it, so a mailbox sitting near a line is not flipped in and out of a band (and announced to your integrations) with every delivery. The separate [early-signal ramp pause](#holding-the-ramp-on-an-early-signal) still applies to fresh spam landings.
+
+### Recovery engagement
+
+While a mailbox is on watch or throttled, the pool works harder for it instead of only slowing it down. Recipients that take part in engagement move every copy of its warmup mail that lands in spam back out of spam (instead of most of them) and mark more of it important, and at least `60%` of its mail gets a reply (unless the recipient's owner turned warmup replies off). Replies take the place of the recipient's next scheduled warmup send, so the extra engagement adds no volume. It stops on its own when the band lifts.
 
 Placement uses today and the preceding six UTC dates, matching the seven-day inbox rate on Deliverability and Emails. Older placement results stop affecting volume at the same boundary as the displayed rate. Complaints and mailbox tampering keep their separate rolling windows.
 

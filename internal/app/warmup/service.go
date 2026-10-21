@@ -938,7 +938,7 @@ func evaluatePlacement(m *models.WarmupHealthMetrics, prior models.WarmupHealthS
 		(prior == models.WarmupHealthWatch || prior == models.WarmupHealthThrottled) && rate >= spamPlacementWatchPct*spamPlacementExitFactor:
 		return evaluationDecision{
 			State: models.WarmupHealthWatch,
-			Reason: fmt.Sprintf("%s Sending is slowed slightly until it is below %s.",
+			Reason: fmt.Sprintf("%s Warmup keeps its volume while the pool replies to and rescues more of its mail; cold sending is slowed slightly until it is below %s.",
 				placementSummary(m), fmtPct(spamPlacementWatchPct*spamPlacementExitFactor)),
 			Score: rate,
 		}

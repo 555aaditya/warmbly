@@ -53,8 +53,8 @@ func TestPlacementRecoveryRestoresVolumeAndRetainsSafeguards(t *testing.T) {
 	}{
 		{"new throttle", 20, models.WarmupHealthHealthy, models.WarmupHealthThrottled, 0.5},
 		{"hold at exit line", 15, models.WarmupHealthThrottled, models.WarmupHealthThrottled, 0.5},
-		{"step down", 14.9, models.WarmupHealthThrottled, models.WarmupHealthWatch, 0.7},
-		{"hold watch at exit line", 7.5, models.WarmupHealthWatch, models.WarmupHealthWatch, 0.7},
+		{"step down", 14.9, models.WarmupHealthThrottled, models.WarmupHealthWatch, 1},
+		{"hold watch at exit line", 7.5, models.WarmupHealthWatch, models.WarmupHealthWatch, 1},
 		{"fully recovered", 100.0 * 2 / 30, models.WarmupHealthThrottled, models.WarmupHealthHealthy, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -46,6 +46,37 @@ func (s *JobsService) getGenerationSettings(ctx context.Context) models.WarmupGe
 	return *set
 }
 
+// Floors for mail from a sender in watch or throttled: the pool replies to and rescues more of it so placement recovers.
+const (
+	recoveryReplyRate     = 60
+	recoveryImportantRate = 60
+)
+
+// senderRecovering reports whether the sender's warmup standing is watch or throttled.
+func (s *JobsService) senderRecovering(ctx context.Context, senderID uuid.UUID) bool {
+	if s.WarmupRepo == nil {
+		return false
+	}
+	state, _, err := s.WarmupRepo.GetHealthState(ctx, senderID)
+	return err == nil && (state == models.WarmupHealthWatch || state == models.WarmupHealthThrottled)
+}
+
+// recoveryEngagement raises the positive signals for a recovering sender's mail and never lowers them.
+func recoveryEngagement(e models.WarmupEngagementSettings) models.WarmupEngagementSettings {
+	e.SpamRescueRate = 100
+	e.MarkReadRate = max(e.MarkReadRate, 95)
+	e.MarkImportantRate = max(e.MarkImportantRate, recoveryImportantRate)
+	return e
+}
+
+// recoveryReplyChance is the recipient's reply rate, raised for a recovering sender unless the owner turned replies off.
+func recoveryReplyChance(rate int, recovering bool) int {
+	if recovering && rate > 0 {
+		return max(rate, recoveryReplyRate)
+	}
+	return rate
+}
+
 // engagementPlan decides which recipient-side warmup actions to perform and
 // how long to wait first ("dwell"). Two goals:
 //   - break the uniform "every account marks important, instantly" bot

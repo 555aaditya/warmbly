@@ -90,7 +90,12 @@ func (s *tasksService) closeWarmupThread(ctx context.Context, taskID, accountID 
 	if err := s.taskRepo.UpdateTaskStatus(ctx, taskID, "cancelled"); err != nil {
 		return errx.InternalError()
 	}
-	_ = s.createWarmupTask(ctx, accountID, time.Now().Add(4*time.Hour))
+	// The mailbox continues on its normal cadence; closing a thread is not a reason to stall it.
+	next, err := s.scheduler.CalculateNextWarmupTime(ctx, accountID)
+	if err != nil {
+		next = time.Now().Add(4 * time.Hour)
+	}
+	_ = s.createWarmupTask(ctx, accountID, next)
 	return nil
 }
 
