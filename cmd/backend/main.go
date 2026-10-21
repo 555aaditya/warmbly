@@ -1312,6 +1312,9 @@ func main() {
 		if w, ok := poolLinkService.(poollink.CacheWirer); ok {
 			w.WireCache(cache)
 		}
+		if w, ok := poolLinkService.(interface{ WireCampaigns(poollink.CampaignUsage) }); ok {
+			w.WireCampaigns(campaignRepostory)
+		}
 		cloudLinkRepository := repository.NewCloudLinkRepository(primaryDB.Pool, credEncrypter)
 		emailService.WireCloudLink(cloudLinkRepository)
 		cloudLinkService = cloudlink.NewService(cloudLinkRepository, emailRepostory, emailService)

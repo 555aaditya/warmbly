@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -120,6 +121,12 @@ type service struct {
 	scheduler WarmupScheduler
 	planRepo  repository.PlanRepository
 	cache     *cache.Cache
+	campaigns CampaignUsage
+}
+
+// CampaignUsage says whether Cloud campaigns send from a mailbox.
+type CampaignUsage interface {
+	AccountHasActiveCampaign(ctx context.Context, accountID uuid.UUID) (bool, error)
 }
 
 func NewService(
@@ -137,6 +144,9 @@ func NewService(
 
 // WireScheduler attaches the warmup task seeder after construction.
 func (s *service) WireScheduler(w WarmupScheduler) { s.scheduler = w }
+
+// WireCampaigns lets enrollment adopt only mailboxes no active campaign sends from.
+func (s *service) WireCampaigns(c CampaignUsage) { s.campaigns = c }
 
 // Unambiguous alphabet: no 0/O, 1/I/L.
 const userCodeAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
@@ -508,6 +518,9 @@ func (s *service) Enroll(ctx context.Context, inst *models.PoolLinkInstance, req
 	}
 	if xerr != nil {
 		if errors.Is(xerr, errx.ErrEmailOnboardAlreadyExists) {
+			if req.Provider == models.InboxProviderSMTPIMAP {
+				return s.adoptHostedSMTPIMAP(ctx, inst, req, userID)
+			}
 			return nil, ErrMailboxConflict
 		}
 		return nil, xerr
@@ -517,16 +530,76 @@ func (s *service) Enroll(ctx context.Context, inst *models.PoolLinkInstance, req
 		_ = s.emailSvc.Delete(ctx, orgID.String(), acc.ID.String())
 		return nil, errx.InternalError()
 	}
+	return s.startEnrolled(ctx, inst, userID, acc.ID, req)
+}
 
-	s.applyWarmupSettings(ctx, orgID, userID, acc.ID, req.Warmup)
-	if _, xerr := s.emailSvc.SetWarmupLifecycle(ctx, orgID.String(), acc.ID.String(), "start"); xerr != nil {
-		log.Warn().Str("account_id", acc.ID.String()).Str("code", xerr.Identifier).Str("error", xerr.Message).Msg("pool link: warmup start failed after enrollment")
+// adoptHostedSMTPIMAP enrolls the workspace's own copy of the address, and only
+// when the instance presents exactly the credentials Cloud holds for it and no
+// active Cloud campaign sends from it, so an address alone never attaches.
+func (s *service) adoptHostedSMTPIMAP(ctx context.Context, inst *models.PoolLinkInstance, req models.PoolLinkEnrollRequest, userID string) (*models.PoolLinkMailboxState, *errx.Error) {
+	ref, xerr := s.emails.FindInOrganization(ctx, inst.OrganizationID, req.Email)
+	if xerr != nil {
+		return nil, xerr
 	}
-	if err := s.emailSvc.LoadAccountOntoWorker(ctx, acc.ID); err != nil {
-		log.Warn().Err(err).Str("account_id", acc.ID.String()).Msg("pool link: worker load failed; reconciler will retry")
+	if ref == nil || ref.Provider != string(models.InboxProviderSMTPIMAP) || ref.Status != "active" ||
+		ref.AuthMethod == models.MailAuthDelegated || ref.Managed {
+		return nil, ErrMailboxConflict
+	}
+	if existing, err := s.repo.GetMailboxByAccount(ctx, ref.ID); err != nil {
+		return nil, errx.InternalError()
+	} else if existing != nil {
+		return nil, ErrMailboxConflict
+	}
+	stored, xerr := s.emails.GetSMTPCredentials(ctx, ref.ID)
+	if xerr == errx.ErrNotFound {
+		return nil, ErrMailboxConflict
+	}
+	if xerr != nil {
+		return nil, xerr
+	}
+	if !sameSMTPIMAPCredentials(stored, req.SMTPIMAP) {
+		return nil, ErrMailboxConflict
+	}
+	// An unenrolled mirror is deleted, so a mailbox Cloud campaigns send from never becomes one.
+	if s.campaigns == nil {
+		return nil, ErrMailboxConflict
+	}
+	if busy, err := s.campaigns.AccountHasActiveCampaign(ctx, ref.ID); err != nil {
+		return nil, errx.InternalError()
+	} else if busy {
+		return nil, ErrMailboxConflict
+	}
+	if err := s.repo.EnrollMailbox(ctx, &models.PoolLinkMailbox{InstanceID: inst.ID, RemoteID: req.RemoteID, EmailAccountID: ref.ID}); err != nil {
+		return nil, errx.InternalError()
+	}
+	log.Info().Str("instance_id", inst.ID.String()).Str("account_id", ref.ID.String()).Msg("pool link: adopted the workspace's existing mailbox on enrollment")
+	return s.startEnrolled(ctx, inst, userID, ref.ID, req)
+}
+
+func sameSMTPIMAPCredentials(stored *repository.SMTPCredentials, got *models.SmtpImap) bool {
+	if stored == nil || got == nil || got.SMTP == nil || got.IMAP == nil {
+		return false
+	}
+	same := func(host string, port int, user, password string, svc *models.Service) bool {
+		return strings.EqualFold(strings.TrimSpace(host), strings.TrimSpace(svc.Host)) && port == svc.Port &&
+			strings.TrimSpace(user) == strings.TrimSpace(svc.Username) &&
+			subtle.ConstantTimeCompare([]byte(password), []byte(svc.Password)) == 1
+	}
+	return same(stored.SMTPHost, stored.SMTPPort, stored.SMTPUser, stored.SMTPPassword, got.SMTP) &&
+		same(stored.IMAPHost, stored.IMAPPort, stored.IMAPUser, stored.IMAPPassword, got.IMAP)
+}
+
+func (s *service) startEnrolled(ctx context.Context, inst *models.PoolLinkInstance, userID string, accountID uuid.UUID, req models.PoolLinkEnrollRequest) (*models.PoolLinkMailboxState, *errx.Error) {
+	orgID := inst.OrganizationID
+	s.applyWarmupSettings(ctx, orgID, userID, accountID, req.Warmup)
+	if _, xerr := s.emailSvc.SetWarmupLifecycle(ctx, orgID.String(), accountID.String(), "start"); xerr != nil {
+		log.Warn().Str("account_id", accountID.String()).Str("code", xerr.Identifier).Str("error", xerr.Message).Msg("pool link: warmup start failed after enrollment")
+	}
+	if err := s.emailSvc.LoadAccountOntoWorker(ctx, accountID); err != nil {
+		log.Warn().Err(err).Str("account_id", accountID.String()).Msg("pool link: worker load failed; reconciler will retry")
 	}
 	if s.scheduler != nil {
-		_ = s.scheduler.EnsureWarmupScheduled(ctx, acc.ID)
+		_ = s.scheduler.EnsureWarmupScheduled(ctx, accountID)
 	}
 	return s.GetMailbox(ctx, inst, req.RemoteID)
 }
