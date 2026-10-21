@@ -145,6 +145,9 @@ func splitEngagementLegs(actions []string) (immediate, delayed []string) {
 	return immediate, delayed
 }
 
+// biasedRateCeiling caps a persona-biased rate, so no mailbox performs an action every time.
+const biasedRateCeiling = 98.0
+
 // rollPct rolls a biased percentage chance. The persona bias nudges a given
 // mailbox consistently above/below the configured rate so mailboxes differ.
 func rollPct(rate int, bias float64) bool {
@@ -154,7 +157,8 @@ func rollPct(rate int, bias float64) bool {
 	if rate >= 100 {
 		return true
 	}
-	effective := float64(rate) * bias
+	// A bias never turns a configured chance into a certainty; only an explicit 100 is one.
+	effective := math.Min(float64(rate)*bias, biasedRateCeiling)
 	return rand.Float64()*100 < effective
 }
 

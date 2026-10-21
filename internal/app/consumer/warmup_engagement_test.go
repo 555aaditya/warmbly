@@ -229,3 +229,20 @@ func TestRecoveryReplyChance(t *testing.T) {
 		}
 	}
 }
+
+func TestRollPctBiasNeverReachesCertainty(t *testing.T) {
+	misses := 0
+	for i := 0; i < 5000; i++ {
+		if !rollPct(95, 1.2) {
+			misses++
+		}
+	}
+	if misses == 0 {
+		t.Fatal("a biased 95% chance succeeded every time")
+	}
+	for i := 0; i < 1000; i++ {
+		if !rollPct(100, 0.8) {
+			t.Fatal("an explicit 100% chance missed")
+		}
+	}
+}
