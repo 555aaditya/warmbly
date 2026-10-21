@@ -245,8 +245,11 @@ func (s *tasksService) HandleEmailTask(task *proto.ProcessTask) *errx.Error {
 			return errx.InternalError()
 		}
 		if at.After(time.Now()) {
-			// The gate answers with the window's opening; spread deferred sends past it rather than firing on the stroke.
-			at = at.Add(time.Duration(1+rand.Intn(20*60)) * time.Second)
+			// The gate answers with the window's opening; spread deferred sends past it, unless that would leave a short window.
+			jittered := at.Add(time.Duration(1+rand.Intn(20*60)) * time.Second)
+			if again, gerr := gate.WarmupDispatchNotBefore(ctx, account.ID, jittered); gerr == nil && !again.After(jittered) {
+				at = jittered
+			}
 			if err := lineage.RescheduleWarmupTask(ctx, taskID, at); err != nil {
 				return errx.InternalError()
 			}
