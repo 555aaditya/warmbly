@@ -112,7 +112,8 @@ func TestLiveSendHoldReportingDoesNotFlagNormalInFlightSends(t *testing.T) {
 func TestLiveWarmupRecoveryPreservesPreparationWithAnySendEvidence(t *testing.T) {
 	for _, tc := range []struct{ name, update string }{
 		{"recent preparation", `UPDATE tasks SET updated_at=NOW() WHERE id=$1`},
-		{"generated message", `UPDATE tasks SET message_id='<prepared@test.local>' WHERE id=$1`},
+		{"received message", `WITH m AS (UPDATE tasks SET message_id='<prepared@test.local>' WHERE id=$1 RETURNING email_account_id)
+			INSERT INTO warmup_received(email_account_id,internal_id,sender_account_id,message_id) SELECT $2,gen_random_uuid(),email_account_id,'<prepared@test.local>' FROM m`},
 		{"reserved", `UPDATE tasks SET send_reserved_at=NOW() WHERE id=$1`},
 		{"unknown outcome", `UPDATE tasks SET send_result_state='unknown' WHERE id=$1`},
 		{"provider evidence", `UPDATE tasks SET send_result_evidence='{}' WHERE id=$1`},
@@ -123,7 +124,8 @@ func TestLiveWarmupRecoveryPreservesPreparationWithAnySendEvidence(t *testing.T)
 		{"dispatch started", `UPDATE warmup_tasks SET dispatch_started_at=NOW() WHERE task_id=$1`},
 		{"dispatch result", `UPDATE warmup_tasks SET dispatch_result='{}' WHERE task_id=$1`},
 		{"charged", `UPDATE warmup_tasks SET warmup_charged_date=CURRENT_DATE,warmup_reply_charged=false WHERE task_id=$1`},
-		{"token", `INSERT INTO warmup_tokens(token,task_id,sender_account_id,recipient_account_id) SELECT gen_random_uuid(),id,email_account_id,$2 FROM tasks WHERE id=$1`},
+		{"sent token", `INSERT INTO warmup_tokens(token,task_id,sender_account_id,recipient_account_id,sent_message_id) SELECT gen_random_uuid(),id,email_account_id,$2,'<sent@test.local>' FROM tasks WHERE id=$1`},
+		{"consumed token", `INSERT INTO warmup_tokens(token,task_id,sender_account_id,recipient_account_id,consumed_at) SELECT gen_random_uuid(),id,email_account_id,$2,NOW() FROM tasks WHERE id=$1`},
 		{"outbound attempt", `INSERT INTO outbound_attempts(nonce,task_id,email_account_id,provider,attempted_at,recipient_count) SELECT gen_random_uuid(),id,email_account_id,'smtp_imap',NOW(),1 FROM tasks WHERE id=$1`},
 		{"receipt", `INSERT INTO warmup_received(email_account_id,internal_id,sender_account_id,message_id,task_id) SELECT $2,gen_random_uuid(),email_account_id,'<receipt@test.local>',id FROM tasks WHERE id=$1`},
 	} {
@@ -138,6 +140,36 @@ func TestLiveWarmupRecoveryPreservesPreparationWithAnySendEvidence(t *testing.T)
 			n, err := f.r.RecoverAbandonedWarmupPreparations(t.Context(), f.before, 100)
 			if err != nil || n != 0 {
 				t.Fatalf("unsafe preparation recovery: n=%d err=%v", n, err)
+			}
+		})
+	}
+}
+
+func TestLiveWarmupRecoveryRetiresUnauthorizedPreparationsThatLeftNothing(t *testing.T) {
+	for _, tc := range []struct{ name, update string }{
+		{"refunded charge", `UPDATE warmup_tasks SET warmup_charged_date=CURRENT_DATE,warmup_reply_charged=false,warmup_refunded_at=NOW() WHERE task_id=$1`},
+		{"message and unsent token", `WITH m AS (UPDATE tasks SET message_id='<never-sent@test.local>' WHERE id=$1 RETURNING id,email_account_id)
+			INSERT INTO warmup_tokens(token,task_id,sender_account_id,recipient_account_id) SELECT gen_random_uuid(),id,email_account_id,$2 FROM m`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newWarmupRecoveryFixture(t)
+			id := f.abandonedPreparation(t)
+			if strings.Contains(tc.update, "$2") {
+				f.exec(t, tc.update, id, f.atWorkspace)
+			} else {
+				f.exec(t, tc.update, id)
+			}
+			n, err := f.r.RecoverAbandonedWarmupPreparations(t.Context(), f.before, 100)
+			if err != nil || n != 1 {
+				t.Fatalf("stranded preparation not retired: n=%d err=%v", n, err)
+			}
+			var status string
+			var tokens int
+			if err := f.pool.QueryRow(t.Context(), `SELECT status,(SELECT count(*) FROM warmup_tokens WHERE task_id=$1) FROM tasks WHERE id=$1`, id).Scan(&status, &tokens); err != nil || status != "cancelled" || tokens != 0 {
+				t.Fatalf("status=%s tokens=%d err=%v", status, tokens, err)
+			}
+			if _, err := f.r.AuthorizeWarmupDispatch(t.Context(), id, f.sender.ID, f.worker); !errors.Is(err, pgx.ErrNoRows) {
+				t.Fatalf("retired preparation can still authorize: %v", err)
 			}
 		})
 	}

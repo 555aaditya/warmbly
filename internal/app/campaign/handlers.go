@@ -141,7 +141,7 @@ func (s *campaignService) Update(ctx context.Context, orgID, query string, data 
 	// A schedule edit on a running campaign must move its parked wakeup task:
 	// otherwise a cleared or earlier start date only takes effect when the old
 	// slot fires, and the campaign looks stuck until then (issue #171).
-	if data.TouchesSchedule() && resp != nil && resp.Status == "active" {
+	if (data.TouchesSchedule() || data.TouchesPacing()) && resp != nil && resp.Status == "active" {
 		s.rescheduleCampaignWakeup(ctx, resp.ID)
 	}
 	return resp, nil
@@ -160,6 +160,45 @@ func (s *campaignService) rescheduleCampaignWakeup(ctx context.Context, campaign
 		}
 	}
 	_ = s.enqueueCampaignWakeup(ctx, campaignID, false)
+}
+
+func (s *campaignService) RescheduleForMailboxes(ctx context.Context, orgID uuid.UUID, accountIDs ...uuid.UUID) {
+	lister, ok := s.campaignRepository.(interface {
+		ActiveCampaignIDsForAccount(context.Context, uuid.UUID, uuid.UUID) ([]uuid.UUID, error)
+	})
+	if !ok {
+		return
+	}
+	seen := make(map[uuid.UUID]struct{})
+	for _, accountID := range accountIDs {
+		ids, err := lister.ActiveCampaignIDsForAccount(ctx, orgID, accountID)
+		if err != nil {
+			continue
+		}
+		for _, id := range ids {
+			if _, done := seen[id]; done {
+				continue
+			}
+			seen[id] = struct{}{}
+			s.rescheduleCampaignWakeup(ctx, id)
+		}
+	}
+}
+
+func (s *campaignService) RescheduleForOrganization(ctx context.Context, orgID uuid.UUID) {
+	lister, ok := s.campaignRepository.(interface {
+		ActiveCampaignIDsForOrganization(context.Context, uuid.UUID) ([]uuid.UUID, error)
+	})
+	if !ok {
+		return
+	}
+	ids, err := lister.ActiveCampaignIDsForOrganization(ctx, orgID)
+	if err != nil {
+		return
+	}
+	for _, id := range ids {
+		s.rescheduleCampaignWakeup(ctx, id)
+	}
 }
 
 func (s *campaignService) Delete(ctx context.Context, orgID uuid.UUID, campaignID string) (*models.Campaign, *errx.Error) {
@@ -994,11 +1033,15 @@ func (s *campaignService) ListCampaignSenders(ctx context.Context, orgID uuid.UU
 
 // ReplaceCampaignSenders atomically replaces the explicit sender pool.
 func (s *campaignService) ReplaceCampaignSenders(ctx context.Context, orgID uuid.UUID, campaignID string, in []models.CampaignSenderInput) ([]models.CampaignSender, *errx.Error) {
-	_, cID, xerr := s.campaignForOrg(ctx, orgID, campaignID)
+	campaign, cID, xerr := s.campaignForOrg(ctx, orgID, campaignID)
 	if xerr != nil {
 		return nil, xerr
 	}
-	return s.campaignRepository.ReplaceCampaignSenders(ctx, cID, in)
+	senders, xerr := s.campaignRepository.ReplaceCampaignSenders(ctx, cID, in)
+	if xerr == nil && campaign != nil && campaign.Status == "active" {
+		s.rescheduleCampaignWakeup(ctx, cID)
+	}
+	return senders, xerr
 }
 
 // VerifyCampaignTrackingDomain resolves the campaign-scoped tracking domain

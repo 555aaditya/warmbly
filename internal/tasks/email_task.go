@@ -245,6 +245,8 @@ func (s *tasksService) HandleEmailTask(task *proto.ProcessTask) *errx.Error {
 			return errx.InternalError()
 		}
 		if at.After(time.Now()) {
+			// The gate answers with the window's opening; spread deferred sends past it rather than firing on the stroke.
+			at = at.Add(time.Duration(1+rand.Intn(20*60)) * time.Second)
 			if err := lineage.RescheduleWarmupTask(ctx, taskID, at); err != nil {
 				return errx.InternalError()
 			}
@@ -962,6 +964,59 @@ func (s *tasksService) EnsureWarmupScheduled(ctx context.Context, accountID uuid
 		return err
 	}
 	return s.createWarmupTask(ctx, accountID, nextTime)
+}
+
+// ReplaceWarmupSchedule re-places a mailbox's parked warmup wakeup under its
+// current hours, so a schedule change takes effect now and not after a slot
+// computed under the old one. A protection hold's recovery wakeup is left alone.
+func (s *tasksService) ReplaceWarmupSchedule(ctx context.Context, accountID uuid.UUID) error {
+	mover, ok := s.taskRepo.(interface {
+		ReplaceParkedWarmupTask(context.Context, uuid.UUID, time.Time) (bool, error)
+	})
+	if !ok {
+		return nil
+	}
+	account, xerr := s.emailRepo.GetByID(ctx, accountID)
+	if xerr != nil {
+		return xerr
+	}
+	if account == nil || (s.cloudLink != nil && s.cloudLink.IsEnrolled(ctx, account.ID)) {
+		return nil
+	}
+	if s.warmupRepo != nil {
+		eligible, err := s.warmupRepo.IsPoolEligible(ctx, accountID, s.resolveWarmupPoolType(ctx, account), true)
+		if err != nil || !eligible {
+			return err
+		}
+	}
+	nextTime, err := s.scheduler.CalculateNextWarmupTime(ctx, accountID)
+	if errors.Is(err, scheduler.ErrWarmupNotEnabled) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	_, err = mover.ReplaceParkedWarmupTask(ctx, accountID, nextTime)
+	return err
+}
+
+func (s *tasksService) ReplaceWorkspaceWarmupSchedules(ctx context.Context, orgID uuid.UUID) {
+	lister, ok := s.emailRepo.(interface {
+		WarmingOnWorkspaceClock(context.Context, uuid.UUID) ([]uuid.UUID, error)
+	})
+	if !ok {
+		return
+	}
+	ids, err := lister.WarmingOnWorkspaceClock(ctx, orgID)
+	if err != nil {
+		return
+	}
+	for _, id := range ids {
+		if ctx.Err() != nil {
+			return
+		}
+		_ = s.ReplaceWarmupSchedule(ctx, id)
+	}
 }
 
 // createWarmupTask creates a new warmup task in GCP Cloud Tasks

@@ -750,6 +750,18 @@ type UpdateEmail struct {
 	Tags []string `json:"tags"`
 }
 
+// ChangesWarmupHours reports whether the patch touches anything the parked warmup slot was placed under.
+func (u *UpdateEmail) ChangesWarmupHours() bool {
+	return u.WarmupStartTime != nil || u.WarmupEndTime != nil || u.WarmupDays != nil || u.Timezone != nil ||
+		u.MinWaitTime != nil || u.WarmupBase != nil || u.WarmupMax != nil || u.WarmupIncrease != nil
+}
+
+// ChangesSendingHours reports whether the patch touches anything a parked campaign wakeup was placed under.
+func (u *UpdateEmail) ChangesSendingHours() bool {
+	return u.Timezone != nil || u.MinWaitTime != nil || u.CampaignLimit != nil || u.SharedDailyLimit != nil ||
+		u.RollingRecipientLimit != nil || u.Tags != nil || (u.Status != nil && *u.Status == "active")
+}
+
 type SendRecoveryResolution struct {
 	MessageID             string     `json:"message_id,omitempty"`
 	ProviderMsgID         string     `json:"provider_msg_id,omitempty"`

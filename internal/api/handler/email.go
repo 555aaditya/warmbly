@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 
@@ -80,6 +81,9 @@ func (h *Handler) UpdateEmail(c *gin.Context) {
 	if data.Status != nil && *data.Status == "active" && resp != nil {
 		_ = h.TasksService.EnsureWarmupScheduled(c.Request.Context(), resp.ID)
 	}
+	if resp != nil {
+		h.replaceParkedSends(c.Request.Context(), *orgID, resp.ID, data.ChangesWarmupHours(), data.ChangesSendingHours())
+	}
 
 	// Audit log
 	if accountID, err := uuid.Parse(emailAccountID); err == nil {
@@ -87,6 +91,16 @@ func (h *Handler) UpdateEmail(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, resp)
+}
+
+// replaceParkedSends moves work parked under a mailbox's old hours onto its new ones, so a schedule change takes effect now.
+func (h *Handler) replaceParkedSends(ctx context.Context, orgID, accountID uuid.UUID, warmup, campaigns bool) {
+	if warmup && h.TasksService != nil {
+		_ = h.TasksService.ReplaceWarmupSchedule(ctx, accountID)
+	}
+	if campaigns && h.CampaignService != nil {
+		h.CampaignService.RescheduleForMailboxes(ctx, orgID, accountID)
+	}
 }
 
 // BulkTagEmails adds/removes tags across many mailboxes in one call — the
@@ -160,6 +174,11 @@ func (h *Handler) BulkTagEmails(c *gin.Context) {
 		"added":     strconv.Itoa(len(addTags)),
 		"removed":   strconv.Itoa(len(removeTags)),
 	})
+
+	// Added tags can put mailboxes behind campaigns parked for want of one.
+	if updated > 0 && len(addTags) > 0 && h.CampaignService != nil {
+		h.CampaignService.RescheduleForMailboxes(c.Request.Context(), *orgID, emailIDs...)
+	}
 
 	c.JSON(http.StatusOK, gin.H{"updated": updated})
 }

@@ -424,6 +424,9 @@ func (s *analyticsService) assembleAccountStatus(ctx context.Context, email *mod
 		}
 		// A day of refusals is what an owner can still act on; older ones were fixed or are stale.
 		warmupStatus.SendFailure = reads.failures[email.ID]
+		if at, ok := reads.nextWarmup[email.ID]; ok {
+			warmupStatus.NextSendAt = &at
+		}
 	}
 
 	coldRamp := coldRampNotice(email, reads.coldRamp, reads.now)

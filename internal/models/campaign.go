@@ -462,6 +462,13 @@ func (u *UpdateCampaign) TouchesSchedule() bool {
 		u.EntryDelayMinutes != nil
 }
 
+// TouchesPacing reports whether the patch changes how much the campaign may send or from which mailboxes, which a parked wakeup was placed under too.
+func (u *UpdateCampaign) TouchesPacing() bool {
+	return u.DailyLimit != nil || u.EmailTags != nil || u.SenderStrategy != nil || u.RotationMode != nil ||
+		u.RampEnabled != nil || u.RampStart != nil || u.RampIncrement != nil || u.RampCeiling != nil ||
+		u.MaxNewLeadsPerDay != nil || u.ESPMatchMode != nil
+}
+
 // CreateCampaign is the payload accepted by POST /campaigns. Name is required;
 // every other field is optional and only applied if the caller sent a non-nil
 // value. The wizard sends everything at once; the simple modal can still send

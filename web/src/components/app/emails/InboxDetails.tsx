@@ -125,6 +125,7 @@ import { usePresenceResource } from "@/hooks/PresenceProvider";
 import ResourceViewers from "@/components/app/presence/ResourceViewers";
 import { cn } from "@/lib/utils";
 import WarmupSendFailureNote from "./WarmupSendFailureNote";
+import { nextSlotLabel } from "@/lib/helper/nextSlot";
 
 /* ── small themed primitives ─────────────────────── */
 
@@ -1292,6 +1293,7 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
     const ws = status?.warmup_status;
     const wh = status?.warmup_health;
     const whUnavailable = cloudStandingUnavailable(wh);
+    const behaviorOn = !!useSendingBehavior(mailbox.id).data?.enabled;
     const inCampaign = status?.in_campaign;
 
     // Warmup on/off is a lifecycle action (immediate), not a saved form field —
@@ -1434,6 +1436,7 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
                     <Eyebrow>Today</Eyebrow>
                     <div className="mt-2 flex items-center gap-2 text-[12.5px] text-slate-700">
                         <span>Sending <b className="text-slate-900 tabular-nums">{ws.current_volume}</b> of <b className="text-slate-900 tabular-nums">{ws.target_volume}</b> · day {ws.days_active}</span>
+                        {ws.next_send_at && <span className="text-slate-400">· next {nextSlotLabel(ws.next_send_at)}</span>}
                     </div>
                     <div className="mt-2.5 h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
                         <div className="h-full rounded-full bg-orange-400 transition-all" style={{ width: `${Math.min(100, (ws.current_volume / Math.max(1, ws.target_volume)) * 100)}%` }} />
@@ -1547,6 +1550,12 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
             {/* Schedule */}
             <div className="px-5 py-5 space-y-5">
                 <Eyebrow>Sending window</Eyebrow>
+                {behaviorOn && (
+                    <p className="text-[11.5px] text-slate-500 leading-relaxed">
+                        Sending behaviour is on for this mailbox, so warmup only sends when both this window and the workday on the Sending tab
+                        allow it. Switch it to Fixed schedule there to use these hours alone.
+                    </p>
+                )}
                 <div className="grid grid-cols-2 gap-3">
                     <FieldShell label="Start time">
                         <TimeSelect value={form.warmup_start_time || "08:00"} onChange={(v) => update({ warmup_start_time: v })} />

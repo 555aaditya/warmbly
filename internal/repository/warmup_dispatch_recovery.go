@@ -25,17 +25,20 @@ const unstartedWarmupDispatch = `t.task_type='warmup' AND t.status='completed'
 	AND NOT EXISTS(SELECT 1 FROM warmup_tokens wt WHERE wt.task_id=t.id AND wt.sent_message_id<>'')
 	AND NOT EXISTS(SELECT 1 FROM warmup_received wr WHERE wr.task_id=t.id)`
 
+// A preparation that never got a dispatch nonce was never authorized, so its message id, an unsent token and a refunded charge prove nothing left.
 const abandonedWarmupPreparation = `t.task_type='warmup' AND t.status='active' AND t.updated_at<$1
-	AND t.message_id='' AND t.completed_at IS NULL
+	AND t.completed_at IS NULL
 	AND t.send_reserved_at IS NULL AND t.send_result_state IS NULL AND t.send_result_evidence IS NULL
 	AND t.send_result_applied_at IS NULL AND t.send_released_at IS NULL
 	AND t.send_executor_nonce IS NULL AND t.send_executor_worker IS NULL
 	AND t.send_executor_started_at IS NULL AND t.send_executor_result IS NULL
 	AND w.dispatch_nonce IS NULL AND w.dispatch_worker_id IS NULL
-	AND w.dispatch_started_at IS NULL AND w.dispatch_result IS NULL AND w.warmup_charged_date IS NULL
-	AND NOT EXISTS(SELECT 1 FROM warmup_tokens wt WHERE wt.task_id=t.id)
+	AND w.dispatch_started_at IS NULL AND w.dispatch_result IS NULL
+	AND (w.warmup_charged_date IS NULL OR w.warmup_refunded_at IS NOT NULL)
+	AND NOT EXISTS(SELECT 1 FROM warmup_tokens wt WHERE wt.task_id=t.id AND (wt.sent_message_id<>'' OR wt.consumed_at IS NOT NULL OR wt.sent_retired_at IS NOT NULL))
 	AND NOT EXISTS(SELECT 1 FROM outbound_attempts a WHERE a.task_id=t.id)
-	AND NOT EXISTS(SELECT 1 FROM warmup_received wr WHERE wr.task_id=t.id)`
+	AND NOT EXISTS(SELECT 1 FROM warmup_received wr WHERE wr.task_id=t.id)
+	AND (t.message_id='' OR NOT EXISTS(SELECT 1 FROM warmup_received wr WHERE btrim(wr.message_id,'<>')=btrim(t.message_id,'<>')))`
 
 func (r *taskRepository) RecoverAbandonedWarmupPreparations(ctx context.Context, before time.Time, limit int) (int, error) {
 	rows, err := r.db.Query(ctx, `SELECT t.id FROM tasks t JOIN warmup_tasks w ON w.task_id=t.id
@@ -89,7 +92,14 @@ func (r *taskRepository) retireAbandonedWarmupPreparation(ctx context.Context, t
 	if err != nil {
 		return false, err
 	}
-	return tag.RowsAffected() == 1, tx.Commit(ctx)
+	if tag.RowsAffected() != 1 {
+		return false, nil
+	}
+	// Its tokens were never sent; leaving them would let a partner's sync verify mail that does not exist.
+	if _, err := tx.Exec(ctx, `DELETE FROM warmup_tokens WHERE task_id=$1 AND sent_message_id=''`, task); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
 }
 
 // Only nonce-gated commands that never began execution can be safely retired.
