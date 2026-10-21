@@ -39,9 +39,8 @@ func adjustmentFor(state models.WarmupHealthState) healthAdjustment {
 		// double minimum spacing so the mailbox gets a much lighter day.
 		return healthAdjustment{volumeMultiplier: 0.5, minWaitMultiplier: 2.0}
 	case models.WarmupHealthWatch:
-		// Watch band: lighter dampening — keep volume close to normal but
-		// stretch spacing modestly so we are not bursting.
-		return healthAdjustment{volumeMultiplier: 0.7, minWaitMultiplier: 1.5}
+		// Watch band: cold volume eases off while warmup keeps its normal spacing, since warming is how placement recovers.
+		return healthAdjustment{volumeMultiplier: 0.7, minWaitMultiplier: 1.0}
 	default:
 		return healthAdjustment{volumeMultiplier: 1.0, minWaitMultiplier: 1.0}
 	}

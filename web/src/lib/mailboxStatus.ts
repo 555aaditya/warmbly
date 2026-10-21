@@ -15,6 +15,14 @@ export function cloudStandingUnavailable(h?: { reason?: string } | null) {
     return h?.reason === "cloud_evidence_unavailable";
 }
 
+// A warning that only reports warmup reputation (watch, throttled, a low inbox rate): sending slows and lifts on its own while warming continues.
+export function reputationOnlyWarning(status?: Pick<AccountStatus, "health" | "errors" | "warmup_health" | "warmup_placement">) {
+    if (status?.health?.status !== "warning" || status.errors?.length || cloudStandingUnavailable(status.warmup_health)) return false;
+    const band = status.warmup_health?.state;
+    const placement = status.warmup_placement?.band;
+    return band === "watch" || band === "throttled" || placement === "fair" || placement === "poor";
+}
+
 // Account activity is not proof of deliverability or reputation readiness.
 export default function mailboxDisplayStatus(box: Inbox): MailboxDisplayStatus {
     if (box.status !== "active") return "inactive";

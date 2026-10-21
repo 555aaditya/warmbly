@@ -291,4 +291,21 @@ describe("mailbox status while account and Cloud checks settle", () => {
         expect(screen.queryAllByText("Last reported issue")).toHaveLength(0);
         expect(screen.queryByText("Last observed: Issue 40")).not.toBeInTheDocument();
     });
+
+    it("counts a mailbox slowed by its warmup band as warming, not as needing attention", async () => {
+        const original = { ...rows[0] };
+        Object.assign(rows[0], { warmup: new Date("2026-09-24T00:00:00Z"), warmup_paused_at: null, test_mode: null });
+        try {
+            const band = { state: "watch", score: 0, spam_score: 0, reason: "13% landed in spam", partner_mailboxes_7d: 0, partner_domains_7d: 0, partner_organizations_7d: 0, received_7d: 0, senders_7d: 0 } as const;
+            statusState.data = rows.map(measuredStatus);
+            statusState.data[0] = { ...measuredStatus(rows[0]), health: { status: "warning", score: 87, issues: ["Warmup reputation needs watching"] }, warmup_health: band };
+            statusState.observations = statusState.data.map((status) => ({ status, observedAt: Date.now(), current: true }));
+            await renderPage();
+            expect(screen.getByText("ramping up, 1 slowed")).toBeInTheDocument();
+            expect(screen.getByText("Needs attention").closest("div")?.parentElement).toHaveTextContent(/^Needs attention0/);
+        } finally {
+            Object.keys(rows[0]).forEach((key) => delete (rows[0] as unknown as Record<string, unknown>)[key]);
+            Object.assign(rows[0], original);
+        }
+    });
 });

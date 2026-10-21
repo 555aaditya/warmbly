@@ -64,7 +64,7 @@ func TestAdjustmentFor(t *testing.T) {
 		wantWaitMult float64
 	}{
 		{"healthy", models.WarmupHealthHealthy, 1.0, 1.0},
-		{"watch", models.WarmupHealthWatch, 0.7, 1.5},
+		{"watch", models.WarmupHealthWatch, 0.7, 1.0},
 		{"throttled", models.WarmupHealthThrottled, 0.5, 2.0},
 		{"quarantined-acts-as-healthy", models.WarmupHealthQuarantined, 1.0, 1.0},
 		{"blocked-acts-as-healthy", models.WarmupHealthBlocked, 1.0, 1.0},

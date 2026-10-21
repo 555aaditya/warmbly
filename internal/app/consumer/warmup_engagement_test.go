@@ -189,3 +189,60 @@ func TestSentFolderCopy(t *testing.T) {
 		})
 	}
 }
+
+func TestRecoveryEngagementOnlyRaises(t *testing.T) {
+	base := models.WarmupEngagementSettings{SpamRescueRate: 85, MarkReadRate: 95, MarkImportantRate: 30, StarRate: 20}
+	got := recoveryEngagement(base)
+	if got.SpamRescueRate != recoveryRescueRate || got.MarkImportantRate != recoveryImportantRate || got.MarkReadRate != 95 || got.StarRate != 20 {
+		t.Fatalf("recovery engagement = %+v", got)
+	}
+	high := recoveryEngagement(models.WarmupEngagementSettings{MarkReadRate: 100, MarkImportantRate: 80})
+	if high.MarkReadRate != 100 || high.MarkImportantRate != 80 {
+		t.Fatalf("recovery engagement lowered a configured rate: %+v", high)
+	}
+	// Nearly every spam landing is rescued, but the persona bias keeps some mailboxes below every time.
+	rescued := 0
+	for i := 0; i < 4000; i++ {
+		if actions, _ := engagementPlan(uuid.New(), got); slices.Contains(actions, models.WarmupActionRescueFromSpam) {
+			rescued++
+		}
+	}
+	if rescued < 3400 || rescued == 4000 {
+		t.Fatalf("rescued %d of 4000; want most but not all", rescued)
+	}
+}
+
+func TestRecoveryReplyChance(t *testing.T) {
+	cases := []struct {
+		rate       int
+		recovering bool
+		want       int
+	}{
+		{30, false, 30},
+		{30, true, recoveryReplyRate},
+		{80, true, 80},
+		{0, true, 0},
+	}
+	for _, c := range cases {
+		if got := recoveryReplyChance(c.rate, c.recovering); got != c.want {
+			t.Errorf("recoveryReplyChance(%d, %v) = %d, want %d", c.rate, c.recovering, got, c.want)
+		}
+	}
+}
+
+func TestRollPctBiasNeverReachesCertainty(t *testing.T) {
+	misses := 0
+	for i := 0; i < 5000; i++ {
+		if !rollPct(95, 1.2) {
+			misses++
+		}
+	}
+	if misses == 0 {
+		t.Fatal("a biased 95% chance succeeded every time")
+	}
+	for i := 0; i < 1000; i++ {
+		if !rollPct(100, 0.8) {
+			t.Fatal("an explicit 100% chance missed")
+		}
+	}
+}

@@ -101,7 +101,7 @@ Google, Microsoft, and Yahoo family totals are not interchangeable with their co
 
 ## Health bands
 
-Each mailbox sits in a band, shown as a colored chip. The band controls how Warmbly treats it. Watch and throttled are amber warnings on Emails, not red errors, unless a separate account problem is present. They do not apply a flat health-score deduction on top of the inbox-rate cap. Mailbox health is a score out of 100, not an inbox percentage.
+Each mailbox sits in a band, shown as a colored chip. The band controls how Warmbly treats it. Watch and throttled are amber warnings on Emails, not red errors, unless a separate account problem is present. A warming mailbox in either band still counts under **Warming** in the summary (shown as slowed), not under **Needs attention**, because it keeps warming and the band lifts on its own; the same goes for a warming mailbox whose only warning is a low inbox rate. They do not apply a flat health-score deduction on top of the inbox-rate cap. Mailbox health is a score out of 100, not an inbox percentage.
 
 | Band | Spam placement | Complaint rate | Bounce rate | Other triggers |
 | --- | --- | --- | --- | --- |
@@ -113,7 +113,7 @@ Each mailbox sits in a band, shown as a colored chip. The band controls how Warm
 A mailbox enters a band by crossing any single threshold. What each band does:
 
 - **Healthy**: sending normally, nothing to do.
-- **Watch**: warmup volume lowered and spacing increased. Cold volume is dampened by the same factor, so it slows across both before anything stricter. Lifts once spam placement is back below `7.5%`.
+- **Watch**: warmup keeps its volume and pace while the pool replies to and rescues more of its mail ([recovery engagement](/guides/warmup/#recovery-engagement)), because warming is how placement recovers. Cold volume is eased to `70%`, since cold mail is what costs reputation. Lifts once spam placement is back below `7.5%`.
 - **Throttled**: warmup keeps running at half volume with double spacing, because warming is how placement recovers, and cold volume is halved. Steps down to watch once spam placement is back below `15%`, then returns to healthy below `7.5%`. Separate [early-signal ramp limits](/guides/warmup/#holding-the-ramp-on-an-early-signal) still apply to fresh spam landings.
 - **Quarantine**: out of the shared paid warmup pool for `7 days`, as neither sender nor recipient. Cold sending is paused.
 - **Blocked**: out of the shared pool for `30 days`.

@@ -200,6 +200,12 @@ func (s *tasksService) HandleEmailTask(task *proto.ProcessTask) *errx.Error {
 		}
 	}
 
+	// A reply whose parent expired is closed here; the gates below would only keep rescheduling it.
+	if wt, err := s.taskRepo.GetWarmupTask(ctx, taskID); err == nil && wt != nil && wt.ParentTaskID != nil {
+		if parent, err := lineage.ExactWarmupParent(ctx, taskID); err == nil && parent == nil {
+			return s.closeWarmupThread(ctx, taskID, account.ID)
+		}
+	}
 	if err := s.sendAdmission(ctx, account); err != nil {
 		if errors.Is(err, repository.ErrSendAdmissionDenied) {
 			if err := lineage.RescheduleWarmupTask(ctx, taskID, time.Now().Add(5*time.Minute)); err != nil {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/pkg/generation"
@@ -90,7 +91,15 @@ func (s *tasksService) closeWarmupThread(ctx context.Context, taskID, accountID 
 	if err := s.taskRepo.UpdateTaskStatus(ctx, taskID, "cancelled"); err != nil {
 		return errx.InternalError()
 	}
-	_ = s.createWarmupTask(ctx, accountID, time.Now().Add(4*time.Hour))
+	// The mailbox continues on its normal cadence; closing a thread is not a reason to stall it.
+	next, err := s.scheduler.CalculateNextWarmupTime(ctx, accountID)
+	if err != nil {
+		next = time.Now().Add(4 * time.Hour)
+	}
+	// The task is already cancelled, so a retry would skip it; the warmup reconciler reseeds a mailbox left with none pending.
+	if err := s.createWarmupTask(ctx, accountID, next); err != nil {
+		log.Warn().Err(err).Str("task_id", taskID.String()).Str("email_account_id", accountID.String()).Msg("warmup thread closed but the next task could not be scheduled; the reconciler will reseed it")
+	}
 	return nil
 }
 
