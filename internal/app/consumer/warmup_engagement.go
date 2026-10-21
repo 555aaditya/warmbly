@@ -50,6 +50,8 @@ func (s *JobsService) getGenerationSettings(ctx context.Context) models.WarmupGe
 const (
 	recoveryReplyRate     = 60
 	recoveryImportantRate = 60
+	// Below 100 so the persona bias still varies it: no mailbox rescues every message.
+	recoveryRescueRate = 95
 )
 
 // senderRecovering reports whether the sender's warmup standing is watch or throttled.
@@ -63,7 +65,7 @@ func (s *JobsService) senderRecovering(ctx context.Context, senderID uuid.UUID) 
 
 // recoveryEngagement raises the positive signals for a recovering sender's mail and never lowers them.
 func recoveryEngagement(e models.WarmupEngagementSettings) models.WarmupEngagementSettings {
-	e.SpamRescueRate = 100
+	e.SpamRescueRate = max(e.SpamRescueRate, recoveryRescueRate)
 	e.MarkReadRate = max(e.MarkReadRate, 95)
 	e.MarkImportantRate = max(e.MarkImportantRate, recoveryImportantRate)
 	return e

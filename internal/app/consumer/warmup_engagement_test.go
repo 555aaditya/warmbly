@@ -193,19 +193,22 @@ func TestSentFolderCopy(t *testing.T) {
 func TestRecoveryEngagementOnlyRaises(t *testing.T) {
 	base := models.WarmupEngagementSettings{SpamRescueRate: 85, MarkReadRate: 95, MarkImportantRate: 30, StarRate: 20}
 	got := recoveryEngagement(base)
-	if got.SpamRescueRate != 100 || got.MarkImportantRate != recoveryImportantRate || got.MarkReadRate != 95 || got.StarRate != 20 {
+	if got.SpamRescueRate != recoveryRescueRate || got.MarkImportantRate != recoveryImportantRate || got.MarkReadRate != 95 || got.StarRate != 20 {
 		t.Fatalf("recovery engagement = %+v", got)
 	}
 	high := recoveryEngagement(models.WarmupEngagementSettings{MarkReadRate: 100, MarkImportantRate: 80})
 	if high.MarkReadRate != 100 || high.MarkImportantRate != 80 {
 		t.Fatalf("recovery engagement lowered a configured rate: %+v", high)
 	}
-	// Every spam landing of a recovering sender is rescued, whatever the persona bias.
-	for i := 0; i < 200; i++ {
-		actions, _ := engagementPlan(uuid.New(), got)
-		if !slices.Contains(actions, models.WarmupActionRescueFromSpam) {
-			t.Fatalf("recovering sender's mail not rescued: %v", actions)
+	// Nearly every spam landing is rescued, but the persona bias keeps some mailboxes below every time.
+	rescued := 0
+	for i := 0; i < 4000; i++ {
+		if actions, _ := engagementPlan(uuid.New(), got); slices.Contains(actions, models.WarmupActionRescueFromSpam) {
+			rescued++
 		}
+	}
+	if rescued < 3400 || rescued == 4000 {
+		t.Fatalf("rescued %d of 4000; want most but not all", rescued)
 	}
 }
 
