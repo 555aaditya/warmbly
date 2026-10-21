@@ -26,6 +26,10 @@ type CampaignService interface {
 	// allowed limits the results to those campaigns; nil is every campaign in the workspace.
 	Search(ctx context.Context, userID, query, cursor, folder, status, limit string, allowed []uuid.UUID) (*models.CampaignsResult, *errx.Error)
 	Overview(ctx context.Context, orgID string, allowed []uuid.UUID) (*models.CampaignsOverview, *errx.Error)
+	// RescheduleForMailboxes re-places, once each, the parked wakeups of every active campaign the mailboxes back after their sending hours change.
+	RescheduleForMailboxes(ctx context.Context, orgID uuid.UUID, accountIDs ...uuid.UUID)
+	// RescheduleForOrganization re-places every active campaign's parked wakeup after the workspace timezone changes.
+	RescheduleForOrganization(ctx context.Context, orgID uuid.UUID)
 	// Estimate projects how many contacts a set of segments reaches and how
 	// many sending days a mailbox pool needs under the per-mailbox caps.
 	// Read-only; the new-campaign flow shows it as its launch plan.

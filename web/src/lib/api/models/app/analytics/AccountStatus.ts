@@ -46,6 +46,8 @@ export interface WarmupStatusInfo {
     partner_limit?: WarmupPartnerLimit;
     /** Present while the newest warmup send was refused and none has gone out since. */
     send_failure?: WarmupSendFailure;
+    /** When the next warmup send is queued for; absent while nothing is queued. */
+    next_send_at?: Date;
 }
 
 // Why a warmup send failed: the mail server's answer when it gave one.

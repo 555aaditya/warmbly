@@ -127,6 +127,7 @@ import { useAdvisorEntityIndex } from "@/lib/api/hooks/app/advisor/useAdvisor";
 import type { AdvisorFinding } from "@/lib/api/models/app/advisor/Advisor";
 import { Checkbox } from "@/components/ui/checkbox";
 import { labelInk } from "@/lib/utils";
+import { nextSlotLabel } from "@/lib/helper/nextSlot";
 
 export default function AddressesPage() {
     const p = useUserProfile();
@@ -901,6 +902,7 @@ function MailboxRow({
 
     // A refused send outranks the count: it is why the count is not moving.
     const sendFailure = inCloud ? cloudSendFailure(cloud?.cloud) : warming ? ws?.send_failure : undefined;
+    const nextWarmup = warming && ws?.next_send_at ? nextSlotLabel(ws.next_send_at) : undefined;
 
     // Warmup column: what's flowing today and why.
     const warmupLabel = inCloud
@@ -987,14 +989,23 @@ function MailboxRow({
             </span>
         ) : warming ? (
             <span
-                className="inline-flex items-center gap-1.5"
-                title={sendFailure ? `The last warmup email was not sent: ${sendFailure.message}` : `${ws?.current_volume ?? 0} of ${ws?.target_volume ?? box.warmup_base} warmup emails sent today`}
+                className="inline-flex flex-col"
+                title={
+                    sendFailure
+                        ? `The last warmup email was not sent: ${sendFailure.message}`
+                        : `${ws?.current_volume ?? 0} of ${ws?.target_volume ?? box.warmup_base} warmup emails sent today${nextWarmup ? `. Next one is queued for ${nextWarmup}` : ""}`
+                }
             >
-                {sendFailure ? <AlertTriangleIcon className="w-3 h-3 shrink-0" /> : <span className="campaign-grid shrink-0" aria-hidden />}
-                <span>
-                    <AnimatedNumber value={ws?.current_volume ?? 0} />
-                    <span className="opacity-60">/{ws?.target_volume ?? box.warmup_base}</span>
+                <span className="inline-flex items-center gap-1.5">
+                    {sendFailure ? <AlertTriangleIcon className="w-3 h-3 shrink-0" /> : <span className="campaign-grid shrink-0" aria-hidden />}
+                    <span>
+                        <AnimatedNumber value={ws?.current_volume ?? 0} />
+                        <span className="opacity-60">/{ws?.target_volume ?? box.warmup_base}</span>
+                    </span>
                 </span>
+                {nextWarmup && !sendFailure && (
+                    <span className="font-sans text-[10.5px] text-slate-400 truncate">next {nextWarmup}</span>
+                )}
             </span>
         ) : (
             <span

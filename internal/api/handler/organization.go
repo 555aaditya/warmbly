@@ -205,6 +205,10 @@ func (h *Handler) UpdateOrganization(c *gin.Context) {
 
 	h.auditOrg(c, models.AuditActionUpdate, models.AuditEntityOrganization, orgID, nil, nil)
 
+	if req.Timezone != nil {
+		go h.replaceParkedSendsForWorkspace(*orgID)
+	}
+
 	// A presence privacy change re-gates connected sockets live (re-track /
 	// untrack / strip activity) rather than waiting for members to reconnect.
 	if req.PresenceShowOnline != nil || req.PresenceShowActivity != nil {
@@ -720,4 +724,16 @@ func parseUUIDList(raw string) ([]uuid.UUID, *errx.Error) {
 		out = append(out, id)
 	}
 	return out, nil
+}
+
+// replaceParkedSendsForWorkspace moves warmup and campaign work parked under the old workspace timezone; detached so a large workspace does not hold the request.
+func (h *Handler) replaceParkedSendsForWorkspace(orgID uuid.UUID) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	if h.CampaignService != nil {
+		h.CampaignService.RescheduleForOrganization(ctx, orgID)
+	}
+	if h.TasksService != nil {
+		h.TasksService.ReplaceWorkspaceWarmupSchedules(ctx, orgID)
+	}
 }

@@ -1927,12 +1927,8 @@ func (r *campaignRepository) AccountHasActiveCampaign(ctx context.Context, accou
 	return exists, err
 }
 
-// CountActiveCampaignsForAccount counts distinct active campaigns the mailbox
-// backs, via the campaign's email tags (tag strategy) OR an enabled
-// campaign_senders row (explicit strategy).
-func (r *campaignRepository) CountActiveCampaignsForAccount(ctx context.Context, accountID uuid.UUID) (int, error) {
-	query := `
-		SELECT COUNT(*) FROM (
+// activeCampaignsForAccountSQL selects the distinct active campaigns mailbox $1 backs: tag-resolved, explicit sender, or a tenant-wide "all" campaign.
+const activeCampaignsForAccountSQL = `
 			-- tag-resolved
 			SELECT c.id
 			FROM campaigns c
@@ -1959,7 +1955,31 @@ func (r *campaignRepository) CountActiveCampaignsForAccount(ctx context.Context,
 			  AND c.status = 'active'
 			  AND NOT EXISTS (SELECT 1 FROM campaign_email_tags cet2 WHERE cet2.campaign_id = c.id)
 			  AND NOT EXISTS (SELECT 1 FROM campaign_senders cs2 WHERE cs2.campaign_id = c.id AND cs2.enabled)
-		) AS active_campaigns`
+`
+
+// ActiveCampaignIDsForAccount lists orgID's active campaigns the mailbox backs, under the same scope rule as the count.
+func (r *campaignRepository) ActiveCampaignIDsForAccount(ctx context.Context, orgID, accountID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := resultDB(ctx, r.DB).Query(ctx, `SELECT c.id FROM (`+activeCampaignsForAccountSQL+`) a JOIN campaigns c ON c.id = a.id WHERE c.organization_id = $2`, accountID, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// CountActiveCampaignsForAccount counts distinct active campaigns the mailbox
+// backs, via the campaign's email tags (tag strategy) OR an enabled
+// campaign_senders row (explicit strategy).
+func (r *campaignRepository) CountActiveCampaignsForAccount(ctx context.Context, accountID uuid.UUID) (int, error) {
+	query := `SELECT COUNT(*) FROM (` + activeCampaignsForAccountSQL + `) AS active_campaigns`
 	var count int
 	err := resultDB(ctx, r.DB).QueryRow(ctx, query, accountID).Scan(&count)
 	return count, err
@@ -2400,4 +2420,22 @@ func connectLinearSequenceTx(ctx context.Context, tx pgx.Tx, stepIDs []uuid.UUID
 		}
 	}
 	return nil
+}
+
+// ActiveCampaignIDsForOrganization lists the workspace's active campaigns.
+func (r *campaignRepository) ActiveCampaignIDsForOrganization(ctx context.Context, orgID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := resultDB(ctx, r.DB).Query(ctx, `SELECT id FROM campaigns WHERE organization_id = $1 AND status = 'active'`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }

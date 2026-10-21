@@ -2882,3 +2882,22 @@ func (r *emailRepository) ListOrganizationIDs(ctx context.Context) ([]uuid.UUID,
 	}
 	return out, rows.Err()
 }
+
+// WarmingOnWorkspaceClock lists the workspace's warming mailboxes that read their hours in the workspace timezone.
+func (r *emailRepository) WarmingOnWorkspaceClock(ctx context.Context, orgID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := resultDB(ctx, r.DB).Query(ctx, `SELECT id FROM email_accounts
+		WHERE organization_id = $1 AND COALESCE(timezone, '') = '' AND status = 'active' AND warmup IS NOT NULL AND warmup_paused_at IS NULL`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}

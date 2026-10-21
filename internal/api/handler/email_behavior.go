@@ -120,6 +120,11 @@ func (h *Handler) UpdateEmailBehavior(c *gin.Context) {
 		return
 	}
 
+	// The profile shapes both warmup's and campaigns' hours, so their parked slots move with it.
+	if orgID := middleware.GetOrganizationID(c); orgID != nil {
+		h.replaceParkedSends(c.Request.Context(), *orgID, accountID, true, true)
+	}
+
 	h.auditOrg(c, models.AuditActionUpdate, models.AuditEntityEmailAccount, &accountID, nil, nil)
 	c.JSON(http.StatusOK, profile)
 }

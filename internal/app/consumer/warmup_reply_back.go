@@ -48,7 +48,14 @@ func (s *JobsService) scheduleWarmupReplyBack(ctx context.Context, token *models
 	at := time.Now().Add(replyBackMinDelay +
 		time.Duration(uint64(binary.BigEndian.Uint32(token.Token[4:8]))%uint64(replyBackMaxDelay-replyBackMinDelay)))
 	// A reply at 04:00 from a mailbox that never sends then is worse than none.
-	at = withinWarmupHours(at, recipient)
+	if rolled := withinWarmupHours(at, recipient); !rolled.Equal(at) {
+		// Spread replies rolled to the opening over its first hour (or the whole window when shorter), so the pool does not answer on the stroke of it.
+		spread := uint32(3600)
+		if span := models.ClockMinutes(recipient.WarmupEndTime, 20*60) - models.ClockMinutes(recipient.WarmupStartTime, 8*60); span > 0 && span*60 < int(spread) {
+			spread = uint32(span * 60)
+		}
+		at = rolled.Add(time.Duration(binary.BigEndian.Uint32(token.Token[8:12])%spread) * time.Second)
+	}
 
 	moved, err := lineage.BindWarmupSuccessor(ctx, token.TaskID, recipientAccountID, receivedIDs[0], at)
 	if err != nil {

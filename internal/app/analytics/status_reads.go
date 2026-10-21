@@ -20,6 +20,7 @@ type statusReads struct {
 	cloud                map[uuid.UUID]*models.WarmupHealthInfo
 	ramp                 *rampReads
 	failures             map[uuid.UUID]*models.WarmupSendFailure
+	nextWarmup           map[uuid.UUID]time.Time
 	coldRamp             map[uuid.UUID]repository.ColdRampState
 	lifecycles           map[uuid.UUID]models.SendLifecycleState
 	sendHolds            map[uuid.UUID]repository.SendRecoveryHold
@@ -85,6 +86,13 @@ func (s *analyticsService) loadStatusReads(ctx context.Context, emails []models.
 		}
 	}
 	reads.ramp = s.loadRampReads(ctx, warming, reads.now)
+	if reader, ok := s.warmupRepo.(interface {
+		NextWarmupSends(context.Context, []uuid.UUID) (map[uuid.UUID]time.Time, error)
+	}); ok && len(warming) > 0 {
+		if m, err := reader.NextWarmupSends(ctx, warming); err == nil {
+			reads.nextWarmup = m
+		}
+	}
 	if len(failing) > 0 {
 		if m, err := s.warmupRepo.LastWarmupSendFailures(ctx, failing, reads.now.Add(-24*time.Hour)); err == nil {
 			reads.failures = m

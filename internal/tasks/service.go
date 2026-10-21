@@ -57,6 +57,10 @@ type TasksService interface {
 
 	// Warmup scheduling lifecycle
 	EnsureWarmupScheduled(ctx context.Context, accountID uuid.UUID) error
+	// ReplaceWarmupSchedule re-places the parked warmup wakeup after the mailbox's hours change.
+	ReplaceWarmupSchedule(ctx context.Context, accountID uuid.UUID) error
+	// ReplaceWorkspaceWarmupSchedules does the same for every warming mailbox reading its hours in the workspace timezone.
+	ReplaceWorkspaceWarmupSchedules(ctx context.Context, orgID uuid.UUID)
 	StartWarmupReconciler(ctx context.Context, interval time.Duration)
 
 	// StartCampaignReconciler re-seeds active campaigns whose self-perpetuating

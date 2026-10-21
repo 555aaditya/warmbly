@@ -42,6 +42,8 @@ Check today's rolled workday at the top of the tab to see when the mailbox will 
 - Times are local to the mailbox's timezone, or the workspace timezone when it has none.
 - Editing the ranges does not change today. The new ranges apply from the next roll.
 - Warmup keeps the same working days and hours, but does not count against the cold limits.
+- Warmup waits for the workday too, so a mailbox connected after its hours end sends its first warmup email at the start of the next working day. The mailbox list shows when the next one is queued.
+- Switching to Fixed schedule, back again, or changing the working days moves the mailbox's queued warmup send, and the next send of every active campaign it backs, straight away onto whichever schedule now applies.
 
 <Fold>
 

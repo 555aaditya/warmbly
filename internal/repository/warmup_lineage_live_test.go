@@ -444,3 +444,55 @@ func TestLiveLineageSecondReplyNeverAddsAPendingTask(t *testing.T) {
 		t.Fatalf("pending warmup tasks=%d, want 1", pending)
 	}
 }
+
+func TestLiveReplaceParkedWarmupTaskMovesWakeupsAndOnlyPullsRepliesForward(t *testing.T) {
+	f, r := lineageFixture(t)
+	ctx := t.Context()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := f.pool.Exec(ctx, sql, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scheduled := func(id uuid.UUID) time.Time {
+		t.Helper()
+		var at time.Time
+		if err := f.pool.QueryRow(ctx, `SELECT scheduled_at FROM tasks WHERE id=$1`, id).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+	now := time.Now().Truncate(time.Second)
+
+	wakeup := uuid.New()
+	exec(`INSERT INTO tasks(id,task_type,email_account_id,status,scheduled_at,message_id) VALUES($1,'warmup',$2,'pending',$3,'')`, wakeup, f.recipient, now.Add(14*time.Hour))
+	exec(`INSERT INTO warmup_tasks(task_id) VALUES($1)`, wakeup)
+	for _, want := range []time.Time{now.Add(10 * time.Minute), now.Add(3 * time.Hour)} {
+		if moved, err := r.ReplaceParkedWarmupTask(ctx, f.recipient, want); err != nil || !moved {
+			t.Fatalf("wakeup not moved: moved=%v err=%v", moved, err)
+		}
+		if got := scheduled(wakeup); !got.Equal(want) {
+			t.Fatalf("wakeup at %v, want %v", got, want)
+		}
+	}
+	exec(`UPDATE tasks SET status='cancelled' WHERE id=$1`, wakeup)
+
+	receipt := uuid.New()
+	exec(`INSERT INTO warmup_received(email_account_id,internal_id,sender_account_id,message_id,created_at) VALUES($1,$2,$3,'<parent-replace@test.local>',$4)`, f.recipient, receipt, f.sender, now)
+	reply := uuid.New()
+	exec(`INSERT INTO tasks(id,task_type,email_account_id,status,scheduled_at,message_id) VALUES($1,'warmup',$2,'pending',$3,'')`, reply, f.recipient, now.Add(14*time.Hour))
+	exec(`INSERT INTO warmup_tasks(task_id,target_account_id,parent_task_id,parent_received_id) VALUES($1,$2,$3,$4)`, reply, f.sender, f.task, receipt)
+	floor := now.Add(45 * time.Minute)
+	if moved, err := r.ReplaceParkedWarmupTask(ctx, f.recipient, now.Add(5*time.Minute)); err != nil || !moved {
+		t.Fatalf("reply not pulled forward: moved=%v err=%v", moved, err)
+	}
+	if got := scheduled(reply); !got.Equal(floor) {
+		t.Fatalf("reply at %v, want its floor %v", got, floor)
+	}
+	if moved, err := r.ReplaceParkedWarmupTask(ctx, f.recipient, now.Add(6*time.Hour)); err != nil || moved {
+		t.Fatalf("reply pushed later: moved=%v err=%v", moved, err)
+	}
+	if got := scheduled(reply); !got.Equal(floor) {
+		t.Fatalf("reply moved to %v, want it kept at %v", got, floor)
+	}
+}
