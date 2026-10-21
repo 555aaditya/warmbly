@@ -91,6 +91,11 @@ func (r *conflictingEnrollmentAccounts) NewOauthAccount(context.Context, string,
 	return nil, r.xerr
 }
 
+// FindInOrganization finds no adoptable copy, so the conflict stands.
+func (r *conflictingEnrollmentAccounts) FindInOrganization(context.Context, uuid.UUID, string) (*models.EmailRef, *errx.Error) {
+	return nil, nil
+}
+
 func TestEnrollmentExplainsAnExistingUnassociatedCloudMailbox(t *testing.T) {
 	t.Setenv("BILLING_PROVIDER", "none")
 	for _, provider := range []models.InboxProvider{models.InboxProviderSMTPIMAP, models.InboxProviderGoogle, models.InboxProviderOutlook} {
