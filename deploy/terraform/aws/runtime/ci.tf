@@ -67,8 +67,10 @@ data "aws_iam_policy_document" "github_deploy" {
     }
   }
   statement {
-    actions   = ["iam:PassRole"]
-    resources = [aws_iam_role.migration_execution.arn]
+    actions = ["iam:PassRole"]
+    resources = concat([aws_iam_role.migration_execution.arn], flatten([
+      for name in ["backend", "consumer"] : [aws_iam_role.execution[name].arn, aws_iam_role.application[name].arn]
+    ]))
     condition {
       test     = "StringEquals"
       variable = "iam:PassedToService"
