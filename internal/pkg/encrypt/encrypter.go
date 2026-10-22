@@ -19,6 +19,9 @@ type Encrypted struct {
 	Nonce      string `json:"n" db:"nonce"`       // hex
 }
 
+// ErrUnreadable is a value shaped like ciphertext that no configured key opens.
+var ErrUnreadable = errors.New("sealed value does not open under any configured credential key")
+
 // Encrypter performs AES-GCM encryption with a fixed 32-byte key.
 type Encrypter struct {
 	aead     cipher.AEAD
@@ -147,6 +150,43 @@ func (e *Encrypter) DecryptEncrypted(enc *Encrypted) ([]byte, error) {
 		}
 	}
 	return nil, err
+}
+
+// Reseal returns stored sealed under the primary key when only a read key opens it; changed is false when the primary already does.
+func (e *Encrypter) Reseal(stored string) (resealed string, changed bool, err error) {
+	enc, err := ParseHex(stored)
+	if err != nil {
+		return "", false, ErrUnreadable
+	}
+	nonce, nerr := hex.DecodeString(enc.Nonce)
+	ct, cerr := hex.DecodeString(enc.Ciphertext)
+	if nerr != nil || cerr != nil {
+		return "", false, ErrUnreadable
+	}
+	if _, err := e.aead.Open(nil, nonce, ct, nil); err == nil {
+		return "", false, nil
+	}
+	for _, reader := range e.readKeys {
+		plain, err := reader.Open(nil, nonce, ct, nil)
+		if err != nil {
+			continue
+		}
+		sealed, err := e.EncryptBytes(plain)
+		if err != nil {
+			return "", false, err
+		}
+		return sealed.Hex(), true, nil
+	}
+	return "", false, ErrUnreadable
+}
+
+// LooksSealed reports whether stored has the shape Encrypt produces: hex nonce, ciphertext and a full GCM tag.
+func LooksSealed(stored string) bool {
+	if len(stored)%2 != 0 || len(stored) < 2*(12+16) {
+		return false
+	}
+	_, err := hex.DecodeString(stored)
+	return err == nil
 }
 
 // ---------------------------------------------------------------------
