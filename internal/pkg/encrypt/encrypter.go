@@ -62,11 +62,9 @@ func FromEnv() (*Encrypter, error) {
 
 // NewEncrypterFromHex creates an Encrypter from a 64-character hex key.
 func NewEncrypterFromHex(hexKey string) (*Encrypter, error) {
+	// A decoding error quotes the offending byte, which is key material.
 	key, err := hex.DecodeString(hexKey)
-	if err != nil {
-		return nil, err
-	}
-	if len(key) != 32 {
+	if err != nil || len(key) != 32 {
 		return nil, errors.New("key must be 32 bytes (64 hex chars)")
 	}
 	return NewEncrypter(key)

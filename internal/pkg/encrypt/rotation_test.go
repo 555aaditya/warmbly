@@ -123,3 +123,10 @@ func TestResealMovesReadKeyValuesToThePrimary(t *testing.T) {
 		t.Fatal("LooksSealed must recognise only the sealed hex format")
 	}
 }
+
+func TestInvalidKeyErrorDoesNotQuoteKeyMaterial(t *testing.T) {
+	_, err := NewEncrypterFromHex(strings.Repeat("a", 63) + "z")
+	if err == nil || strings.Contains(err.Error(), "z") {
+		t.Fatalf("an invalid key must be refused without quoting it, got %v", err)
+	}
+}

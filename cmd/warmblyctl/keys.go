@@ -194,7 +194,7 @@ func runKeysScan(ctx context.Context, name string, args []string, reseal bool) e
 func loadKeyring(ctx context.Context) (*keyring, error) {
 	instance, err := encrypt.FromEnv()
 	if err != nil {
-		return nil, fmt.Errorf("CREDENTIALS_ENCRYPTION_KEY or its read keys are invalid: %w", err)
+		return nil, errors.New("CREDENTIALS_ENCRYPTION_KEY or CREDENTIALS_ENCRYPTION_READ_KEYS is invalid: each must be 64 hex characters")
 	}
 	if instance == nil {
 		return nil, errors.New("CREDENTIALS_ENCRYPTION_KEY is not set. Run this inside the backend container, where the keys are configured.")
