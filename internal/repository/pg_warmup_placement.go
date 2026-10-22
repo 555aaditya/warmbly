@@ -65,7 +65,7 @@ func NewWarmupPlacementRepository(d *db.DB) WarmupPlacementRepository {
 func (r *warmupPlacementRepository) RecordPlacement(ctx context.Context, recipientID, internalID uuid.UUID, group, host, landed string, rescued bool) (*WarmupPlacementSender, error) {
 	const query = `
 		WITH claimed AS (
-			UPDATE warmup_received SET placed = true
+			UPDATE warmup_received SET placed = true, placement_group = $3, placement_host = $4
 			WHERE email_account_id = $1 AND internal_id = $2 AND NOT placed
 			RETURNING sender_account_id, created_at, first_landing
 		), counted AS (
@@ -111,10 +111,11 @@ func (r *warmupPlacementRepository) RecordRescueOutcome(ctx context.Context, rec
 		WITH claimed AS (
 			UPDATE warmup_received SET rescue_outcome = $5, rescue_reported_at = now()
 			WHERE email_account_id = $1 AND internal_id = $2 AND rescue_outcome IS NULL
-			RETURNING sender_account_id, created_at
+			RETURNING sender_account_id, created_at, placement_group, placement_host
 		), counted AS (
+			-- Receipts placed before the keys were stored fall back to the recipient's current ones.
 			INSERT INTO warmup_placement_daily (sender_account_id, date, recipient_group, recipient_host, rescue_confirmed, rescue_missing, rescue_failed)
-			SELECT sender_account_id, (created_at AT TIME ZONE 'UTC')::date, $3, $4,
+			SELECT sender_account_id, (created_at AT TIME ZONE 'UTC')::date, COALESCE(placement_group, $3), COALESCE(placement_host, $4),
 				($5 IN ('moved','already_out'))::int, ($5 = 'gone')::int, ($5 = 'failed')::int
 			FROM claimed
 			ON CONFLICT (sender_account_id, date, recipient_group, recipient_host) DO UPDATE SET

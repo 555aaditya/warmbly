@@ -38,9 +38,9 @@ func (w *WorkerService) HandleWarmupAction(ctx context.Context, action models.Wa
 	if err := w.handleWarmupAction(ctx, action, &outcome); err != nil {
 		return err
 	}
-	// A rescue that never reached the mailbox did not move anything.
+	// A rescue that never ran reports nothing, so its receipt stays unreported rather than failed.
 	if outcome == "" {
-		outcome = models.WarmupRescueFailed
+		return nil
 	}
 	return w.Produce(models.JobEventTypeWarmupRescued, action.EmailID.String(), &models.JobEventWarmupRescued{
 		UserID: action.UserID, EmailID: action.EmailID, InternalID: internalID, Outcome: outcome,

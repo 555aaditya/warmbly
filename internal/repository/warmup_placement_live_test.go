@@ -86,8 +86,8 @@ func TestLiveWarmupPlacementRollup(t *testing.T) {
 		t.Fatalf("a missing receipt must not count, got %+v", got)
 	}
 
-	// A rescue outcome counts once, against the receipt's own day.
-	if got, err := repo.RecordRescueOutcome(ctx, recipient, spam, "google", "google_workspace", models.WarmupRescueMoved); err != nil || got == nil || got.ID != sender {
+	// A rescue outcome counts once, against the receipt's own day and the host it arrived at, even after the host is reclassified.
+	if got, err := repo.RecordRescueOutcome(ctx, recipient, spam, "google", "gmail", models.WarmupRescueMoved); err != nil || got == nil || got.ID != sender {
 		t.Fatalf("a rescue outcome names its sender, got %+v, %v", got, err)
 	}
 	if got, err := repo.RecordRescueOutcome(ctx, recipient, spam, "google", "google_workspace", models.WarmupRescueFailed); err != nil || got != nil {
