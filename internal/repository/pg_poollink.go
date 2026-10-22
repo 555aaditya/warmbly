@@ -51,8 +51,8 @@ type poolLinkRepository struct {
 	connectSession SessionConnector
 }
 
-func NewPoolLinkRepository(db *pgxpool.Pool, connectors ...SessionConnector) PoolLinkRepository {
-	return &poolLinkRepository{db: db, connectSession: sessionConnector(db, connectors)}
+func NewPoolLinkRepository(db *pgxpool.Pool, connector SessionConnector) PoolLinkRepository {
+	return &poolLinkRepository{db: db, connectSession: requireSessionConnector(connector)}
 }
 
 const poolLinkCodeColumns = `id, user_code, instance_name, instance_url, instance_version, status, organization_id, instance_id, expires_at, created_at, remote_organization_id`

@@ -70,6 +70,12 @@ Kafka transport, codec, topics and consumer groups during a compute migration.
 Check connectivity for both Kafka and Schema Registry. External workers need
 their own network path if the cluster becomes private.
 
+Keep existing tracking hostnames registered with the edge provider, including
+their TLS certificates and origin configuration. Put those hostnames in
+`tracking_additional_hosts` so the ALB forwards their original Host headers to
+the tracking service. The empty default keeps ordinary single-host deployments
+unchanged. Validate each hostname before moving its traffic.
+
 ## Size tasks from measurements
 
 Fargate bills provisioned CPU and memory. Its smallest Linux task has 0.25 vCPU

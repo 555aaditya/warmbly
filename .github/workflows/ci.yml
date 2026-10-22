@@ -70,6 +70,7 @@ jobs:
               - '.github/workflows/ci.yml'
               - '.github/workflows/deploy-aws.yml'
               - '.github/scripts/aws-deploy*.cjs'
+              - '.github/aws-deploy/**'
             tracking:
               - 'tracking/**'
             realtime:
@@ -892,10 +893,10 @@ jobs:
         with:
           node-version: "22"
       - name: Install deployment client
-        run: npm install --prefix "$RUNNER_TEMP/aws-deploy" --omit=dev --ignore-scripts --no-audit --no-fund @aws-sdk/client-ecs@3.1155.0
+        run: npm ci --prefix .github/aws-deploy --omit=dev --ignore-scripts --no-audit --no-fund
       - name: Check migration and rollback gates
         env:
-          NODE_PATH: ${{ runner.temp }}/aws-deploy/node_modules
+          NODE_PATH: ${{ github.workspace }}/.github/aws-deploy/node_modules
         run: node --test .github/scripts/aws-deploy.test.cjs
 
   ci-status:

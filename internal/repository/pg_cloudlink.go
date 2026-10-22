@@ -74,8 +74,8 @@ func (r *cloudLinkRepository) CloudStatuses(ctx context.Context, mailboxes []mod
 }
 
 // NewCloudLinkRepository seals the instance token with the mailbox credential key.
-func NewCloudLinkRepository(db *pgxpool.Pool, enc *encrypt.Encrypter, connectors ...SessionConnector) CloudLinkRepository {
-	return &cloudLinkRepository{db: db, encrypt: enc, connectSession: sessionConnector(db, connectors)}
+func NewCloudLinkRepository(db *pgxpool.Pool, enc *encrypt.Encrypter, connector SessionConnector) CloudLinkRepository {
+	return &cloudLinkRepository{db: db, encrypt: enc, connectSession: requireSessionConnector(connector)}
 }
 
 func (r *cloudLinkRepository) CanStore() error {

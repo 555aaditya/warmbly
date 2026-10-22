@@ -349,7 +349,7 @@ resource "aws_ecs_service" "service" {
   platform_version                   = "1.4.0"
   deployment_minimum_healthy_percent = 100
   deployment_maximum_percent         = 200
-  health_check_grace_period_seconds  = each.value.port == null ? null : 120
+  health_check_grace_period_seconds  = contains(keys(local.public_services), each.key) ? 120 : null
   enable_ecs_managed_tags            = true
   propagate_tags                     = "SERVICE"
   lifecycle {
@@ -365,7 +365,7 @@ resource "aws_ecs_service" "service" {
     assign_public_ip = true
   }
   dynamic "load_balancer" {
-    for_each = each.value.port == null ? [] : [each.value.port]
+    for_each = contains(keys(local.public_services), each.key) ? [each.value.port] : []
     content {
       target_group_arn = aws_lb_target_group.service[each.key].arn
       container_name   = each.key

@@ -1,7 +1,16 @@
 #!/bin/sh
 set -eu
 hostnamectl set-hostname '${name}'
-dnf -y --setopt=retries=20 install docker
+retry() {
+  attempts=0
+  while ! "$@"; do
+    attempts=$((attempts + 1))
+    if [ "$attempts" -ge 24 ]; then return 1; fi
+    sleep 5
+  done
+  return 0
+}
+retry dnf -y --setopt=retries=20 install docker
 systemctl enable --now docker
 install -d -m 700 /etc/warmbly /var/lib/warmbly /var/lib/warmbly/node
 printf '%s\n' 'WARMBLY_IMAGE_REF=${image}' > /var/lib/warmbly/image-ref
@@ -26,5 +35,5 @@ TimeoutStopSec=150
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
-docker pull '${image}'
+retry docker pull '${image}'
 printf '%s\n' 'Worker host ready; service stays stopped until an operator completes the handover'

@@ -40,6 +40,11 @@ variable "kafka_cluster_name" {
   type = string
 }
 
+variable "kafka_region" {
+  description = "Region of the existing cluster; adoption must preserve its placement"
+  type        = string
+}
+
 variable "kafka_availability" {
   description = "Existing availability configuration; adoption must not change it"
   type        = string
@@ -72,7 +77,7 @@ resource "confluent_kafka_cluster" "production" {
   display_name = var.kafka_cluster_name
   availability = var.kafka_availability
   cloud        = "AWS"
-  region       = "us-east-1"
+  region       = var.kafka_region
   basic {}
   environment {
     id = confluent_environment.production.id

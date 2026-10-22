@@ -29,6 +29,8 @@ Authenticate PlanetScale with `PLANETSCALE_SERVICE_TOKEN_ID` and
 credentials through the process environment from a protected source. Keep them
 separate from the application credentials and out of Terraform input variables.
 Short-lived, read-scoped credentials are sufficient for the initial adoption.
+Set `kafka_region` to the existing cluster's actual region before planning its
+adoption. Compute placement in AWS does not relocate a Kafka cluster.
 
 Review the adoption plan before applying it. Its managed resources must show
 imports only, with zero creates, updates, replacements or deletes. Correct any

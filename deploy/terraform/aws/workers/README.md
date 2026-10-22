@@ -24,6 +24,8 @@ operator delivers configuration from the worker's Secrets Manager container
 over SSH into `/etc/warmbly/node.env`, owned by root with mode `0600`. Credentials
 never enter user data, Terraform or command arguments. Preserve worker IDs,
 mailbox encryption keys, OAuth identities and compatible broker configuration.
+Package installation and image download retry while the static IP association
+becomes usable during first boot.
 
 Never run both hosts with the same worker ID. Drain and stop the previous
 process, confirm it exited, start the replacement, and verify fresh heartbeats,
@@ -36,6 +38,11 @@ Private Valkey access is allowed from the worker security group. Coordinate its
 activation with every control-plane client, and check configured mail ports and
 AWS outbound restrictions before moving work. Do not switch one worker to an
 empty independent cache.
+
+The dependency check expects `CACHE_HOST` and `NEW_REDIS_PASSWORD` in addition to
+the worker environment. Supply the replacement password through protected
+temporary input. It verifies both TLS certificate validation and an authenticated
+`PING` against private Valkey, without changing the active cache endpoint.
 
 Instances and addresses have destruction guards. AMI and bootstrap drift do not
 silently replace a running worker. Roll out host upgrades deliberately while

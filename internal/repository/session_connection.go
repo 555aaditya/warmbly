@@ -4,16 +4,13 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type SessionConnector func(context.Context) (*pgx.Conn, error)
 
-func sessionConnector(pool *pgxpool.Pool, connectors []SessionConnector) SessionConnector {
-	if len(connectors) > 0 && connectors[0] != nil {
-		return connectors[0]
+func requireSessionConnector(connector SessionConnector) SessionConnector {
+	if connector == nil {
+		panic("direct database session connector is required")
 	}
-	return func(ctx context.Context) (*pgx.Conn, error) {
-		return pgx.ConnectConfig(ctx, pool.Config().ConnConfig)
-	}
+	return connector
 }

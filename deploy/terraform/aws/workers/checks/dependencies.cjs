@@ -1,5 +1,4 @@
 const https = require("node:https");
-const tls = require("node:tls");
 const { Kafka, logLevel } = require("kafkajs");
 const { createClient } = require("redis");
 
@@ -16,12 +15,13 @@ async function main() {
     try { await client.connect(); if (await client.ping() !== "PONG") throw new Error("Cache check failed"); }
     finally { client.destroy(); }
   });
-  await check("private_cache_tls", () => new Promise((resolve, reject) => {
-    const socket = tls.connect({ host: process.env.CACHE_HOST, port: 6379, servername: process.env.CACHE_HOST, rejectUnauthorized: true }, () => { socket.end(); resolve(); });
-    socket.setTimeout(10000, () => socket.destroy());
-    socket.on("error", reject);
-    socket.on("timeout", () => reject(new Error("Timeout")));
-  }));
+  await check("private_cache_tls", async () => {
+    if (!process.env.NEW_REDIS_PASSWORD) throw new Error("Replacement cache credential required");
+    const client = createClient({ password: process.env.NEW_REDIS_PASSWORD, socket: { host: process.env.CACHE_HOST, port: 6379, tls: true, servername: process.env.CACHE_HOST, rejectUnauthorized: true, connectTimeout: 10000, reconnectStrategy: false } });
+    client.on("error", () => {});
+    try { await client.connect(); if (await client.ping() !== "PONG") throw new Error("Cache check failed"); }
+    finally { client.destroy(); }
+  });
   await check("replacement_kafka_key", async () => {
     const kafka = new Kafka({ clientId: "worker-migration-validation", brokers: process.env.KAFKA_BOOTSTRAP_SERVERS.split(","), ssl: true, sasl: { mechanism: "plain", username: process.env.KAFKA_SASL_USERNAME, password: process.env.KAFKA_SASL_PASSWORD }, logLevel: logLevel.NOTHING, connectionTimeout: 10000, requestTimeout: 15000, retry: { retries: 1 } });
     const admin = kafka.admin({ allowAutoTopicCreation: false });
