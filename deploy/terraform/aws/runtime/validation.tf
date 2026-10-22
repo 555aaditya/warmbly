@@ -28,6 +28,7 @@ resource "aws_iam_role_policy" "validation_execution" {
   policy = data.aws_iam_policy_document.validation_execution.json
 }
 resource "aws_ecs_task_definition" "validation" {
+  skip_destroy             = true
   family                   = "${var.name}-validation"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"

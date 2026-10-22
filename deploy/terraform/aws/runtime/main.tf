@@ -296,6 +296,7 @@ resource "aws_service_discovery_service" "backend" {
 
 resource "aws_ecs_task_definition" "service" {
   for_each                 = var.services
+  skip_destroy             = true
   family                   = "${var.name}-${each.key}"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"

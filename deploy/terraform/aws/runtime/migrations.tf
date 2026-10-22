@@ -44,6 +44,7 @@ resource "aws_iam_role_policy" "migration_execution" {
 }
 
 resource "aws_ecs_task_definition" "migration" {
+  skip_destroy             = true
   family                   = "${var.name}-migration"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
@@ -84,6 +85,7 @@ output "migration_task_definition" {
 }
 
 resource "aws_ecs_task_definition" "database_check" {
+  skip_destroy             = true
   family                   = "${var.name}-database-check"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
@@ -109,6 +111,7 @@ output "database_check_task_definition" {
 }
 
 resource "aws_ecs_task_definition" "realtime_database_check" {
+  skip_destroy             = true
   family                   = "${var.name}-realtime-database-check"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"

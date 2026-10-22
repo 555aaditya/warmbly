@@ -53,6 +53,9 @@ service updates. A successful migration permits sequential backend and consumer
 rollouts, verifying that the requested revision becomes stable. A rollout failure
 restores the previous service revisions and counts, retaining the current schema.
 Inspect rollback health separately. The workflow never runs down migrations.
+Task definitions use `skip_destroy` so earlier revisions remain active for
+rollback. Retain their referenced images and secret versions throughout the
+rollback window; retire them separately after it closes.
 
 The runtime sets `DB_MIGRATIONS_ON_START=false` for the backend. New application
 images must support that setting and schema readiness before activation. Keep
