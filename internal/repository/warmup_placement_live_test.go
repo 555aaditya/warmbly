@@ -185,6 +185,18 @@ func TestLiveWarmupPlacementRollup(t *testing.T) {
 			t.Fatalf("unselected placement report = %+v, %v", data, err)
 		}
 	}
+
+	// An outcome that arrives before its placement fixes the host, and the placement then counts under it.
+	early := receipt(recipient)
+	if got, err := repo.RecordRescueOutcome(ctx, recipient, early, "google", "gmail", models.WarmupRescueMoved); err != nil || got == nil {
+		t.Fatalf("an outcome before placement must still count, got %+v, %v", got, err)
+	}
+	record(recipient, early, "google", "google_workspace", models.WarmupLandedSpam, true)
+	var spamAt, rescuedAt, confirmedAt int
+	if err := pool.QueryRow(ctx, `SELECT spam, rescued, rescue_confirmed FROM warmup_placement_daily
+	        WHERE sender_account_id = $1 AND recipient_host = 'gmail'`, sender).Scan(&spamAt, &rescuedAt, &confirmedAt); err != nil || spamAt != 1 || rescuedAt != 1 || confirmedAt != 1 {
+		t.Fatalf("early outcome row = spam %d, rescued %d, confirmed %d, %v; want the request and outcome on one host row", spamAt, rescuedAt, confirmedAt, err)
+	}
 }
 
 // Receipts no live arrival counted (history, or a consumer mid-upgrade) are
