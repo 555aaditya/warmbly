@@ -294,6 +294,40 @@ resource "aws_service_discovery_service" "backend" {
   }
 }
 
+locals {
+  service_containers = {
+    for name, service in var.services : name => merge({
+      name            = name
+      image           = service.image
+      essential       = true
+      stopTimeout     = 120
+      linuxParameters = { initProcessEnabled = true }
+      environment     = [for key, value in local.service_environment[name] : { name = key, value = value }]
+      secrets = concat(local.parameter_secrets[name], [for key in sort(tolist(service.secret_keys)) : {
+        name      = key
+        valueFrom = "${local.foundation.secret_arns[name]}:${key}::${service.secret_version_id}"
+      }])
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = "/ecs/${var.name}/${name}"
+          awslogs-region        = "us-east-1"
+          awslogs-stream-prefix = "service"
+        }
+      }
+      }, jsondecode(service.port == null ? "{}" : jsonencode({
+        portMappings = [{ containerPort = service.port, protocol = "tcp" }]
+        healthCheck = {
+          command     = ["CMD-SHELL", "wget -q --spider http://127.0.0.1:${service.port}${service.health_path} || exit 1"]
+          interval    = 30
+          timeout     = 5
+          retries     = 3
+          startPeriod = 60
+        }
+    })))
+  }
+}
+
 resource "aws_ecs_task_definition" "service" {
   for_each                 = var.services
   skip_destroy             = true
@@ -308,36 +342,8 @@ resource "aws_ecs_task_definition" "service" {
     cpu_architecture        = "ARM64"
     operating_system_family = "LINUX"
   }
-  container_definitions = jsonencode([merge({
-    name            = each.key
-    image           = each.value.image
-    essential       = true
-    stopTimeout     = 120
-    linuxParameters = { initProcessEnabled = true }
-    environment     = [for key, value in local.service_environment[each.key] : { name = key, value = value }]
-    secrets = concat(local.parameter_secrets[each.key], [for key in sort(tolist(each.value.secret_keys)) : {
-      name      = key
-      valueFrom = "${local.foundation.secret_arns[each.key]}:${key}::${each.value.secret_version_id}"
-    }])
-    logConfiguration = {
-      logDriver = "awslogs"
-      options = {
-        awslogs-group         = "/ecs/${var.name}/${each.key}"
-        awslogs-region        = "us-east-1"
-        awslogs-stream-prefix = "service"
-      }
-    }
-    }, jsondecode(each.value.port == null ? "{}" : jsonencode({
-      portMappings = [{ containerPort = each.value.port, protocol = "tcp" }]
-      healthCheck = {
-        command     = ["CMD-SHELL", "wget -q --spider http://127.0.0.1:${each.value.port}${each.value.health_path} || exit 1"]
-        interval    = 30
-        timeout     = 5
-        retries     = 3
-        startPeriod = 60
-      }
-  })))])
-  depends_on = [aws_iam_role_policy.execution, aws_iam_role_policy.application]
+  container_definitions = jsonencode([local.service_containers[each.key]])
+  depends_on            = [aws_iam_role_policy.execution, aws_iam_role_policy.application]
 }
 resource "aws_ecs_service" "service" {
   for_each                           = var.services

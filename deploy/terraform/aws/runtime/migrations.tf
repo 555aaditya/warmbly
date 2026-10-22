@@ -98,7 +98,7 @@ resource "aws_ecs_task_definition" "database_check" {
     operating_system_family = "LINUX"
   }
   container_definitions = jsonencode([merge({
-    for key, value in jsondecode(aws_ecs_task_definition.service["backend"].container_definitions)[0] : key => value if !contains(["portMappings", "healthCheck"], key)
+    for key, value in local.service_containers["backend"] : key => value if !contains(["portMappings", "healthCheck"], key)
     }, {
     name       = "database-check"
     entryPoint = ["/bin/sh", "-c"]
@@ -123,7 +123,7 @@ resource "aws_ecs_task_definition" "realtime_database_check" {
     operating_system_family = "LINUX"
   }
   container_definitions = jsonencode([merge({
-    for key, value in jsondecode(aws_ecs_task_definition.service["realtime"].container_definitions)[0] : key => value if !contains(["portMappings", "healthCheck"], key)
+    for key, value in local.service_containers["realtime"] : key => value if !contains(["portMappings", "healthCheck"], key)
     }, {
     name       = "realtime-database-check"
     entryPoint = ["/app/bin/realtime", "eval"]
