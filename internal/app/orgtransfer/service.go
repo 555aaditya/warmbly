@@ -141,7 +141,7 @@ func NewService(
 	blobs storage.Store,
 	instance InstanceInfo,
 ) Service {
-	// An unreadable setting already refuses backend boot; here it keeps the instance key.
+	// Callers validate the setting first: the backend at boot, warmblyctl before building this.
 	mode, err := mailcred.ModeFromEnv()
 	if err != nil || cipherSvc == nil {
 		mode = mailcred.ModeInstance
@@ -158,7 +158,8 @@ func NewService(
 
 // carriesMailboxCredentials reports whether this instance can store mailbox credentials.
 func (s *service) carriesMailboxCredentials() bool {
-	return s.creds != nil || s.mailSealing == mailcred.ModeOrganization
+	// Rows not yet moved to organization keys still need the instance key, in either mode.
+	return s.creds != nil
 }
 
 // archiveObjectKey is where a finished export lives in blob storage.

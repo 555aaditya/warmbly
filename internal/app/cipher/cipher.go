@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/infrastructure/encryptedkeys"
 	"github.com/warmbly/warmbly/internal/observability/errs"
 )
+
+// dekLookupTimeout bounds one shared Redis and KMS lookup of an organization key.
+const dekLookupTimeout = 30 * time.Second
 
 type Cipher struct {
 	plainDEK []byte
@@ -20,14 +24,20 @@ func (s *cipherService) Cipher(ctx context.Context, orgID uuid.UUID) (*Cipher, e
 	}
 	// Concurrent first uses of one organization share a single Redis read and KMS call.
 	v, err, _ := s.flight.Do(orgID.String(), func() (any, error) {
-		return s.resolveDEK(ctx, orgID)
+		// Shared by every waiter, so it must not end with the first caller's context.
+		lookupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dekLookupTimeout)
+		defer cancel()
+		key, err := s.resolveDEK(lookupCtx, orgID)
+		if err != nil {
+			return nil, err
+		}
+		s.memory.put(orgID, key)
+		return key, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	key := v.([]byte)
-	s.memory.put(orgID, key)
-	return &Cipher{plainDEK: key}, nil
+	return &Cipher{plainDEK: v.([]byte)}, nil
 }
 
 func (s *cipherService) resolveDEK(ctx context.Context, orgID uuid.UUID) ([]byte, error) {

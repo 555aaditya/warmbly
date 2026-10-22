@@ -64,7 +64,7 @@ A command that would set a password refuses on a non-TTY unless you passed `--pa
 | `AUTH_SECRET` | `reset-password` when it mints a link | The link cannot be signed with the key the backend verifies, so it is refused |
 | `APP_URL` | every printed link and sign-in hint | Links are built against `https://app.warmbly.com`, which is the hosted service and not your instance |
 | `KMS_PROVIDER` and its key | `org export`, `org import` | The command stops: a workspace's sealed values cannot be opened, so an archive would be useless |
-| `CREDENTIALS_ENCRYPTION_KEY` | `org export`, `org import` | Unless `MAILBOX_CREDENTIALS_SEALING=organization`, a warning, and mailbox credentials are neither read nor written. Everything else still moves |
+| `CREDENTIALS_ENCRYPTION_KEY` | `org export`, `org import` | A warning, and mailbox credentials are neither read nor written. Everything else still moves |
 | `CREDENTIALS_ENCRYPTION_KEY`, `KMS_LOCAL_MASTER_KEY` | `backup`, `restore` | `backup` warns and leaves them out of the bundle. `restore` refuses when this host's differ from the bundle's |
 | `BLOB_FS_ROOT` | `backup`, `restore` | Defaults to `/data/blobs`, which is where the compose stack mounts it |
 | `WARMBLY_API_KEY` | every API command | The command stops and explains where a key comes from |

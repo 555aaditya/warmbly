@@ -3,6 +3,7 @@ package wmail
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/warmbly/warmbly/internal/app/mailcred"
@@ -46,6 +47,9 @@ func (w *WMail) onTokenUpdate(token *oauth2.Token) error {
 	return w.onEvent(models.JobEventTypeTokenUpdate, update)
 }
 
+// tokenSealTimeout bounds the key lookup behind sealing a refreshed token.
+const tokenSealTimeout = 30 * time.Second
+
 func (w *WMail) sealTokenUpdate(update *models.JobEventTokenUpdate, token *oauth2.Token) error {
 	if w.CipherService == nil || w.OrgID == nil {
 		return errNoOrganizationKey
@@ -54,7 +58,8 @@ func (w *WMail) sealTokenUpdate(update *models.JobEventTokenUpdate, token *oauth
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ctx = context.WithoutCancel(ctx)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), tokenSealTimeout)
+	defer cancel()
 	c, err := w.CipherService.Cipher(ctx, *w.OrgID)
 	if err != nil {
 		return err

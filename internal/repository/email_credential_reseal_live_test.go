@@ -30,11 +30,12 @@ func TestLiveResealMovesMailboxCredentialsOntoOrganizationKeys(t *testing.T) {
 		}
 		return s
 	}
-	plain := []string{"smtp.x.test", "u@x.test", "smtp-pass", "imap.x.test", "u@x.test", "imap-pass"}
+	plain := []string{"smtp.x.test", "u@x.test", "smtp-pass", "imap.x.test", "", "imap-pass"}
+	// An empty stored value is not ciphertext and must still move.
 	f.exec(`INSERT INTO email_accounts_smtp_imap
 	          (email_account_id, smtp_host, smtp_port, smtp_user, smtp_password, imap_host, imap_port, imap_user, imap_password)
-	        VALUES ($1, $2, 465, $3, $4, $5, 993, $6, $7)`,
-		f.account, seal(plain[0]), seal(plain[1]), seal(plain[2]), seal(plain[3]), seal(plain[4]), seal(plain[5]))
+	        VALUES ($1, $2, 465, $3, $4, $5, 993, '', $6)`,
+		f.account, seal(plain[0]), seal(plain[1]), seal(plain[2]), seal(plain[3]), seal(plain[5]))
 	// A token written before sealing existed is plaintext and must be moved too.
 	f.exec(`INSERT INTO email_accounts_oauth (email_account_id, access_token, refresh_token, expires_at)
 	        VALUES ($1, 'legacy-access', $2, $3)`, f.account, seal("refresh-token"), time.Now().Add(time.Hour))

@@ -65,11 +65,15 @@ func (j *MailboxErasureJob) openToken(ctx context.Context, e *repository.Mailbox
 			return e.RefreshToken, false
 		}
 		c, err := j.orgs.Cipher(ctx, *e.OrganizationID)
-		if err != nil {
-			return e.RefreshToken, false
+		if err == nil {
+			var plain string
+			if plain, err = mailcred.OpenWith(ctx, c, nil, e.RefreshToken); err == nil {
+				return plain, true
+			}
 		}
-		plain, err := mailcred.OpenWith(ctx, c, nil, e.RefreshToken)
-		return plain, err == nil
+		log.Warn().Err(err).Str("email_account_id", e.EmailAccountID.String()).Str("organization_id", e.OrganizationID.String()).
+			Msg("mailbox erasure: the organization key did not open the refresh token")
+		return e.RefreshToken, false
 	}
 	if j.enc != nil {
 		if plain, err := j.enc.Decrypt(e.RefreshToken); err == nil {
@@ -252,7 +256,7 @@ func (j *MailboxErasureJob) revoke(ctx context.Context, e *repository.MailboxEra
 	// finished and wrong.
 	if !opened && result == oauthrevoke.AlreadyGone {
 		return fmt.Errorf(
-			"revoke %s grant: the stored refresh token could not be opened, so the provider's rejection is not proof the grant is gone (check CREDENTIALS_ENCRYPTION_KEY)",
+			"revoke %s grant: the stored refresh token could not be opened, so the provider's rejection is not proof the grant is gone (check CREDENTIALS_ENCRYPTION_KEY, or the organization key and KMS for a workspace-sealed token)",
 			e.Provider)
 	}
 

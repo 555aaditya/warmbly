@@ -37,7 +37,7 @@ Two keys, and they are not interchangeable.
 | Key | Opens | Read by |
 |---|---|---|
 | `CREDENTIALS_ENCRYPTION_KEY` | Mailbox SMTP and IMAP credentials and OAuth tokens stored under the instance key: everything by default, and only older values and personal mailboxes with `MAILBOX_CREDENTIALS_SEALING=organization` | Backend, consumer and workers |
-| `KMS_LOCAL_MASTER_KEY` | The per-organization data keys, which in turn open everything else, including mailbox credentials sealed under workspace keys | Backend and consumer |
+| `KMS_LOCAL_MASTER_KEY` | The per-organization data keys, which in turn open everything else, including mailbox credentials sealed under workspace keys | Backend and consumer, and workers when `KMS_PROVIDER=local` |
 
 Both are unrecoverable. A database backup without them restores an instance whose mailboxes authenticate against nothing, and there is no way back from that. They are in `.env`, and `install.sh` also writes them to `keys-backup.txt` next to the install, which is on the same disk as the database and therefore not a backup either. Copy them somewhere else.
 

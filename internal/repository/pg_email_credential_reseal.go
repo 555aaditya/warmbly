@@ -126,6 +126,11 @@ func (r *emailRepository) resealValues(ctx context.Context, orgID uuid.UUID, sto
 			out[i] = v
 			continue
 		}
+		if v == "" {
+			// An empty value is not ciphertext; the bare prefix is its organization form.
+			out[i], changed = mailcred.OrgPrefix, true
+			continue
+		}
 		var plain string
 		var err error
 		if legacyPlaintext {
