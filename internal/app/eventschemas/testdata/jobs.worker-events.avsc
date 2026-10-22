@@ -997,6 +997,32 @@
           "fields": [
             {
               "default": "",
+              "name": "user_id",
+              "type": "string"
+            },
+            {
+              "default": "",
+              "name": "email_id",
+              "type": "string"
+            },
+            {
+              "default": "",
+              "name": "internal_id",
+              "type": "string"
+            },
+            {
+              "default": "",
+              "name": "outcome",
+              "type": "string"
+            }
+          ],
+          "name": "warmbly.events.JobEventWarmupRescued",
+          "type": "record"
+        },
+        {
+          "fields": [
+            {
+              "default": "",
               "name": "transport_generation",
               "type": "string"
             },

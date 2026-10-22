@@ -22,6 +22,7 @@ import {
     fmtPct,
     otherHostsNote,
     rateSentence,
+    rescueSummary,
     totals,
     utcWindow,
     viewDays,
@@ -151,7 +152,7 @@ export default function MailboxPlacementTab({ mailboxId, poolHealth }: { mailbox
                         <Cell label="Non-spam share" value={fmtPct(t.inboxRate)} sub={`${fmtNum(t.inbox)} primary inbox`} tone={BAND[bandForRate(t.inboxRate)].text} />
                         <Cell label="Spam" value={fmtNum(t.spam)} sub={t.spamRate != null ? `${fmtPct(t.spamRate)} of classified receipts` : "no classified receipts"} tone={t.spam > 0 ? "text-rose-600" : undefined} />
                         <Cell label="Other tabs" value={fmtNum(t.tabs)} sub="Promotions, Updates…" />
-                        <Cell label="Rescue requests" value={fmtNum(t.rescued)} sub="movement is not confirmed" />
+                        <Cell label="Moved out of spam" value={fmtNum(t.rescueConfirmed)} sub={rescueSummary(t)} tone={t.rescueConfirmed > 0 ? "text-emerald-600" : undefined} />
                         <Cell
                             label="Unconfirmed"
                             value={filtered ? "—" : fmtNum(t.unconfirmed)}
@@ -188,7 +189,7 @@ export default function MailboxPlacementTab({ mailboxId, poolHealth }: { mailbox
                 <ul className="mt-2 space-y-1.5 text-[11.5px] text-slate-500 leading-relaxed">
                     <li>These are controlled partner observations, not real-recipient inbox probabilities or evidence that artificial activity improves reputation.</li>
                     <li>The non-spam share includes inbox and category tabs among classified receipts, over {rate.window_days} days, shown after {rate.min_sample} observations. The headline combines Google, Microsoft and Yahoo families; inspect individual hosts to distinguish consumer and business providers.</li>
-                    <li>Rescue requests do not prove movement or reputation recovery. Unconfirmed means no receipt was reported a day after connector submission, not confirmed loss.</li>
+                    <li>Moved out of spam counts rescues the recipient's mailbox reported done, including mail that was already out of spam when the rescue ran. A rescue does not prove reputation recovery. Unconfirmed means no receipt was reported a day after connector submission, not confirmed loss.</li>
                     <li>Unclassified receipts: {report.summary.unknown == null ? "unavailable on this API version" : `${fmtNum(report.summary.unknown)} unknown, ${fmtNum(report.summary.archived)} archive, ${fmtNum(report.summary.custom)} custom folder`}. Historical classifications are retained, not reconstructed as new first observations.</li>
                     <li>
                         The mailbox's standing is judged at the same three providers. Other mail hosts run their own filters, so what lands in their

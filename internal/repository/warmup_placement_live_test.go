@@ -86,6 +86,14 @@ func TestLiveWarmupPlacementRollup(t *testing.T) {
 		t.Fatalf("a missing receipt must not count, got %+v", got)
 	}
 
+	// A rescue outcome counts once, against the receipt's own day.
+	if got, err := repo.RecordRescueOutcome(ctx, recipient, spam, "google", "google_workspace", models.WarmupRescueMoved); err != nil || got == nil || got.ID != sender {
+		t.Fatalf("a rescue outcome names its sender, got %+v, %v", got, err)
+	}
+	if got, err := repo.RecordRescueOutcome(ctx, recipient, spam, "google", "google_workspace", models.WarmupRescueFailed); err != nil || got != nil {
+		t.Fatalf("a second outcome for one rescue must not count, got %+v, %v", got, err)
+	}
+
 	now := time.Now().UTC()
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 
@@ -102,7 +110,7 @@ func TestLiveWarmupPlacementRollup(t *testing.T) {
 			microsoft = r
 		}
 	}
-	if len(rows) != 2 || google.Inbox != 1 || google.Tabs != 1 || google.Spam != 1 || google.Rescued != 1 || microsoft.Inbox != 1 {
+	if len(rows) != 2 || google.Inbox != 1 || google.Tabs != 1 || google.Spam != 1 || google.Rescued != 1 || google.RescueConfirmed != 1 || google.RescueFailed != 0 || microsoft.Inbox != 1 {
 		t.Fatalf("daily rows = %+v, want one google inbox, tab and rescued spam, and one microsoft inbox", rows)
 	}
 
