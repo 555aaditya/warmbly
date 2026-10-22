@@ -32,6 +32,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/warmbly/warmbly/internal/app/cipher"
+	"github.com/warmbly/warmbly/internal/app/mailcred"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/storage"
 	"github.com/warmbly/warmbly/internal/models"
@@ -121,6 +122,8 @@ type service struct {
 	creds    *encrypt.Encrypter
 	blobs    storage.Store
 	instance InstanceInfo
+	// mailSealing is the key imported mailbox credentials are sealed under.
+	mailSealing mailcred.Mode
 }
 
 // NewService builds the transfer service.
@@ -138,13 +141,24 @@ func NewService(
 	blobs storage.Store,
 	instance InstanceInfo,
 ) Service {
-	return &service{
-		repo:     repo,
-		cipher:   cipherSvc,
-		creds:    creds,
-		blobs:    blobs,
-		instance: instance,
+	// An unreadable setting already refuses backend boot; here it keeps the instance key.
+	mode, err := mailcred.ModeFromEnv()
+	if err != nil || cipherSvc == nil {
+		mode = mailcred.ModeInstance
 	}
+	return &service{
+		repo:        repo,
+		cipher:      cipherSvc,
+		creds:       creds,
+		blobs:       blobs,
+		instance:    instance,
+		mailSealing: mode,
+	}
+}
+
+// carriesMailboxCredentials reports whether this instance can store mailbox credentials.
+func (s *service) carriesMailboxCredentials() bool {
+	return s.creds != nil || s.mailSealing == mailcred.ModeOrganization
 }
 
 // archiveObjectKey is where a finished export lives in blob storage.

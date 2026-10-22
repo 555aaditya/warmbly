@@ -15,11 +15,25 @@ type Cipher struct {
 }
 
 func (s *cipherService) Cipher(ctx context.Context, orgID uuid.UUID) (*Cipher, error) {
-	// Cache hit: reuse the decrypted DEK. Any miss or cache error (redis.Nil
-	// on first use of an org's key) falls through to the KMS path — a cache
-	// problem must never block crypto.
-	if key, err := s.getDecryptedKey(ctx, orgID); err == nil && len(key) > 0 {
+	if key := s.memory.get(orgID); key != nil {
 		return &Cipher{plainDEK: key}, nil
+	}
+	// Concurrent first uses of one organization share a single Redis read and KMS call.
+	v, err, _ := s.flight.Do(orgID.String(), func() (any, error) {
+		return s.resolveDEK(ctx, orgID)
+	})
+	if err != nil {
+		return nil, err
+	}
+	key := v.([]byte)
+	s.memory.put(orgID, key)
+	return &Cipher{plainDEK: key}, nil
+}
+
+func (s *cipherService) resolveDEK(ctx context.Context, orgID uuid.UUID) ([]byte, error) {
+	// Any miss or cache error (redis.Nil on first use) falls through to KMS; a cache problem must never block crypto.
+	if key, err := s.getDecryptedKey(ctx, orgID); err == nil && len(key) > 0 {
+		return key, nil
 	}
 
 	key, err := s.loadOrCreateDEK(ctx, orgID)
@@ -30,10 +44,7 @@ func (s *cipherService) Cipher(ctx context.Context, orgID uuid.UUID) (*Cipher, e
 	if err := s.saveDecryptedKey(ctx, orgID, key); err != nil {
 		errs.CaptureException(err)
 	}
-
-	return &Cipher{
-		plainDEK: key,
-	}, nil
+	return key, nil
 }
 
 // loadOrCreateDEK returns the organization's stored DEK, creating it on first
