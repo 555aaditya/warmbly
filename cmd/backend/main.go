@@ -971,7 +971,11 @@ func main() {
 		// TOTP 2FA: the secret is sealed with a server-wide key (the per-user DEK
 		// is unreachable at login time). Wire the challenger into auth so the login
 		// gate can issue a pending challenge.
-		twofaService = twofa.NewService(repository.NewTOTPRepository(primaryDB.Pool), userRepostory, tokenService, cache, twofa.DeriveKey(authCfg.TwoFASecret))
+		var twoFAReadKeys [][32]byte
+		for _, secret := range authCfg.TwoFAReadSecrets {
+			twoFAReadKeys = append(twoFAReadKeys, twofa.DeriveKey(secret))
+		}
+		twofaService = twofa.NewService(repository.NewTOTPRepository(primaryDB.Pool), userRepostory, tokenService, cache, twofa.DeriveKey(authCfg.TwoFASecret), twoFAReadKeys...)
 		authService.WireTwoFA(twofaService)
 		// The native app proves itself with App Attest where a browser solves Turnstile.
 		appAttestService = appattest.New(repository.NewAppAttestRepository(primaryDB.Pool), cache, appattest.Config{
@@ -1256,9 +1260,8 @@ func main() {
 		// the mailbox-connect redirect_uri from it sends the provider
 		// "0.0.0.0:8080/addresses/google/callback".
 		oauth2Cfg := config.LoadOauth2(oauthPublicBaseURL(apiCfg.Hostname))
-		// Recipient unsubscribe links live on the API origin, signed under the
-		// auth secret; the same base the OAuth callbacks are built on.
-		unsubSigner = unsublink.New(authCfg.AuthSecret, oauthPublicBaseURL(apiCfg.Hostname))
+		// Recipient links use a separate purpose key when one is configured.
+		unsubSigner = unsublink.NewWithReadKeys(authCfg.UnsubscribeSigningSecret, oauthPublicBaseURL(apiCfg.Hostname), authCfg.UnsubscribeReadSecrets, authCfg.UnsubscribeReadUntil)
 		emailService = email.NewServiceWithWorker(
 			emailRepostory,
 			cipherService,
@@ -1854,7 +1857,7 @@ func main() {
 		// Mailbox imports: files and pasted lists connected in the background,
 		// with each domain's mail host detected from its DNS.
 		// One prover for every DNS ownership proof, keyed by the instance secret.
-		domainProver := domainproof.New(authCfg.AuthSecret)
+		domainProver := domainproof.New(authCfg.DomainProofSecret)
 
 		// Whole-domain connects: Google Workspace delegation to the instance's
 		// service account, Microsoft 365 consent to its Outlook app.
