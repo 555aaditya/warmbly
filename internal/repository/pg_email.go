@@ -1308,7 +1308,7 @@ func (r *emailRepository) Search(ctx context.Context, orgID, search string, curs
 func (r *emailRepository) Get(ctx context.Context, orgID, emailAccountID string) (*models.Email, *errx.Error) {
 	query := `
 		SELECT
-		ea.id, ea.email, ea.name, ea.signature_plain, ea.signature_html, ea.signature_sync, ea.signature_code, ea.send_as_email,
+		ea.id, ea.organization_id, ea.email, ea.name, ea.signature_plain, ea.signature_html, ea.signature_sync, ea.signature_code, ea.send_as_email,
 		 ea.provider, ea.mail_host, ea.auth_method, ea.domain_grant_id, ea.vendor_connection_id, COALESCE((SELECT vc.vendor FROM mailbox_vendor_connections vc WHERE vc.id = ea.vendor_connection_id), ''), ea.avatar_url, ea.status, COALESCE(ea.last_synced_at, ea.created_at) AS last_synced_at, ea.last_id, ea.campaign_limit,
 		 ea.min_wait_time, ea.reply_to, ea.tracking_domain, ea.tracking_domain_verified, ea.tracking_domain_verified_at, ea.track_direct_mail,
 		 ea.auth_state, ea.auth_spf, ea.auth_dkim, ea.auth_dmarc, ea.auth_dmarc_policy, ea.auth_reason, ea.auth_checked_at, ea.auth_failing_since,
@@ -1333,7 +1333,7 @@ func (r *emailRepository) Get(ctx context.Context, orgID, emailAccountID string)
 		query,
 		params...,
 	).Scan(
-		&i.ID, &i.Email, &i.Name, &i.SignaturePlain, &i.SignatureHTML, &i.SignatureSync, &i.SignatureCode, &i.SendAsEmail, &i.Provider, &i.MailHost, &i.AuthMethod, &i.DomainGrantID, &i.VendorConnectionID, &i.Vendor, &i.AvatarURL, &i.Status,
+		&i.ID, &i.OrganizationID, &i.Email, &i.Name, &i.SignaturePlain, &i.SignatureHTML, &i.SignatureSync, &i.SignatureCode, &i.SendAsEmail, &i.Provider, &i.MailHost, &i.AuthMethod, &i.DomainGrantID, &i.VendorConnectionID, &i.Vendor, &i.AvatarURL, &i.Status,
 		&i.LastSyncedAt, &i.LastID, &i.CampaignLimit, &i.MinWaitTime, &i.ReplyTo, &i.TrackingDomain, &i.TrackingDomainVerified, &i.TrackingDomainVerifiedAt, &i.TrackDirectMail,
 		&i.AuthState, &i.AuthSPF, &i.AuthDKIM, &i.AuthDMARC, &i.AuthDMARCPolicy, &i.AuthReason, &i.AuthCheckedAt, &i.AuthFailingSince,
 		&i.Warmup, &i.WarmupPausedAt, &i.WarmupBase, &i.WarmupMax, &i.WarmupIncrease, &i.WarmupReplyRate, &i.WarmupTag, &i.WarmupPoolType,
