@@ -941,6 +941,11 @@
                 "logicalType": "timestamp-millis",
                 "type": "long"
               }
+            },
+            {
+              "default": "",
+              "name": "sealed_tokens",
+              "type": "string"
             }
           ],
           "name": "warmbly.events.JobEventTokenUpdate",

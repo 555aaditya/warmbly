@@ -79,6 +79,7 @@ func TestEventAvroReadsPreUpgradeEnvelopes(t *testing.T) {
 		}
 		want := sample(WorkerEventBodies[WorkerEventTypeAddEmail]).(*AddWorkerEmail)
 		want.TransportGeneration = [16]byte{}
+		want.SealedSecrets = ""
 		want.Sync.State.TransportGeneration = [16]byte{}
 		assertBody(t, got.Body, want)
 	})
@@ -122,7 +123,7 @@ func preTransportSchema(t *testing.T, schema avro.Schema) avro.Schema {
 				kept := fields[:0]
 				for _, f := range fields {
 					field := f.(map[string]any)
-					if field["name"] == "transport_generation" || x["name"] == "EmailErrorEvent" && field["name"] == "operation" {
+					if field["name"] == "transport_generation" || field["name"] == "sealed_secrets" || x["name"] == "EmailErrorEvent" && field["name"] == "operation" {
 						continue
 					}
 					strip(f)
