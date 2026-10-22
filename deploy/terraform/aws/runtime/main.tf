@@ -72,7 +72,7 @@ variable "services" {
       service.desired_count >= 0 && service.desired_count == floor(service.desired_count) &&
       !contains(service.secret_keys, "AWS_ACCESS_KEY_ID") && !contains(service.secret_keys, "AWS_SECRET_ACCESS_KEY") &&
       alltrue([for key, value in service.environment :
-        !can(regex("(?i)(password|secret|token|private_key|access_key|primary_db(_direct)?|database_url|redis_url)$", key)) &&
+        !can(regex("(?i)(passwords?|secrets?|tokens?|private_keys?|access_keys?|master_keys?|encryption_keys?|read_keys|primary_db(_direct)?|database_url|redis_url)$", key)) &&
         !can(regex("://[^/@]+:[^/@]+@", value))
       ])
     ])

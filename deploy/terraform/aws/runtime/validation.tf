@@ -55,7 +55,10 @@ resource "aws_ecs_task_definition" "validation" {
         name      = key
         valueFrom = "${local.foundation.secret_arns["backend"]}:${key}::${var.services["backend"].secret_version_id}"
       }
-      ], [
+      ], [for key in ["CREDENTIALS_ENCRYPTION_READ_KEYS", "TWOFA_SECRET", "TWOFA_READ_SECRETS"] : {
+        name      = key
+        valueFrom = "${local.foundation.secret_arns["backend"]}:${key}::${var.services["backend"].secret_version_id}"
+      } if contains(var.services["backend"].secret_keys, key)], [
       { name = "CONSUMER_DB", valueFrom = "${local.foundation.secret_arns["consumer"]}:PRIMARY_DB::${var.services["consumer"].secret_version_id}" },
       { name = "REALTIME_DB", valueFrom = "${local.foundation.secret_arns["realtime"]}:DATABASE_URL::${var.services["realtime"].secret_version_id}" },
       { name = "NEW_REDIS_PASSWORD", valueFrom = "${data.terraform_remote_state.foundation.outputs.cache.credential_secret}:REDIS_PASSWORD::" }
