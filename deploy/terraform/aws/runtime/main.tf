@@ -62,7 +62,7 @@ variable "services" {
     environment       = optional(map(string), {})
   }))
   validation {
-    condition = alltrue([for name, service in var.services :
+    condition = (var.github_repository == null || alltrue([for name in ["backend", "consumer"] : contains(keys(var.services), name)])) && alltrue([for name, service in var.services :
       contains(["backend", "consumer", "forms", "realtime", "tracking"], name) &&
       can(regex("@sha256:[a-f0-9]{64}$", service.image)) &&
       ((service.cpu == 256 && contains([512, 1024, 2048], service.memory)) ||
@@ -76,7 +76,7 @@ variable "services" {
         !can(regex("://[^/@]+:[^/@]+@", value))
       ])
     ])
-    error_message = "Use supported Fargate CPU/memory pairs, known services, immutable image digests, integer counts and secret references rather than inline credentials."
+    error_message = "Use supported Fargate CPU/memory pairs, known services, immutable image digests, integer counts and secret references rather than inline credentials. GitHub deployment requires backend and consumer services."
   }
 }
 
