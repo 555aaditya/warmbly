@@ -479,19 +479,32 @@ func main() {
 			log.Fatal(err)
 		}
 
-		primaryDB, err := db.New(ctx, primaryDBEndpoint)
+		directDBEndpoint, err := db.DirectEndpoint(primaryDBEndpoint, cfg.LoadPrimaryDBDirectEndpoint(ctx))
 		if err != nil {
 			errs.CaptureFatal(err)
 			log.Fatal(err)
 		}
 
-		// Run database migrations
-		log.Println("Running database migrations...")
-		if err := db.RunMigrations(primaryDBEndpoint); err != nil {
-			errs.CaptureFatal(err)
-			log.Fatal("Failed to run migrations: ", err)
+		migrationsOnStart := cfg.LoadMigrationsOnStart(ctx)
+		if migrationsOnStart {
+			log.Println("Running database migrations...")
+			if err := db.RunMigrations(directDBEndpoint); err != nil {
+				errs.CaptureFatal(err)
+				log.Fatal("Failed to run migrations: ", err)
+			}
+			log.Println("Database migrations completed")
 		}
-		log.Println("Database migrations completed")
+		primaryDB, err := db.NewWithDirect(ctx, primaryDBEndpoint, directDBEndpoint)
+		if err != nil {
+			errs.CaptureFatal(err)
+			log.Fatal(err)
+		}
+		if !migrationsOnStart {
+			if err := db.WaitForSchema(ctx, primaryDB); err != nil {
+				errs.CaptureFatal(err)
+				log.Fatal(err)
+			}
+		}
 		// Once, not per warmup tick: the pools are fixed rows, and their absence
 		// (a data-only restore, a manual delete) otherwise fails every tick quietly.
 		if n, perr := instancecheck.CountSeededWarmupPools(ctx, primaryDB.Pool); perr == nil && n != 2 {
@@ -1303,7 +1316,7 @@ func main() {
 		// Self-hosted warmup pool link, both roles. The cloud side hands out
 		// codes and runs enrolled mailboxes as warmup-only accounts; the
 		// self-hosted side keeps the link and mirrors the cloud's state.
-		poolLinkRepository := repository.NewPoolLinkRepository(primaryDB.Pool)
+		poolLinkRepository := repository.NewPoolLinkRepository(primaryDB.Pool, primaryDB.ConnectSession)
 		poolLinkService = poollink.NewService(poolLinkRepository, emailRepostory, emailService, analyticsService, warmupRepository, featureGateService, organizationService, planRepository)
 		emailService.WirePoolLink(poolLinkRepository)
 		if g, ok := featureGateService.(interface{ WirePoolLink(feature.PoolLinkReader) }); ok {
@@ -1315,7 +1328,7 @@ func main() {
 		if w, ok := poolLinkService.(interface{ WireCampaigns(poollink.CampaignUsage) }); ok {
 			w.WireCampaigns(campaignRepostory)
 		}
-		cloudLinkRepository := repository.NewCloudLinkRepository(primaryDB.Pool, credEncrypter)
+		cloudLinkRepository := repository.NewCloudLinkRepository(primaryDB.Pool, credEncrypter, primaryDB.ConnectSession)
 		emailService.WireCloudLink(cloudLinkRepository)
 		cloudLinkService = cloudlink.NewService(cloudLinkRepository, emailRepostory, emailService)
 		cloudLinkService.OnStandingChange(func(ctx context.Context, change models.CloudLinkStandingChange) {

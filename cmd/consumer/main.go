@@ -97,7 +97,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	primaryDB, err := db.New(ctx, primaryDBEndpoint)
+	primaryDB, err := db.NewWithDirect(ctx, primaryDBEndpoint, cfg.LoadPrimaryDBDirectEndpoint(ctx))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -530,7 +530,7 @@ func main() {
 		EmailAccountErrorRepository: emailAccountErrorRepo,
 		WarmupRepo:                  warmupRepo,
 		PoolLinkRepo:                repository.NewPoolLinkRepository(primaryDB.Pool),
-		CloudLink:                   cloudlink.NewService(repository.NewCloudLinkRepository(primaryDB.Pool, credEncrypter), emailRepo, nil),
+		CloudLink:                   cloudlink.NewService(repository.NewCloudLinkRepository(primaryDB.Pool, credEncrypter, primaryDB.ConnectSession), emailRepo, nil),
 		WarmupContentRepo:           repository.NewWarmupContentRepository(primaryDB.Pool),
 		WarmupEngagementRepo:        repository.NewWarmupEngagementRepository(primaryDB.Pool),
 		WarmupRecoveryRepo:          repository.NewWarmupRecoveryRepository(primaryDB.Pool),
