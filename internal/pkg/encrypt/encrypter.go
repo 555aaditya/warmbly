@@ -8,6 +8,8 @@ import (
 	"errors"
 	"io"
 	"os"
+
+	"github.com/warmbly/warmbly/internal/pkg/secretset"
 )
 
 // Encrypted holds the hex-encoded ciphertext and nonce.
@@ -19,18 +21,40 @@ type Encrypted struct {
 
 // Encrypter performs AES-GCM encryption with a fixed 32-byte key.
 type Encrypter struct {
-	aead cipher.AEAD
+	aead     cipher.AEAD
+	readKeys []cipher.AEAD
 }
 
 // FromEnv creates an Encrypter from the CREDENTIALS_ENCRYPTION_KEY env var
 // (64 hex chars = 32 bytes). Returns (nil, nil) when the var is unset so
 // callers can keep booting without credential sealing configured.
 func FromEnv() (*Encrypter, error) {
+	keys, err := secretset.Parse(os.Getenv("CREDENTIALS_ENCRYPTION_READ_KEYS"))
+	if err != nil {
+		return nil, err
+	}
 	key := os.Getenv("CREDENTIALS_ENCRYPTION_KEY")
 	if key == "" {
+		if len(keys) > 0 {
+			return nil, errors.New("credential read keys require a primary encryption key")
+		}
 		return nil, nil
 	}
-	return NewEncrypterFromHex(key)
+	primary, err := NewEncrypterFromHex(key)
+	if err != nil {
+		return nil, err
+	}
+	for _, value := range keys {
+		if value == key {
+			continue
+		}
+		reader, err := NewEncrypterFromHex(value)
+		if err != nil {
+			return nil, errors.New("invalid additional credential read key")
+		}
+		primary.readKeys = append(primary.readKeys, reader.aead)
+	}
+	return primary, nil
 }
 
 // NewEncrypterFromHex creates an Encrypter from a 64-character hex key.
@@ -110,7 +134,19 @@ func (e *Encrypter) DecryptEncrypted(enc *Encrypted) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return e.aead.Open(nil, nonce, ct, nil)
+	if len(nonce) != e.aead.NonceSize() {
+		return nil, errors.New("invalid encryption nonce")
+	}
+	plaintext, err := e.aead.Open(nil, nonce, ct, nil)
+	if err == nil {
+		return plaintext, nil
+	}
+	for _, reader := range e.readKeys {
+		if plaintext, readErr := reader.Open(nil, nonce, ct, nil); readErr == nil {
+			return plaintext, nil
+		}
+	}
+	return nil, err
 }
 
 // ---------------------------------------------------------------------
