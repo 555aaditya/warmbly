@@ -6,6 +6,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
+	"github.com/warmbly/warmbly/internal/app/cipher"
 	"github.com/warmbly/warmbly/internal/app/mailcred"
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
 )
@@ -58,6 +60,8 @@ func (r *emailRepository) ResealMailboxCredentials(ctx context.Context, after uu
 			if ctx.Err() != nil {
 				return uuid.Nil, resealed, failed, ctx.Err()
 			}
+			log.Warn().Err(err).Str("email_account_id", c.id.String()).Str("organization_id", c.org.String()).
+				Msg("mailbox credentials: could not move a mailbox onto its organization key; retrying next pass")
 			failed++
 			continue
 		}
@@ -71,11 +75,35 @@ func (r *emailRepository) ResealMailboxCredentials(ctx context.Context, after uu
 
 // resealMailbox rewrites one mailbox's credentials under its organization key, holding the rows so a concurrent refresh waits.
 func (r *emailRepository) resealMailbox(ctx context.Context, id, orgID uuid.UUID) error {
+	// The key is resolved before any row is locked, so a KMS lookup never holds them.
+	c, err := r.Creds.Cipher(ctx, orgID)
+	if err != nil {
+		return err
+	}
 	tx, err := r.DB.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
+
+	// OAuth before SMTP/IMAP, the order ConvertGoogleToAppPassword takes them in.
+	var tokens [2]string
+	err = tx.QueryRow(ctx, `SELECT access_token, refresh_token FROM email_accounts_oauth WHERE email_account_id = $1 FOR UPDATE`, id).
+		Scan(&tokens[0], &tokens[1])
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+	case err != nil:
+		return err
+	default:
+		if out, changed, err := r.resealValues(ctx, orgID, c, tokens[:], true); err != nil {
+			return err
+		} else if changed {
+			if _, err := tx.Exec(ctx, `UPDATE email_accounts_oauth SET access_token = $2, refresh_token = $3 WHERE email_account_id = $1`,
+				id, out[0], out[1]); err != nil {
+				return err
+			}
+		}
+	}
 
 	var smtp [6]string
 	err = tx.QueryRow(ctx, `SELECT smtp_host, smtp_user, smtp_password, imap_host, imap_user, imap_password
@@ -86,7 +114,7 @@ func (r *emailRepository) resealMailbox(ctx context.Context, id, orgID uuid.UUID
 	case err != nil:
 		return err
 	default:
-		if out, changed, err := r.resealValues(ctx, orgID, smtp[:], false); err != nil {
+		if out, changed, err := r.resealValues(ctx, orgID, c, smtp[:], false); err != nil {
 			return err
 		} else if changed {
 			if _, err := tx.Exec(ctx, `UPDATE email_accounts_smtp_imap
@@ -97,28 +125,11 @@ func (r *emailRepository) resealMailbox(ctx context.Context, id, orgID uuid.UUID
 		}
 	}
 
-	var tokens [2]string
-	err = tx.QueryRow(ctx, `SELECT access_token, refresh_token FROM email_accounts_oauth WHERE email_account_id = $1 FOR UPDATE`, id).
-		Scan(&tokens[0], &tokens[1])
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-	case err != nil:
-		return err
-	default:
-		if out, changed, err := r.resealValues(ctx, orgID, tokens[:], true); err != nil {
-			return err
-		} else if changed {
-			if _, err := tx.Exec(ctx, `UPDATE email_accounts_oauth SET access_token = $2, refresh_token = $3 WHERE email_account_id = $1`,
-				id, out[0], out[1]); err != nil {
-				return err
-			}
-		}
-	}
 	return tx.Commit(ctx)
 }
 
 // resealValues opens each value not yet under the organization key and seals it there.
-func (r *emailRepository) resealValues(ctx context.Context, orgID uuid.UUID, stored []string, legacyPlaintext bool) ([]string, bool, error) {
+func (r *emailRepository) resealValues(ctx context.Context, orgID uuid.UUID, c *cipher.Cipher, stored []string, legacyPlaintext bool) ([]string, bool, error) {
 	out := make([]string, len(stored))
 	changed := false
 	for i, v := range stored {
@@ -141,7 +152,7 @@ func (r *emailRepository) resealValues(ctx context.Context, orgID uuid.UUID, sto
 		if err != nil {
 			return nil, false, err
 		}
-		if out[i], err = r.Creds.Seal(ctx, &orgID, plain); err != nil {
+		if out[i], err = mailcred.SealOrg(ctx, c, plain); err != nil {
 			return nil, false, err
 		}
 		changed = true
