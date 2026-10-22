@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -100,6 +101,9 @@ func TestEventAvroReadsPreUpgradeEnvelopes(t *testing.T) {
 }
 
 // Unframed fixtures need their writer schema, just as registry decoding does.
+// branchesAfterFixtures are union branches added after the fixtures were written.
+var branchesAfterFixtures = []any{"warmbly.events.JobEventWarmupRescued"}
+
 func preTransportSchema(t *testing.T, schema avro.Schema) avro.Schema {
 	t.Helper()
 	doc, err := SchemaDocument(schema)
@@ -127,9 +131,17 @@ func preTransportSchema(t *testing.T, schema avro.Schema) avro.Schema {
 				x["fields"] = kept
 			}
 			for k, value := range x {
-				if k != "fields" {
-					strip(value)
+				if k == "fields" {
+					continue
 				}
+				if branches, ok := value.([]any); ok {
+					value = slices.DeleteFunc(branches, func(b any) bool {
+						m, ok := b.(map[string]any)
+						return ok && slices.Contains(branchesAfterFixtures, m["name"])
+					})
+					x[k] = value
+				}
+				strip(value)
 			}
 		case []any:
 			for _, value := range x {
