@@ -2,8 +2,8 @@ package handler
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
-	"image"
 	"io"
 	"net/http"
 	"strconv"
@@ -15,6 +15,7 @@ import (
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/imagetype"
 )
 
 // formScope pulls the org and the :id path param once per handler.
@@ -268,7 +269,7 @@ const (
 )
 
 // readFormImageUpload mirrors readAvatarUpload with per-kind caps and copy;
-// the MIME allowlist (PNG/JPG only) is shared for the same CVE reasons.
+// the format allowlist (PNG/JPG only) is shared for the same CVE reasons.
 func readFormImageUpload(c *gin.Context, kind string) (body []byte, mime, ext string, xerr *errx.Error) {
 	maxBytes, maxDim := formLogoMaxBytes, formLogoMaxDim
 	// Covers and page backgrounds are both full-bleed art, so they share caps.
@@ -293,15 +294,14 @@ func readFormImageUpload(c *gin.Context, kind string) (body []byte, mime, ext st
 		return nil, "", "", errx.InternalError()
 	}
 	body = buf.Bytes()
-	mime = http.DetectContentType(body)
-	var ok bool
-	if ext, ok = allowedAvatarMIME[mime]; !ok {
-		return nil, "", "", errx.New(errx.BadRequest, fmt.Sprintf("the %s must be a PNG or JPG", kind))
-	}
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(body))
-	if err != nil {
+	format, cfg, err := imagetype.Detect(body, avatarFormats...)
+	if errors.Is(err, imagetype.ErrUnreadable) {
 		return nil, "", "", errx.New(errx.BadRequest, "image could not be parsed")
 	}
+	if err != nil {
+		return nil, "", "", errx.New(errx.BadRequest, fmt.Sprintf("the %s must be a PNG or JPG", kind))
+	}
+	mime, ext = format.MIME, format.Ext
 	if cfg.Width > maxDim || cfg.Height > maxDim {
 		return nil, "", "", errx.New(errx.BadRequest, fmt.Sprintf("the %s must be %dpx or smaller", kind, maxDim))
 	}
