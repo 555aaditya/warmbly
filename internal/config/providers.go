@@ -155,6 +155,12 @@ func PrivateMailHostsAllowed() bool {
 	return !isFalse(os.Getenv("MAIL_ALLOW_PRIVATE_HOSTS"))
 }
 
+// MailTLSInsecureAllowed reports whether MAIL_TLS_INSECURE=true applies: never
+// on hosted production, where a mailbox opts out per server with a pinned key.
+func MailTLSInsecureAllowed() bool {
+	return isTrue(os.Getenv("MAIL_TLS_INSECURE")) && !HostedProduction()
+}
+
 // MailvendorSandboxURL points every inbox vendor client at the sandbox's mock
 // vendor API (<url>/<vendor>). Honoured only in development (APP_ENV dev or
 // unset), so a stray value can never send real vendor keys elsewhere.

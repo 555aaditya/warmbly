@@ -50,7 +50,8 @@ func (w *WMail) nextSyncDelay(base time.Duration, last *errx.MailError) time.Dur
 		// Service-unavailable responses can supply the same retry window as 429.
 		d = max(last.RetryAfter, base)
 		minimum = d
-	case last != nil && last.Code == errx.MailErrorCodeSendingTooFast:
+	case last != nil && (last.Code == errx.MailErrorCodeSendingTooFast ||
+		last.Code == errx.MailErrorCodeTLSCertificateChanged || last.Code == errx.MailErrorCodeTLSCertificateUnconfirmed):
 		d = syncBackoffMax
 	case last != nil && isTransportError(last):
 		// The server is unreachable. Retry soon after the first failure (a

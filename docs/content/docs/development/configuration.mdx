@@ -506,7 +506,7 @@ Keep the copies private. GeoLite2 may not be redistributed, which is also why no
 | `WARMBLY_NODE_REGION` | Free-form label for where this node egresses from, e.g. `eu-central`. Placement prefers a worker near where a mailbox's provider expects sign-ins; unset scores neutral. Written by the join script from `--region` | unset | yes |
 | `ENCRYPTED_KEYS_BACKEND_URL` | Backend base the worker fetches organization keys from | unset | yes |
 | `ENCRYPTED_KEYS_WORKER_TOKEN` | The worker's copy of `INTERNAL_API_TOKEN` | unset | yes |
-| `MAIL_TLS_INSECURE` | Skips certificate verification on mailbox connections | `false` | yes |
+| `MAIL_TLS_INSECURE` | Skips certificate verification on mailbox connections and lets SMTP continue on a server that offers no STARTTLS. A password is still only sent over TLS or to this machine. Honoured on a self-hosted or development instance and ignored on hosted production, where a server with a self-signed or private certificate is trusted through its mailbox's own [certificate choice](/guides/mailboxes/#servers-with-their-own-certificate) instead. A joining node receives the value its control plane resolved | `false` | yes |
 | `MAIL_ALLOW_PRIVATE_HOSTS` | Whether a mailbox's SMTP or IMAP server may resolve to a loopback, private, link-local, CGNAT, multicast or metadata address. Checked on every connection, against the address actually dialled. A hosted production instance always refuses them; a self-hosted or development instance allows them unless this is `false`. A joining node receives the value its control plane resolved | `true` on a self-host or in development, refused on hosted production | yes |
 
 <Callout type="warn" title="An unset key URL is silent">

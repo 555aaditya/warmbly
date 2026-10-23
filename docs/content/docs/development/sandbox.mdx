@@ -87,7 +87,7 @@ Personas are derived from a hash of the contact's address, so behavior is stable
 | `dovecot` compose service | IMAP host for sandbox inboxes (ports 10143/10993), `sandbox` profile |
 | `mailpit` compose service | SMTP sink + capture API (ports 11025/18025) |
 | `CREDENTIALS_ENCRYPTION_KEY` | seals mailbox credentials at rest; fixed dev value in the Makefile |
-| `MAIL_TLS_INSECURE=true` | worker-only dev knob: skip TLS verification and allow the TLS-less Mailpit; never set in production |
+| `MAIL_TLS_INSECURE=true` | worker-only dev knob: skip TLS verification and allow the TLS-less Mailpit. Honoured on a self-hosted or development instance and ignored on hosted production |
 
 ## Environment variables
 
@@ -136,7 +136,7 @@ A tour that shows the platform working end to end:
 
 **No sends shortly after startup.** Check the backend log for campaign reconciler lines and that the worker is running with the account loaded (`email account added to worker`). The worker learns about mailboxes from the backend's reconciler within a minute of both being up.
 
-**Sends fail with TLS errors.** The worker must run with `MAIL_TLS_INSECURE=true` (set by `make worker`). Production configurations must never set it.
+**Sends fail with TLS errors.** The worker must run with `MAIL_TLS_INSECURE=true` (set by `make worker`); on hosted production the knob is ignored and the worker logs that it is.
 
 **Replies missing from the unibox.** Confirm the simulator is running and the consumer is up: delivery is simulator to Dovecot to worker IMAP sync to the event bus to consumer.
 

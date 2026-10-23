@@ -76,7 +76,22 @@ const (
 	MailErrorCodeDomainAuthRejected MailErrorCode = "DOMAIN_AUTH_REJECTED"
 	MailErrorCodeQuotaExceeded      MailErrorCode = "QUOTA_EXCEEDED"
 	MailErrorCodeAccountSuspended   MailErrorCode = "ACCOUNT_SUSPENDED"
+	// MailErrorCodeTLSCertificateChanged is a server trusted on its pinned
+	// certificate presenting a different one. Not a credentials failure: the
+	// owner re-confirms the certificate in the mailbox's settings.
+	MailErrorCodeTLSCertificateChanged MailErrorCode = "TLS_CERTIFICATE_CHANGED"
+	// MailErrorCodeTLSCertificateUnconfirmed is a server the owner chose to
+	// trust without a certificate authority whose certificate was never
+	// confirmed, so no connection is made until it is.
+	MailErrorCodeTLSCertificateUnconfirmed MailErrorCode = "TLS_CERTIFICATE_UNCONFIRMED"
 )
+
+// TLSCertificateMailErrorCodes are resolved by confirming the server's
+// certificate in the mailbox's settings.
+var TLSCertificateMailErrorCodes = []MailErrorCode{
+	MailErrorCodeTLSCertificateChanged,
+	MailErrorCodeTLSCertificateUnconfirmed,
+}
 
 // CredentialMailErrorCodes are the credential-class errors a successful
 // mailbox re-authorization or SMTP/IMAP credential update fixes.
@@ -319,6 +334,22 @@ var (
 		"Your email sending quota has been exceeded. Please try again later.",
 		MailErrorResolveMethodRetry,
 	)
+	ErrMailTLSCertificateChanged = func(server string) *MailError {
+		return MError(
+			MailErrorWarning,
+			MailErrorCodeTLSCertificateChanged,
+			fmt.Sprintf("The %s server's certificate changed since it was confirmed for this mailbox, so Warmbly did not connect. If the server's owner replaced it, re-confirm the certificate under Settings > Server certificates on the mailbox.", server),
+			MailErrorResolveMethodReload,
+		)
+	}
+	ErrMailTLSCertificateUnconfirmed = func(server string) *MailError {
+		return MError(
+			MailErrorWarning,
+			MailErrorCodeTLSCertificateUnconfirmed,
+			fmt.Sprintf("This mailbox trusts its %s server without a certificate authority, but the server's certificate has not been confirmed yet, so Warmbly did not connect. Confirm it under Settings > Server certificates on the mailbox.", server),
+			MailErrorResolveMethodReload,
+		)
+	}
 	ErrMailAccountSuspended = MError(
 		MailErrorCritical,
 		MailErrorCodeAccountSuspended,
@@ -381,6 +412,12 @@ func (e *MailError) GetUserErrorInfo() UserErrorInfo {
 	case MailErrorCodeRecipientRejected:
 		info.Title = "Recipient Rejected"
 		info.ActionRequired = "The recipient address was not accepted"
+	case MailErrorCodeTLSCertificateChanged:
+		info.Title = "Server certificate changed"
+		info.ActionRequired = "Check with the server's owner, then re-confirm the certificate under Settings > Server certificates on the mailbox"
+	case MailErrorCodeTLSCertificateUnconfirmed:
+		info.Title = "Server certificate not confirmed"
+		info.ActionRequired = "Confirm the server's certificate under Settings > Server certificates on the mailbox"
 	}
 
 	return info

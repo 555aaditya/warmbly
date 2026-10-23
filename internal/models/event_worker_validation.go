@@ -56,6 +56,8 @@ type EmailValidationLeg struct {
 	// with STARTTLS. On a passing verdict the mailbox is stored with them.
 	Port     int    `json:"port,omitempty"`
 	Security string `json:"security,omitempty"`
+	// Certificate is what the server presented over TLS, when it got that far.
+	Certificate *MailCertificate `json:"certificate,omitempty"`
 }
 
 // EmailValidationVerdict is the worker's answer to an EventWorkerEmailValidation,

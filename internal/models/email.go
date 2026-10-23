@@ -527,6 +527,83 @@ type Service struct {
 	// from the port", which is how rows and events written before the field
 	// existed behave.
 	Security string `json:"security,omitempty" avro:"security"`
+	// TLSUnverified is the owner's recorded choice to trust this server on its
+	// pinned certificate (TLSPin) instead of a certificate authority.
+	TLSUnverified bool `json:"tls_unverified,omitempty" avro:"tls_unverified"`
+	// TLSPin is the confirmed SHA-256 of the leaf's SubjectPublicKeyInfo,
+	// lowercase hex. Only read when TLSUnverified is set.
+	TLSPin string `json:"tls_pin,omitempty" avro:"tls_pin"`
+	// Observed is the certificate the last connection check saw. Never stored or sent.
+	Observed *MailCertificate `json:"-" avro:"-"`
+}
+
+// MailCertificate describes the certificate a mail server presented.
+type MailCertificate struct {
+	// Fingerprint is the SHA-256 of the leaf's SubjectPublicKeyInfo, lowercase hex.
+	Fingerprint string `json:"fingerprint"`
+	Subject     string `json:"subject,omitempty"`
+	Issuer      string `json:"issuer,omitempty"`
+	// NotAfter is the expiry, RFC 3339.
+	NotAfter   string `json:"not_after,omitempty"`
+	SelfSigned bool   `json:"self_signed,omitempty"`
+	// Trusted is set when the chain also passes CA and host name verification.
+	Trusted bool `json:"trusted,omitempty"`
+}
+
+// MailboxServerCertificate is one server's certificate policy on a mailbox.
+type MailboxServerCertificate struct {
+	Host          string `json:"host"`
+	Port          int    `json:"port"`
+	TLSUnverified bool   `json:"tls_unverified"`
+	TLSPin        string `json:"tls_pin,omitempty"`
+	// Observed is what the server presented on a check; absent on a plain read.
+	Observed *MailCertificate `json:"observed,omitempty"`
+}
+
+// MailboxCertificates is an SMTP/IMAP mailbox's certificate policy per server.
+type MailboxCertificates struct {
+	SMTP MailboxServerCertificate `json:"smtp"`
+	IMAP MailboxServerCertificate `json:"imap"`
+}
+
+// ConfirmMailboxCertificates names the fingerprints the owner confirmed, one
+// per server that is trusted on a pin.
+type ConfirmMailboxCertificates struct {
+	SMTPPin string `json:"smtp_pin"`
+	IMAPPin string `json:"imap_pin"`
+}
+
+// NormalizeTLSPin returns a certificate pin as 64 lowercase hex characters, or
+// "" when it is not a SHA-256 fingerprint. A "sha256:" prefix and colon, space
+// or dash separators are accepted.
+func NormalizeTLSPin(pin string) string {
+	pin = strings.TrimSpace(pin)
+	if len(pin) > 7 && strings.EqualFold(pin[:7], "sha256:") {
+		pin = pin[7:]
+	}
+	pin = strings.ToLower(strings.NewReplacer(":", "", " ", "", "-", "").Replace(pin))
+	if len(pin) != 64 {
+		return ""
+	}
+	for _, c := range pin {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return ""
+		}
+	}
+	return pin
+}
+
+// StoredTLSPin is the pin to persist for a server: only one whose owner opted
+// out of CA verification carries a pin.
+func (s *Service) StoredTLSPin() *string {
+	if s == nil || !s.TLSUnverified {
+		return nil
+	}
+	pin := NormalizeTLSPin(s.TLSPin)
+	if pin == "" {
+		return nil
+	}
+	return &pin
 }
 
 type Oauth2Service struct {

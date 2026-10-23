@@ -168,7 +168,16 @@ func checkUnsafeWebhookURLs(ctx context.Context, d Deps, in Input) *Finding {
 
 func checkTLSVerificationOff(ctx context.Context, d Deps, in Input) *Finding {
 	platform := truthy("SMTP_TLS_INSECURE_SKIP_VERIFY")
-	mailbox := truthy("MAIL_TLS_INSECURE")
+	mailboxSet := truthy("MAIL_TLS_INSECURE")
+	// Hosted production ignores the mailbox knob; each mailbox records its own pinned opt-out.
+	mailbox := config.MailTLSInsecureAllowed()
+	if mailboxSet && !mailbox && !platform {
+		return result(CategorySecurity, SeverityInfo, "MAIL_TLS_INSECURE is ignored",
+			"MAIL_TLS_INSECURE=true is set but hosted production ignores it, so mailbox certificates are verified. "+
+				"A mailbox on a server with a self-signed or private certificate can opt out of verification in its own settings, "+
+				"which pins the server's certificate. Remove the variable to avoid confusion.",
+			docsWorkers)
+	}
 	if !platform && !mailbox {
 		return nil
 	}

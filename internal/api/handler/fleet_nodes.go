@@ -296,7 +296,6 @@ var nodeEnvKeys = []string{
 	"BOX_GOOGLE_CLIENT_SECRET",
 	"BOX_OUTLOOK_CLIENT_ID",
 	"BOX_OUTLOOK_CLIENT_SECRET",
-	"MAIL_TLS_INSECURE",
 	"POSTHOG_KEY",
 	"POSTHOG_HOST",
 	"POSTHOG_ERROR_TRACKING",
@@ -400,6 +399,7 @@ func renderNodeEnv(nodeID uuid.UUID, role models.NodeRole, region string) string
 	fmt.Fprintf(&b, "BLOB_PROVIDER=%s\n", blobProvider)
 	// Resolved here: a node cannot tell a hosted instance from a self-host on its own.
 	fmt.Fprintf(&b, "MAIL_ALLOW_PRIVATE_HOSTS=%t\n", config.PrivateMailHostsAllowed())
+	fmt.Fprintf(&b, "MAIL_TLS_INSECURE=%t\n", config.MailTLSInsecureAllowed())
 
 	keys := nodeEnvKeys
 	if role == models.NodeRoleConsumer {

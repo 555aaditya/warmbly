@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/pkg/safehttp"
 )
@@ -98,12 +99,19 @@ var (
 	insecureTLS  bool
 )
 
-// InsecureTLS reports whether MAIL_TLS_INSECURE=true is set. Local-dev-only
-// escape hatch for the sandbox stack (mailpit/dovecot with self-signed or no
-// TLS); production deployments never set it, so mail TLS stays verified.
+// InsecureTLS reports whether MAIL_TLS_INSECURE=true applies. A self-hosted or
+// development instance honours it; hosted production ignores it, so a server
+// without a valid certificate needs the mailbox's own pinned opt-out there.
 func InsecureTLS() bool {
 	insecureOnce.Do(func() {
-		insecureTLS = os.Getenv(envInsecureTLS) == "true"
+		set := os.Getenv(envInsecureTLS) == "true"
+		insecureTLS = config.MailTLSInsecureAllowed()
+		switch {
+		case insecureTLS:
+			log.Warn().Msg("MAIL_TLS_INSECURE=true: mailbox certificates are not verified and SMTP may skip STARTTLS")
+		case set:
+			log.Error().Msg("MAIL_TLS_INSECURE=true is ignored on hosted production: mailbox certificates are verified unless the mailbox records its own opt-out")
+		}
 	})
 	return insecureTLS
 }

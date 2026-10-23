@@ -507,8 +507,8 @@ func (s *emailService) buildAddWorkerEmailSnapshot(ctx context.Context, acc *mod
 		out.ImapSync = true
 		out.SmtpImap = &models.AddWorkerEmailSmtpImapData{
 			Credentials: &models.SmtpImap{
-				SMTP: &models.Service{Host: creds.SMTPHost, Port: creds.SMTPPort, Username: creds.SMTPUser, Password: creds.SMTPPassword, Security: creds.SMTPSecurity},
-				IMAP: &models.Service{Host: creds.IMAPHost, Port: creds.IMAPPort, Username: creds.IMAPUser, Password: creds.IMAPPassword, Security: creds.IMAPSecurity},
+				SMTP: &models.Service{Host: creds.SMTPHost, Port: creds.SMTPPort, Username: creds.SMTPUser, Password: creds.SMTPPassword, Security: creds.SMTPSecurity, TLSUnverified: creds.SMTPTLSUnverified, TLSPin: creds.SMTPTLSPin},
+				IMAP: &models.Service{Host: creds.IMAPHost, Port: creds.IMAPPort, Username: creds.IMAPUser, Password: creds.IMAPPassword, Security: creds.IMAPSecurity, TLSUnverified: creds.IMAPTLSUnverified, TLSPin: creds.IMAPTLSPin},
 			},
 			Mailboxes: s.workerMailboxes(ctx, userID, acc, preload),
 		}

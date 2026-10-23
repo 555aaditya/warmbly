@@ -100,6 +100,7 @@ import useCurrentOrganization from "@/lib/api/hooks/app/organizations/useCurrent
 import { timezoneOptions } from "@/lib/timezone";
 import { utcDay } from "@/lib/campaignPeriod";
 import SyncStatusCard from "./SyncStatusCard";
+import ServerCertificatesCard from "./ServerCertificatesCard";
 import CloudWarmupCard from "./CloudWarmupCard";
 import WarmupPartnerDiversity from "./WarmupPartnerDiversity";
 import useCloudPool from "@/hooks/useCloudPool";
@@ -2343,6 +2344,8 @@ function SettingsTab({ form, update, mailbox, onDisconnected }: { form: Inbox; u
                     </div>
                 </div>
             )}
+
+            {mailbox.provider === "smtp_imap" && <ServerCertificatesCard mailboxId={mailbox.id} />}
 
             <div className="px-5 py-5 space-y-3">
                 <Eyebrow>Unibox</Eyebrow>
