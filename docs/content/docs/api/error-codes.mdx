@@ -96,6 +96,12 @@ Fields are named by their JSON key, with nested fields as a dotted path (`inner.
 
 Versioned API routes check every query parameter name and value before the endpoint runs, including endpoints that read filters directly. The legacy `/invitations/lookup` alias applies the same validation. NUL characters, invalid UTF-8 and malformed query encoding return `400` rather than sending unsupported text to the database. For example, `?q=%00` returns `Query parameter "q[0]" contains a NUL character, which is not supported.` Valid Unicode text and properly encoded punctuation remain unchanged.
 
+Every route takes each query parameter at most once. A parameter repeated in the query string returns `400` with `code: "duplicate_query_parameter"` and a `request_id`, whatever the values. The parameters documented as lists accept repeats: `status` on `GET /v1/advisor/recommendations`, and `campaign_ids` and `folder_ids` on `GET /v1/analytics/dashboard`. Send any other list as one comma-separated value where the endpoint documents one.
+
+A request carrying more than one `Authorization`, `X-Warmbly-Token`, `Idempotency-Key` or `Origin` header line returns `400` with `code: "duplicate_header"`. Send each of them once. Repeated `X-Forwarded-For` lines are read as one list in arrival order, and for `X-Forwarded-Proto`, `X-Forwarded-Host`, `X-Forwarded-Port` and `X-Real-IP` the last line is used, the one the nearest proxy wrote. Forwarded headers are believed only from [`TRUSTED_PROXIES`](/development/configuration/#network-and-proxy).
+
+The public forms service answers a repeated query parameter or `X-Warmbly-Render` header on its `/api/forms/` routes with `400` and `{"error": "duplicate_query_parameter"}` or `{"error": "duplicate_header"}`.
+
 Resource IDs on email, campaign and contact routes must be UUIDs. Email `tags` and campaign `email_tags` and `folders` arrays also require UUID values. Malformed values return `400` with `code: "bad_request"` and a `request_id` before a database write. Valid UUIDs are normalized and repeated relation IDs are deduplicated; workspace ownership checks still apply.
 
 **How to fix:**
@@ -108,6 +114,8 @@ Resource IDs on email, campaign and contact routes must be UUIDs. Email `tags` a
 
 | `code` | Meaning |
 |--------|---------|
+| `duplicate_query_parameter` | A query parameter appeared more than once on a route that reads it as a single value |
+| `duplicate_header` | `Authorization`, `X-Warmbly-Token`, `Idempotency-Key` or `Origin` was sent on more than one header line |
 | `invalid_lead_status` | `POST /contacts/search` or `POST /contacts/export` was given a `lead_status` that is not one of the documented values |
 | `invalid_sort_by` | `POST /contacts/search`, `POST /contacts/export` or a bulk action's `all` selection was given a `sort_by` of the form `custom:<key>` whose key could never be a custom-field name (letters, numbers, underscores, spaces or dashes) |
 | `invalid_column`, `duplicate_column`, `too_many_columns`, `invalid_sort` | `PUT /me/views/:view` was given a column id that view cannot render, the same column twice, more than 64 columns, or a sort that names neither a sortable contact column nor a well-formed `custom:<key>` (`unibox_rail` has no columns or sort at all) |
