@@ -293,7 +293,7 @@ func (s *JobsService) handleUnmarkedWarmupEmail(ctx context.Context, e *models.J
 		return false, nil
 	}
 	log.Debug().
-		Str("token", token.Token.String()).
+		Str("task_id", token.TaskID.String()).
 		Str("email_account_id", e.Message.EmailID.String()).
 		Msg("verified warmup mail that arrived without its verify header")
 	return s.processWarmupReceipt(ctx, e, token)

@@ -108,7 +108,7 @@ Personas are derived from a hash of the contact's address, so behavior is stable
 
 ## Mock inbox vendors
 
-The simulator also plays two inbox vendors, so connecting a vendor account, importing its mailboxes and managing its domains work with no vendor account. `make sandbox` starts it and points the backend at it with `MAILVENDOR_SANDBOX_URL=http://127.0.0.1:18099`. To run only the mock next to your own backend, use `go run ./cmd/sandbox -vendors-only` and start the backend with the same variable. The backend ignores it unless `APP_ENV` is `dev`.
+The simulator also plays two inbox vendors, so connecting a vendor account, importing its mailboxes and managing its domains work with no vendor account. `make sandbox` starts it and points the backend at it with `MAILVENDOR_SANDBOX_URL=http://127.0.0.1:18099`. To run only the mock next to your own backend, use `go run ./cmd/sandbox -vendors-only` and start the backend with the same variable. The backend ignores it unless `APP_ENV` is `dev`. Seeding and the simulator likewise refuse to start unless `APP_ENV` is `dev`, `development` or `local`; `make sandbox` sets it.
 
 Connect either vendor from **Add account > Inbox vendor** with any API key. The InboxKit mock has two workspaces, so its mailboxes show which one each sits in:
 

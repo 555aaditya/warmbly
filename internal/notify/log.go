@@ -3,6 +3,8 @@ package notify
 import (
 	"context"
 	"log"
+	"os"
+	"regexp"
 	"strings"
 )
 
@@ -44,12 +46,39 @@ func (s *logEmailNotificationService) write(to, cc, bcc []string, replyTo, subje
 		b.WriteString("│ Reply-To: " + replyTo + "\n")
 	}
 	b.WriteString("│ Subject: " + subject + "\n")
+	body := htmlToPlainText(html)
+	if !explicitDevelopment() {
+		body = redactLinkParams(body)
+		b.WriteString("│ Links:   query strings removed; set APP_ENV=dev to log them\n")
+	}
 	b.WriteString("├──────────────────────────────────────────────────────────────────────\n")
-	for _, line := range strings.Split(htmlToPlainText(html), "\n") {
+	for _, line := range strings.Split(body, "\n") {
 		b.WriteString("│ " + line + "\n")
 	}
 	b.WriteString("└──────────────────────────────────────────────────────────────────────\n")
 
 	log.Print(b.String())
 	return nil
+}
+
+// explicitDevelopment reports whether APP_ENV names local development; unset does not.
+func explicitDevelopment() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV"))) {
+	case "dev", "development", "local":
+		return true
+	}
+	return false
+}
+
+var logLink = regexp.MustCompile(`https?://[^\s<>"']+`)
+
+// redactLinkParams drops the query and fragment of every link, where reset and invitation tokens travel.
+func redactLinkParams(s string) string {
+	return logLink.ReplaceAllStringFunc(s, func(raw string) string {
+		cut := strings.IndexAny(raw, "?#")
+		if cut < 0 {
+			return raw
+		}
+		return raw[:cut] + "?[redacted]"
+	})
 }

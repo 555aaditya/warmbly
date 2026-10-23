@@ -581,12 +581,12 @@ func main() {
 		// when they cannot log in.
 		if perr := mailTransport.Preflight(ctx); perr != nil {
 			log.Printf("Warning: platform mail preflight FAILED (%s): %v", mailTransport.Description, perr)
-			log.Printf("Warning: login codes, password resets and invitations will not be delivered. Set MAIL_TRANSPORT=log to read them from these logs instead.")
+			log.Printf("Warning: login codes, password resets and invitations will not be delivered. Set MAIL_TRANSPORT=log to read login codes from these logs instead; reset and invitation links are logged only with APP_ENV=dev.")
 		} else {
 			log.Printf("Platform mail transport: %s", mailTransport.Description)
 		}
 		if !mailTransport.Delivers {
-			log.Printf("Warning: MAIL_TRANSPORT=log — every platform email, including login codes, is printed here and never delivered. Do not use this on a deployment other people can reach.")
+			log.Printf("Warning: MAIL_TRANSPORT=log — every platform email, including login codes, is printed here and never delivered. Outside APP_ENV=dev the query strings of its links, where reset and invitation tokens travel, are removed. Do not use this on a deployment other people can reach.")
 		}
 
 		authCfg, err := cfg.LoadAuthConfig(ctx)

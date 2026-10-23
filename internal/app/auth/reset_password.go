@@ -327,7 +327,9 @@ func (s *authService) ChangePassword(ctx context.Context, userID uuid.UUID, curr
 
 	// The current password spends the account's re-authentication budget,
 	// charged before the comparison.
-	if !s.ReserveReauthAttempt(ctx, userID) {
+	if ok, xerr := s.ReserveReauthAttempt(ctx, userID); xerr != nil {
+		return nil, xerr
+	} else if !ok {
 		return nil, errx.ErrAuthLimit
 	}
 	ok, verr := argon2.Verify(data.CurrentPassword, hash)
