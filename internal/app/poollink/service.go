@@ -38,7 +38,7 @@ var (
 	ErrInstanceRevoked   = errx.NewWithIdentifier(errx.Unauthorized, "pool_link_revoked", "This instance's link has been revoked. Reconnect from the instance settings.")
 	ErrMailboxLimit      = errx.NewWithIdentifier(errx.PaymentRequired, "pool_link_mailbox_limit", "This workspace has reached the free allowance of linked mailboxes. Upgrade to the pool plan for unlimited mailboxes.")
 	ErrMailboxNotFound   = errx.NewWithIdentifier(errx.NotFound, "pool_link_mailbox_not_found", "That mailbox is not enrolled.")
-	ErrMailboxConflict   = errx.NewWithIdentifier(errx.Conflict, "pool_link_mailbox_conflict", "This address already exists in the linked Cloud workspace, but is not enrolled for this local mailbox. Contact Warmbly support to check the association. Do not delete or re-enroll the mailbox.")
+	ErrMailboxConflict   = errx.NewWithIdentifier(errx.Conflict, "pool_link_mailbox_conflict", "This address already exists in the linked Cloud workspace. An instance administrator can connect the existing mailbox from Add account > In your Warmbly Cloud workspace when it is available there. Otherwise, contact Warmbly support to check the association. Do not delete or re-enroll the Cloud mailbox.")
 	ErrWarmupNotEntitled = errx.NewWithIdentifier(errx.Forbidden, "pool_link_warmup_unavailable", "Warmup is not available on this workspace.")
 	ErrBadCredential     = errx.NewWithIdentifier(errx.BadRequest, "pool_link_credential", "A credential matching the provider is required.")
 	ErrBadRequest        = errx.NewWithIdentifier(errx.BadRequest, "pool_link_request", "Instance name is required.")
@@ -78,6 +78,7 @@ type Service interface {
 	RevokeInstance(ctx context.Context, orgID, instanceID uuid.UUID) *errx.Error
 
 	Enroll(ctx context.Context, inst *models.PoolLinkInstance, req models.PoolLinkEnrollRequest) (*models.PoolLinkMailboxState, *errx.Error)
+	AssociateSMTPIMAP(ctx context.Context, inst *models.PoolLinkInstance, req models.PoolLinkSMTPAssociationRequest) (*models.PoolLinkMailboxState, *errx.Error)
 	ListMailboxes(ctx context.Context, inst *models.PoolLinkInstance) ([]models.PoolLinkMailboxState, *errx.Error)
 	WarmupStats(ctx context.Context, inst *models.PoolLinkInstance, req models.PoolLinkWarmupReportRequest) ([]models.WarmupDailyStats, *errx.Error)
 	WarmupPlacementData(ctx context.Context, inst *models.PoolLinkInstance, req models.PoolLinkWarmupReportRequest) (*models.WarmupPlacementData, *errx.Error)
@@ -98,7 +99,7 @@ type Service interface {
 	FinishOAuth(ctx context.Context, inst *models.PoolLinkInstance, session string) (*models.PoolLinkMailboxState, *errx.Error)
 	FinishManagedOAuth(ctx context.Context, inst *models.PoolLinkInstance, req models.PoolLinkOAuthFinishRequest) (*models.PoolLinkMailboxState, *errx.Error)
 	AccessToken(ctx context.Context, inst *models.PoolLinkInstance, remoteID uuid.UUID) (*models.PoolLinkAccessToken, *errx.Error)
-	ListWorkspaceMailboxes(ctx context.Context, inst *models.PoolLinkInstance) ([]models.PoolLinkWorkspaceMailbox, *errx.Error)
+	ListWorkspaceMailboxes(ctx context.Context, inst *models.PoolLinkInstance, includeSMTPIMAP bool) ([]models.PoolLinkWorkspaceMailbox, *errx.Error)
 	Adopt(ctx context.Context, inst *models.PoolLinkInstance, req models.PoolLinkAdoptRequest) (*models.PoolLinkMailboxState, *errx.Error)
 	VerifyWarmupToken(ctx context.Context, inst *models.PoolLinkInstance, remoteID, token uuid.UUID) (bool, *errx.Error)
 	// VerifyWarmupDelivery is the same answer for warmup mail that arrived without its verify header.
@@ -111,18 +112,26 @@ type Service interface {
 }
 
 type service struct {
-	repo      repository.PoolLinkRepository
-	emails    repository.EmailRepository
-	emailSvc  email.EmailService
-	analytics analytics.AnalyticsService
-	warmup    repository.WarmupRepository
-	gate      feature.FeatureGateService
-	orgs      organization.OrganizationService
-	scheduler WarmupScheduler
-	planRepo  repository.PlanRepository
-	cache     *cache.Cache
-	campaigns CampaignUsage
+	repo       repository.PoolLinkRepository
+	emails     repository.EmailRepository
+	emailSvc   email.EmailService
+	analytics  analytics.AnalyticsService
+	warmup     repository.WarmupRepository
+	gate       feature.FeatureGateService
+	orgs       organization.OrganizationService
+	scheduler  WarmupScheduler
+	planRepo   repository.PlanRepository
+	cache      *cache.Cache
+	campaigns  CampaignUsage
+	delegation DelegatedTokenBroker
 }
+
+// DelegatedTokenBroker mints tokens without moving the administrator's grant to an instance.
+type DelegatedTokenBroker interface {
+	AccessToken(context.Context, uuid.UUID) (*models.PoolLinkAccessToken, bool, *errx.Error)
+}
+
+func (s *service) WireDelegation(b DelegatedTokenBroker) { s.delegation = b }
 
 // CampaignUsage says whether Cloud campaigns send from a mailbox.
 type CampaignUsage interface {
@@ -392,10 +401,11 @@ func (s *service) InstanceInfo(ctx context.Context, inst *models.PoolLinkInstanc
 	}
 	inst.MailboxCount = len(mailboxes)
 	return &models.PoolLinkInstanceInfo{
-		ManagedConsentProtocol: models.ManagedConsentProtocol,
-		Instance:               *inst,
-		Organization:           models.PoolLinkOrgInfo{ID: org.ID, Name: org.Name},
-		Plan:                   plan,
+		SMTPAssociationProtocol: models.SMTPAssociationProtocol,
+		ManagedConsentProtocol:  models.ManagedConsentProtocol,
+		Instance:                *inst,
+		Organization:            models.PoolLinkOrgInfo{ID: org.ID, Name: org.Name},
+		Plan:                    plan,
 	}, nil
 }
 
@@ -573,6 +583,8 @@ func (s *service) adoptHostedSMTPIMAP(ctx context.Context, inst *models.PoolLink
 		return nil, errx.InternalError()
 	}
 	log.Info().Str("instance_id", inst.ID.String()).Str("account_id", ref.ID.String()).Msg("pool link: adopted the workspace's existing mailbox on enrollment")
+	// An existing Cloud mailbox keeps its ramp settings when the instance associates it.
+	req.Warmup = models.PoolLinkWarmupSettings{}
 	return s.startEnrolled(ctx, inst, userID, ref.ID, req)
 }
 

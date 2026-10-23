@@ -1006,12 +1006,23 @@ func (r *emailRepository) NewManagedAccount(ctx context.Context, userID string, 
 	if data.ID != uuid.Nil {
 		id = data.ID
 	}
+	tx, err := r.DB.Begin(ctx)
+	if err != nil {
+		return nil, errx.InternalError()
+	}
+	defer tx.Rollback(ctx)
+	if xerr := ensureMailboxAbsentTx(ctx, tx, data.OrganizationID, data.Email); xerr != nil {
+		return nil, xerr
+	}
 	query := withNewMailboxBehavior(`
 		INSERT INTO email_accounts (id, user_id, organization_id, email, name, provider, signature_plain, signature_html, tracking_domain, last_synced_at, created_at, updated_at, warmup_tag, mail_host, auth_method)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $10, $11, $12, $13)
 	`, true)
-	if _, err := r.DB.Exec(ctx, query, id, userID, data.OrganizationID, data.Email, data.Name, data.Provider, sigplain, sightml, "", t, "", data.MailHost, models.MailAuthOAuth); err != nil {
+	if _, err := tx.Exec(ctx, query, id, userID, data.OrganizationID, data.Email, data.Name, data.Provider, sigplain, sightml, "", t, "", data.MailHost, models.MailAuthOAuth); err != nil {
 		db.CaptureError(err, query, nil, "exec")
+		return nil, errx.InternalError()
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return nil, errx.InternalError()
 	}
 	return r.GetByID(ctx, id)
