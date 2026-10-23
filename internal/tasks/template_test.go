@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	htmltemplate "html/template"
 	"reflect"
 	"strings"
 	"testing"
@@ -173,6 +174,9 @@ func TestTemplateSender_MapsEveryAllowedMailboxField(t *testing.T) {
 		}
 		if name == "ReplyTo" {
 			want = account.ReplyToHeader()
+		}
+		if name == "SignatureHTML" {
+			want = htmltemplate.HTML(account.SignatureHTML)
 		}
 		if !reflect.DeepEqual(sender.Field(i).Interface(), want) {
 			t.Errorf("Sender.%s = %v, want %v", name, sender.Field(i).Interface(), want)

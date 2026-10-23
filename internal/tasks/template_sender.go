@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	htmltemplate "html/template"
 	"strings"
 	"time"
 
@@ -9,13 +10,14 @@ import (
 
 // TemplateSender is an explicit allowlist: never embed the mailbox model or its methods.
 type TemplateSender struct {
-	Name                     string
-	Email                    string
-	MailboxEmail             string
-	SendAsEmail              string
-	ReplyTo                  string
-	SignaturePlain           string
-	SignatureHTML            string
+	Name           string
+	Email          string
+	MailboxEmail   string
+	SendAsEmail    string
+	ReplyTo        string
+	SignaturePlain string
+	// SignatureHTML is the mailbox's own markup, so an HTML body emits it as written.
+	SignatureHTML            htmltemplate.HTML
 	SignatureSync            bool
 	SignatureCode            bool
 	Provider                 string
@@ -73,7 +75,7 @@ func templateContext(account *models.Email, unsubscribeURL string) TemplateConte
 		SendAsEmail:              strings.TrimSpace(account.SendAsEmail),
 		ReplyTo:                  account.ReplyToHeader(),
 		SignaturePlain:           account.SignaturePlain,
-		SignatureHTML:            account.SignatureHTML,
+		SignatureHTML:            htmltemplate.HTML(strings.ReplaceAll(account.SignatureHTML, "\x00", "")),
 		SignatureSync:            account.SignatureSync,
 		SignatureCode:            account.SignatureCode,
 		Provider:                 account.Provider,
