@@ -1679,9 +1679,9 @@ func Run(
 			poolLink := jwtOnly.Group("/pool-link")
 			poolLink.Use(m.RateLimitMiddleware(models.RateLimitWrite))
 			{
-				poolLink.GET("/codes/:code", h.PoolLinkDescribeCode)
-				poolLink.POST("/codes/:code/approve", middleware.RequireFreshAuth(), h.PoolLinkApproveCode)
-				poolLink.POST("/codes/:code/deny", h.PoolLinkDenyCode)
+				poolLink.GET("/codes/:code", m.CodeLookupBudget("pool_link"), h.PoolLinkDescribeCode)
+				poolLink.POST("/codes/:code/approve", middleware.RequireFreshAuth(), m.CodeLookupBudget("pool_link"), h.PoolLinkApproveCode)
+				poolLink.POST("/codes/:code/deny", m.CodeLookupBudget("pool_link"), h.PoolLinkDenyCode)
 				// The pool plan is not in the public plan list, so the
 				// dashboard has no other way to learn its price or reach a
 				// checkout for it.
@@ -1698,9 +1698,9 @@ func Run(
 			cliAuth := jwtOnly.Group("/auth/cli")
 			cliAuth.Use(m.RateLimitMiddleware(models.RateLimitWrite))
 			{
-				cliAuth.GET("/codes/:code", h.CLIAuthDescribeCode)
-				cliAuth.POST("/codes/:code/approve", middleware.RequireFreshAuth(), h.CLIAuthApproveCode)
-				cliAuth.POST("/codes/:code/deny", h.CLIAuthDenyCode)
+				cliAuth.GET("/codes/:code", m.CodeLookupBudget("cli_auth"), h.CLIAuthDescribeCode)
+				cliAuth.POST("/codes/:code/approve", middleware.RequireFreshAuth(), m.CodeLookupBudget("cli_auth"), h.CLIAuthApproveCode)
+				cliAuth.POST("/codes/:code/deny", m.CodeLookupBudget("cli_auth"), h.CLIAuthDenyCode)
 			}
 			// The linked instance's own surface, authenticated by its token.
 			poolLinkInstance := base.Group("/pool-link/instance")
