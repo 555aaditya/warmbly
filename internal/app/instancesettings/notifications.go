@@ -3,10 +3,10 @@ package instancesettings
 import (
 	"net"
 	"net/url"
-	"os"
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/pkg/safehttp"
 )
 
@@ -201,7 +201,7 @@ func ValidateChannelURL(raw string) error {
 	if err != nil {
 		return errChannelURL("invalid url")
 	}
-	allowUnsafe := strings.EqualFold(os.Getenv("WARMBLY_ALLOW_UNSAFE_WEBHOOK_URLS"), "true")
+	allowUnsafe := config.UnsafeWebhookURLsAllowed()
 	if u.Scheme != "https" && !(allowUnsafe && u.Scheme == "http") {
 		return errChannelURL("url scheme must be https")
 	}

@@ -140,7 +140,7 @@ func (s *Server) Router(trustedProxies []string) (*gin.Engine, error) {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	r := gin.New()
-	r.Use(middleware.RequestLogger(), gin.Recovery(), middleware.PageHeaders(formsHost()))
+	r.Use(middleware.ForwardedHeaders(), middleware.RequestLogger(), gin.Recovery(), middleware.PageHeaders(formsHost()))
 	// Same posture as the backend: trust no proxy unless the operator names
 	// it, so a forged X-Forwarded-For cannot dodge the submit limiter.
 	if len(trustedProxies) > 0 {
@@ -174,11 +174,24 @@ func (s *Server) Router(trustedProxies []string) (*gin.Engine, error) {
 
 	// Every JSON call needs the render token minted with the page shell, so
 	// scripted clients that never load the page get nothing.
-	api := r.Group("/api", s.requireRenderToken)
+	api := r.Group("/api", singleValued, s.requireRenderToken)
 	api.GET("/forms/:publicID", s.GetPublicForm)
 	api.POST("/forms/:publicID/submit", s.SubmitForm)
 	api.POST("/forms/:publicID/events", s.RecordFormEvent)
 	return r, nil
+}
+
+// singleValued refuses a repeated query parameter or render token; no forms route reads a list.
+func singleValued(c *gin.Context) {
+	if _, dup := middleware.DuplicateQueryParam(c.Request.URL.RawQuery, nil); dup {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "duplicate_query_parameter"})
+		return
+	}
+	if len(c.Request.Header.Values("X-Warmbly-Render")) > 1 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "duplicate_header"})
+		return
+	}
+	c.Next()
 }
 
 // requireRenderToken rejects API calls whose X-Warmbly-Render token is

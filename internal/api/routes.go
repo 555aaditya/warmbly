@@ -61,6 +61,7 @@ func Run(
 	r.Use(middleware.SecurityHeaders())
 
 	r.Use(middleware.RequestIDMiddleware())
+	r.Use(middleware.RequestHeaders(), middleware.SingleValuedQuery())
 	r.Use(middleware.APIVersionMiddleware(middleware.APIVersion))
 
 	r.GET("/health", func(c *gin.Context) {

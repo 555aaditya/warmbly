@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -24,8 +25,9 @@ type Config struct {
 	Mode    Mode
 	RepoDir string
 	Remote  string
-	// Command runs in ModeCommand after the checkout moved. It is passed to
-	// sh -c and has to build and restart everything itself.
+	// Command runs in ModeCommand after the checkout moved: an absolute
+	// executable and plain arguments, run without a shell. It has to build and
+	// restart everything itself.
 	Command string
 	// ComposeProject is the -p the stack was started with (the Makefile pins
 	// "warmbly"), ComposeProfiles the extra profiles to activate on top of the
@@ -49,8 +51,9 @@ const healthWait = 6 * time.Minute
 
 // Runner owns the checkout, the one job at a time, and the persisted history.
 type Runner struct {
-	cfg Config
-	git git
+	cfg  Config
+	argv []string
+	git  git
 
 	mu       sync.Mutex
 	checkout *Checkout
@@ -75,11 +78,26 @@ func NewRunner(cfg Config) (*Runner, error) {
 	} else if _, err := os.Stat(filepath.Join(cfg.RepoDir, ".git")); err != nil {
 		return nil, fmt.Errorf("%s is not a git checkout: %w", cfg.RepoDir, err)
 	}
-	if cfg.Mode == ModeCommand && strings.TrimSpace(cfg.Command) == "" {
-		return nil, errors.New("UPDATER_MODE=command needs UPDATER_COMMAND")
+	var argv []string
+	if cfg.Mode == ModeCommand {
+		var err error
+		if argv, err = commandArgv(cfg.Command); err != nil {
+			return nil, err
+		}
+	}
+	if cfg.ComposeProject != "" && !composeProjectRe.MatchString(cfg.ComposeProject) {
+		return nil, fmt.Errorf("UPDATER_COMPOSE_PROJECT %q is not a compose project name", cfg.ComposeProject)
+	}
+	for _, p := range strings.Split(cfg.ComposeProfiles, ",") {
+		if p = strings.TrimSpace(p); p != "" && !composeProfileRe.MatchString(p) {
+			return nil, fmt.Errorf("UPDATER_COMPOSE_PROFILES entry %q is not a compose profile name", p)
+		}
 	}
 	if cfg.Remote == "" {
 		cfg.Remote = "origin"
+	}
+	if !remoteNameRe.MatchString(cfg.Remote) {
+		return nil, fmt.Errorf("UPDATER_REMOTE %q is not a remote name", cfg.Remote)
 	}
 	if cfg.ComposeProject == "" {
 		cfg.ComposeProject = "warmbly"
@@ -87,9 +105,34 @@ func NewRunner(cfg Config) (*Runner, error) {
 	if cfg.FetchInterval <= 0 {
 		cfg.FetchInterval = 30 * time.Minute
 	}
-	r := &Runner{cfg: cfg, git: git{dir: cfg.RepoDir, remote: cfg.Remote}}
+	r := &Runner{cfg: cfg, argv: argv, git: git{dir: cfg.RepoDir, remote: cfg.Remote}}
 	r.loadState()
 	return r, nil
+}
+
+var (
+	composeProjectRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+	composeProfileRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+	commandArgRe     = regexp.MustCompile(`^[A-Za-z0-9_./:=,@%+-]+$`)
+	remoteNameRe     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+)
+
+// commandArgv splits UPDATER_COMMAND into an absolute executable and plain
+// arguments; it is executed directly, never through a shell.
+func commandArgv(raw string) ([]string, error) {
+	argv := strings.Fields(raw)
+	if len(argv) == 0 {
+		return nil, errors.New("UPDATER_MODE=command needs UPDATER_COMMAND")
+	}
+	if !filepath.IsAbs(argv[0]) {
+		return nil, errors.New("UPDATER_COMMAND must start with an absolute path to an executable")
+	}
+	for _, a := range argv {
+		if !commandArgRe.MatchString(a) {
+			return nil, fmt.Errorf("UPDATER_COMMAND argument %q holds a character it cannot take; put shell logic in a script", a)
+		}
+	}
+	return argv, nil
 }
 
 // Start refreshes the checkout state now and then on the fetch interval.
@@ -303,7 +346,7 @@ func (r *Runner) runSteps(ctx context.Context, job *Job, req UpdateRequest) erro
 	case ModeCommand:
 		r.step(job, "command")
 		r.logf(job, "running UPDATER_COMMAND")
-		if err := r.exec(ctx, job, r.cfg.RepoDir, nil, "sh", "-c", r.cfg.Command); err != nil {
+		if err := r.exec(ctx, job, r.cfg.RepoDir, nil, r.argv[0], r.argv[1:]...); err != nil {
 			return err
 		}
 	default:
