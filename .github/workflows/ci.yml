@@ -287,9 +287,9 @@ jobs:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
         run: |
           set -o pipefail
-          go test -race -v -p 1 ./internal/repository -run '^TestLiveCloud' -count=1 | tee cloud-standing.log
+          go test -race -v -p 1 ./internal/repository ./internal/app/poollink -run '^TestLiveCloud' -count=1 | tee cloud-standing.log
           if grep -q -- '--- SKIP:' cloud-standing.log; then exit 1; fi
-          for test in TestLiveCloudStandingFreshnessIsBoundedWithoutInventingAProviderBlock TestLiveCloudUnknownEvidenceDoesNotHideARealHold TestLiveCloudStaleLiveHoldStaysKnown TestLiveCloudPendingEnrollmentAndDisconnectAreUnknown; do
+          for test in TestLiveCloudStandingFreshnessIsBoundedWithoutInventingAProviderBlock TestLiveCloudUnknownEvidenceDoesNotHideARealHold TestLiveCloudStaleLiveHoldStaysKnown TestLiveCloudPendingEnrollmentAndDisconnectAreUnknown TestLiveCloudDetachedLinkWarmupStopsOnce; do
             grep -q -- "--- PASS: $test " cloud-standing.log
           done
 
