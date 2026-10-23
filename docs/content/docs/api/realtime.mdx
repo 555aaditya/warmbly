@@ -255,9 +255,10 @@ function connectRealtime({ token, orgId, intents = ["CUSTOM"], onEvent }) {
 
     ws.onclose = (e) => {
       stopHeartbeats();
-      // Connect-level rejections currently surface as a failed handshake (HTTP 403
-      // carrying the reason), not a close code; either way, reconnect with backoff.
-      // Re-mint the token first if it may have expired (4004).
+      // Connect-level rejections surface as a failed handshake (HTTP 403 with
+      // { code, reason }), not a close code; either way, reconnect with backoff.
+      // An API key reconnects as is; a 10-minute connection token opens one socket,
+      // so mint a new one first. ws's "unexpected-response" event exposes the 403 body.
       if (closedByUs) return;
       console.warn("closed", e.code, e.reason, "- retrying in", backoff, "ms");
       setTimeout(open, backoff);
@@ -359,7 +360,7 @@ Ephemeral [live-collaboration](#live-collaboration) frames (`live:cursor`, `live
 
 A connection can be refused at two points, and the two surface differently today:
 
-- **Connect-level** (authentication, the realtime permission, the IP allowlist, the rate limit, the connection cap): the WebSocket upgrade is refused at the HTTP layer. The handshake returns an **HTTP 403** carrying the reason, and the client observes a failed upgrade rather than an application close frame.
+- **Connect-level** (authentication, the realtime permission, the IP allowlist, the rate limit, the connection cap): the WebSocket upgrade is refused at the HTTP layer. The handshake returns an **HTTP 403** with a JSON body `{ code, reason }` (plus `retry_after_ms` when rate limited), where `reason` is a sentence saying what to do, and the client observes a failed upgrade rather than an application close frame.
 - **Post-join** (a `phx_join` that fails after the socket is open, for example a channel you may not see): the join reply comes back with `status: "error"` and a structured error object `{ code, reason }` in its `response`. `reason` is a stable slug naming the specific refusal (`not_a_member`, `campaign_not_found`, `rate_limited`, ...); `code` is the coarse class to branch on.
 
 Both paths use the same reason codes:
@@ -373,7 +374,20 @@ Both paths use the same reason codes:
 | 4009 | Connection limit exceeded | Reduce concurrent sockets |
 | 4010 | Permission denied, not a member, or no such record | Do not retry this topic |
 
-Because connect-level rejections are an HTTP 403 and not a WebSocket close frame today, a client cannot branch on the connect-level code programmatically: treat any failed upgrade as "re-mint the token if it expired, otherwise back off". Post-join rejections are already machine-readable through `{ code, reason }`. Surfacing connect-level reasons as application close codes too is planned.
+The connect-level refusals you are most likely to meet:
+
+| Code | `reason` | What to do |
+| --- | --- | --- |
+| 4003 | `Send API keys and OAuth tokens in the x-warmbly-token header, not the URL` | Move the key or token from the `token` query parameter to the `x-warmbly-token` header |
+| 4004 | `This connection token was already used; mint a new one for each connection` | Call `POST /v1/getaway` again before every connection attempt, including reconnects |
+| 4004 | `The session that minted this connection token has signed out; sign in again` | Sign in again, then mint a new token |
+| 4004 | `Token expired` | Mint a new token; each lasts 10 minutes |
+| 4004 | `Invalid API key`, `API key inactive`, `API key expired`, `Access token revoked` | Check the credential in the dashboard; retrying the same one will not help |
+| 4010 | `Permission denied`, `IP address not allowed` | Grant `REALTIME_SUBSCRIBE`, or connect from an address the key allows |
+
+A server-side client can read that body from the failed upgrade. A browser's `WebSocket` exposes no handshake body, so there treat any failed upgrade as "mint a new token, then back off". Post-join rejections are machine-readable through `{ code, reason }` everywhere.
+
+The admin panel's own `admin:platform` feed is not open to developers. Its join is refused with `jwt_required` for an API key or OAuth token, `admin_mfa_required` when the session that minted the connection token did not verify a second factor (sign in again with your authenticator or passkey), and `not_an_admin` for anyone without platform admin permissions.
 
 ## Delivery guarantees
 

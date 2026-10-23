@@ -98,7 +98,7 @@ defmodule RealtimeWeb.OrgChannel do
          }, socket}
 
       {:error, :not_a_member} ->
-        join_error(:not_a_member)
+        ChannelGuard.join_error("not_a_member")
 
       {:error, reason} ->
         Logger.warning("Failed to join org channel: #{inspect(reason)}")

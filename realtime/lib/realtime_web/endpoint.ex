@@ -21,7 +21,8 @@ defmodule RealtimeWeb.Endpoint do
       # cheap to send and the org fan-out makes expensive to receive.
       max_frame_size: 65_536,
       # x_headers carries the API key / OAuth token header; peer_data the client IP.
-      connect_info: [:peer_data, :x_headers]
+      connect_info: [:peer_data, :x_headers],
+      error_handler: {RealtimeWeb.UserSocket, :handle_error, []}
     ],
     longpoll: false
   )

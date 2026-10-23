@@ -572,7 +572,7 @@ func validateURL(raw string) error {
 	}
 	allowUnsafe := config.UnsafeWebhookURLsAllowed()
 	if u.Scheme != "https" && !(allowUnsafe && u.Scheme == "http") {
-		return invalidInput("url scheme must be https")
+		return invalidInput("the URL must start with https://")
 	}
 	if u.Host == "" {
 		return invalidInput("url must have a host")
@@ -580,10 +580,10 @@ func validateURL(raw string) error {
 	// Reject userinfo (user:pass@host) — a classic URL-parser-confusion SSRF
 	// bypass and never legitimate on a webhook endpoint.
 	if u.User != nil {
-		return invalidInput("url must not contain credentials")
+		return invalidInput("the URL must not contain a username or password")
 	}
 	if !allowUnsafe && isPrivateWebhookHost(u.Hostname()) {
-		return invalidInput("url host must be publicly routable")
+		return invalidInput("the URL must point at a public address: localhost, private, loopback and link-local hosts are refused")
 	}
 	return nil
 }

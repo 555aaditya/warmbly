@@ -961,7 +961,7 @@ The Elixir websocket service. Its runtime configuration is read only when the re
 | `PORT` | Listen port | `4000` |
 | `CHECK_ORIGIN_HOSTS` | Origins a browser may open a socket from, comma separated, e.g. `https://app.example.com,https://admin.example.com`. Not this service's own host | unset |
 | `CHECK_ORIGIN` | Legacy host-based form, consulted only when `CHECK_ORIGIN_HOSTS` is empty. `true` accepts an upgrade only from `PHX_HOST` | `false` |
-| `REALTIME_ALLOW_QUERY_CREDENTIALS` | `true` accepts an API key or OAuth token in the socket URL's `token` parameter, for an older client that cannot send the `x-warmbly-token` header. URLs reach proxy and access logs, so leave it off unless such a client still depends on it. Read in every environment, not only `prod` | `false` |
+| `REALTIME_ALLOW_QUERY_CREDENTIALS` | `true` accepts an API key or OAuth token in the socket URL's `token` parameter, for an older client that cannot send the `x-warmbly-token` header. URLs reach proxy and access logs, so leave it off unless such a client still depends on it; the realtime service logs a warning at boot while it is on. Read in every environment, not only `prod` | `false` |
 | `PUBSUB_ENABLED` | `true` swaps the Redis bridge for Google Pub/Sub | `false` |
 | `GCP_PROJECT_ID` | Required when `PUBSUB_ENABLED=true`; the service refuses to boot without it | unset |
 | `MAX_CONNECTIONS_PER_USER` | Concurrent sockets one account may hold. The caller's plan limit applies too, whichever is lower | `10` |

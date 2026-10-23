@@ -40,6 +40,20 @@ defmodule RealtimeWeb.UserSocketCredentialTest do
     assert UserSocket.credential(%{"token" => ""}, %{}) == {:error, :missing_token}
   end
 
+  test "a refused handshake answers 403 with the reason it was refused for" do
+    payload = %{code: 4003, reason: Realtime.Auth.error_message(:credential_in_query)}
+    conn = UserSocket.handle_error(Plug.Test.conn(:get, "/socket/websocket"), payload)
+
+    assert conn.status == 403
+    assert Jason.decode!(conn.resp_body) == %{"code" => 4003, "reason" => payload.reason}
+    assert conn.resp_body =~ "x-warmbly-token"
+  end
+
+  test "a used ticket and a signed-out session say what to do next" do
+    assert Realtime.Auth.error_message(:ticket_used) =~ "mint a new one"
+    assert Realtime.Auth.error_message(:session_revoked) =~ "sign in again"
+  end
+
   test "socket params are filtered from logs" do
     filtered = Phoenix.Logger.filter_values(%{"token" => @ticket, "vsn" => "1.0.0"})
     assert filtered["token"] == "[FILTERED]"

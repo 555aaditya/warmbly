@@ -147,6 +147,18 @@ defmodule RealtimeWeb.UserSocket do
     Logger.warning("Socket connection rejected (#{code}): #{message}")
   end
 
+  @doc false
+  # The transport's error handler: a refused handshake answers 403 with the
+  # `{code, reason}` it was refused for, so a server-side client can read why.
+  def handle_error(conn, %{code: code, reason: reason} = payload)
+      when is_integer(code) and is_binary(reason) do
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.send_resp(403, Jason.encode!(payload))
+  end
+
+  def handle_error(conn, _reason), do: Plug.Conn.send_resp(conn, 403, "")
+
   @impl true
   def id(socket), do: "user_socket:#{socket.assigns.user_id}"
 

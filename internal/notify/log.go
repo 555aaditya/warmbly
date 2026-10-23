@@ -49,7 +49,7 @@ func (s *logEmailNotificationService) write(to, cc, bcc []string, replyTo, subje
 	body := htmlToPlainText(html)
 	if !explicitDevelopment() {
 		body = redactLinkParams(body)
-		b.WriteString("│ Links:   query strings removed; set APP_ENV=dev to log them\n")
+		b.WriteString("│ Links:   query strings removed. Copy invitation links under Settings > Members; reset passwords with warmblyctl user reset-password\n")
 	}
 	b.WriteString("├──────────────────────────────────────────────────────────────────────\n")
 	for _, line := range strings.Split(body, "\n") {

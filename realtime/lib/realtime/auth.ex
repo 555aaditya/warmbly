@@ -247,8 +247,13 @@ defmodule Realtime.Auth do
   def error_message(:key_inactive), do: "API key inactive"
   def error_message(:key_expired), do: "API key expired"
   def error_message(:token_revoked), do: "Access token revoked"
-  def error_message(:session_revoked), do: "Authentication failed"
-  def error_message(:ticket_used), do: "Authentication failed"
+
+  def error_message(:session_revoked),
+    do: "The session that minted this connection token has signed out; sign in again"
+
+  def error_message(:ticket_used),
+    do: "This connection token was already used; mint a new one for each connection"
+
   def error_message(:database_error), do: "Authentication failed"
   def error_message(:permission_denied), do: "Permission denied"
   def error_message(:ip_not_allowed), do: "IP address not allowed"

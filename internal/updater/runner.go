@@ -86,18 +86,18 @@ func NewRunner(cfg Config) (*Runner, error) {
 		}
 	}
 	if cfg.ComposeProject != "" && !composeProjectRe.MatchString(cfg.ComposeProject) {
-		return nil, fmt.Errorf("UPDATER_COMPOSE_PROJECT %q is not a compose project name", cfg.ComposeProject)
+		return nil, fmt.Errorf("UPDATER_COMPOSE_PROJECT=%q is not a compose project name: use the -p the stack was started with, lowercase letters, digits, _ and - only, starting with a letter or digit (default warmbly)", cfg.ComposeProject)
 	}
 	for _, p := range strings.Split(cfg.ComposeProfiles, ",") {
 		if p = strings.TrimSpace(p); p != "" && !composeProfileRe.MatchString(p) {
-			return nil, fmt.Errorf("UPDATER_COMPOSE_PROFILES entry %q is not a compose profile name", p)
+			return nil, fmt.Errorf("UPDATER_COMPOSE_PROFILES entry %q is not a compose profile name: list profile names separated by commas, each letters, digits, _, . and - only, starting with a letter or digit (default updater)", p)
 		}
 	}
 	if cfg.Remote == "" {
 		cfg.Remote = "origin"
 	}
 	if !remoteNameRe.MatchString(cfg.Remote) {
-		return nil, fmt.Errorf("UPDATER_REMOTE %q is not a remote name", cfg.Remote)
+		return nil, fmt.Errorf("UPDATER_REMOTE=%q is not a git remote name: name a remote from `git remote` in the checkout, letters, digits, _, . and - only, starting with a letter or digit (default origin)", cfg.Remote)
 	}
 	if cfg.ComposeProject == "" {
 		cfg.ComposeProject = "warmbly"
@@ -122,14 +122,14 @@ var (
 func commandArgv(raw string) ([]string, error) {
 	argv := strings.Fields(raw)
 	if len(argv) == 0 {
-		return nil, errors.New("UPDATER_MODE=command needs UPDATER_COMMAND")
+		return nil, errors.New("UPDATER_MODE=command needs UPDATER_COMMAND: set it to the absolute path of the program that builds and restarts the stack, for example /opt/warmbly/upgrade.sh")
 	}
 	if !filepath.IsAbs(argv[0]) {
-		return nil, errors.New("UPDATER_COMMAND must start with an absolute path to an executable")
+		return nil, fmt.Errorf("UPDATER_COMMAND must start with an absolute path to an executable, got %q: it runs without a shell, so name the program by its full path, for example /opt/warmbly/upgrade.sh", argv[0])
 	}
 	for _, a := range argv {
 		if !commandArgRe.MatchString(a) {
-			return nil, fmt.Errorf("UPDATER_COMMAND argument %q holds a character it cannot take; put shell logic in a script", a)
+			return nil, fmt.Errorf("UPDATER_COMMAND argument %q holds a character it cannot take: it runs without a shell, so arguments may use only letters, digits and _./:=,@%%+-. Put pipes, &&, quotes and variables in a script and name the script here", a)
 		}
 	}
 	return argv, nil

@@ -809,9 +809,9 @@ var table = []Entry{
 	},
 	{
 		Key: "MAIL_TLS_INSECURE", Group: GroupWorkers, RuntimeChangeable: ChangeBootOnly,
-		Effect:     "true disables certificate verification on customer mailbox connections, only when APP_ENV=dev (the local sandbox). Elsewhere it is ignored and a mailbox opts out in its own settings, which pins the server's certificate.",
+		Effect:     "true disables certificate verification on customer mailbox connections. Honoured on a self-hosted or development instance; hosted production ignores it, and a mailbox there trusts its server in its own settings, which pins the server's certificate.",
 		DocsAnchor: docsWorkers,
-		Resolve:    boolOr("MAIL_TLS_INSECURE", false),
+		Resolve:    func(*Runtime) string { return yesNo(config.MailTLSInsecureAllowed()) },
 	},
 	{
 		Key: "MAIL_ALLOW_PRIVATE_HOSTS", Group: GroupWorkers, RuntimeChangeable: ChangeBootOnly,

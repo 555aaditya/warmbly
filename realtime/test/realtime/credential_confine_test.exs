@@ -97,7 +97,7 @@ defmodule Realtime.CredentialConfineTest do
       assert {:ok, _, _} =
                subscribe_and_join(credential_socket(@read_campaigns), OrgChannel, "org:#{@org}")
 
-      assert {:error, %{reason: "Not a member of this organization"}} =
+      assert {:error, %{code: 4010, reason: "not_a_member"}} =
                subscribe_and_join(
                  credential_socket(@read_campaigns),
                  OrgChannel,
