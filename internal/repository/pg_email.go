@@ -1606,7 +1606,7 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 		direction := ""
 		diagnostic := currentMode != nil && *currentMode == "diagnostic"
 		sendingOff := currentPaused || diagnostic && !currentSend || udata.TestSendEnabled != nil && !*udata.TestSendEnabled
-		receivingOff := diagnostic && !currentReceive || udata.TestReceiveEnabled != nil && !*udata.TestReceiveEnabled
+		receivingOff := currentPaused || diagnostic && !currentReceive || udata.TestReceiveEnabled != nil && !*udata.TestReceiveEnabled
 		if currentStatus != "active" || udata.Status != nil && *udata.Status != "active" || currentMode != nil && *currentMode == "off" || udata.TestMode != nil && *udata.TestMode == "off" || sendingOff && receivingOff {
 			direction = "both"
 		} else if sendingOff {
@@ -2226,7 +2226,8 @@ func (r *emailRepository) SetWarmupLifecycle(ctx context.Context, orgID, emailAc
 	}
 	diagnostic := currentMode != nil && *currentMode == "diagnostic"
 	sendingOff := currentPaused || action == "pause" || diagnostic && !currentSend
-	receivingOff := diagnostic && !currentReceive
+	// Warmup off stops receiving as well as sending.
+	receivingOff := currentPaused || action == "pause" || diagnostic && !currentReceive
 	direction := ""
 	if action == "stop" || action == "disable" || currentStatus != "active" || currentMode != nil && *currentMode == "off" || sendingOff && receivingOff {
 		direction = "both"
