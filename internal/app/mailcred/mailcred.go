@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/app/cipher"
+	"github.com/warmbly/warmbly/internal/observability/legacysecret"
 	"github.com/warmbly/warmbly/internal/pkg/encrypt"
 )
 
@@ -199,5 +200,6 @@ func (s *Sealer) OpenOrLegacy(ctx context.Context, orgID *uuid.UUID, stored stri
 	if encrypt.LooksSealed(stored) {
 		return "", false, encrypt.ErrUnreadable
 	}
+	legacysecret.Read(legacysecret.MailboxCredential)
 	return stored, true, nil
 }

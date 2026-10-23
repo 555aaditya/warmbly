@@ -630,7 +630,7 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) (result *errx
 	// {a|b|c} spintax per-recipient (only real |-groups; literal braces/CSS are
 	// left intact) so each send varies for deliverability.
 	subject := expandSpintax(RenderTemplateWith(rawSubject, *contact, extra))
-	bodyHTML := expandSpintax(RenderTemplateWith(rawBodyHTML, *contact, extra))
+	bodyHTML := expandSpintax(RenderHTMLTemplateWith(rawBodyHTML, *contact, extra))
 	bodyPlain := expandSpintax(RenderTemplateWith(rawBodyPlain, *contact, extra))
 	// A recorded conversation subject is already rendered: reuse it verbatim.
 	if threadParent != nil && threadParent.SubjectSent && threadSubject != "" {
@@ -658,7 +658,7 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) (result *errx
 			if threadSubject == "" {
 				subject = expandSpintax(RenderTemplateWith(selection.Subject, *contact, extra))
 			}
-			bodyHTML = expandSpintax(RenderTemplateWith(selection.BodyHTML, *contact, extra))
+			bodyHTML = expandSpintax(RenderHTMLTemplateWith(selection.BodyHTML, *contact, extra))
 			bodyPlain = expandSpintax(RenderTemplateWith(selection.BodyPlain, *contact, extra))
 			// A variant may carry HTML only; keep the plain-text alternative.
 			if bodyPlain == "" && bodyHTML != "" {

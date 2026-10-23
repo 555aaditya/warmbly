@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/legacysecret"
 	"github.com/warmbly/warmbly/internal/pkg/encrypt"
 )
 
@@ -113,8 +114,14 @@ func (r *oauthRepository) openWebhookSecret(ctx context.Context, a *models.OAuth
 		a.WebhookSecret = ""
 		return
 	}
-	if sealed, err := r.enc.Encrypt(stored); err == nil {
-		_, _ = r.db.Exec(ctx, `UPDATE oauth_applications SET webhook_secret = $2 WHERE id = $1 AND webhook_secret = $3`, a.ID, sealed, stored)
+	legacysecret.Read(legacysecret.OAuthAppWebhookSecret)
+	sealed, err := r.enc.Encrypt(stored)
+	if err != nil {
+		legacysecret.ResealFailed(legacysecret.OAuthAppWebhookSecret, "seal")
+		return
+	}
+	if _, err := r.db.Exec(ctx, `UPDATE oauth_applications SET webhook_secret = $2 WHERE id = $1 AND webhook_secret = $3`, a.ID, sealed, stored); err != nil {
+		legacysecret.ResealFailed(legacysecret.OAuthAppWebhookSecret, "write")
 	}
 }
 
