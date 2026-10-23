@@ -211,6 +211,8 @@ Both are about the same thing: the credentials never leave the machine, so there
 
 Set the Bridge's own username and password, which it shows in its interface, not your Proton account password. The same applies to any relay on the machine: a Dovecot sharing a host with its worker, or a local sink used for testing.
 
+More generally, hosted Warmbly connects only to mail servers at public addresses, checked against the address each connection actually reaches. A self-hosted instance can reach servers on its own network, and an operator can refuse those too with [`MAIL_ALLOW_PRIVATE_HOSTS=false`](/development/configuration/#workers).
+
 </Fold>
 
 <Fold>

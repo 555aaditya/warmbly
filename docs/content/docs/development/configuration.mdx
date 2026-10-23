@@ -43,7 +43,7 @@ Anything flagged on [Instance health](/development/instance-health/) links back 
 | `WARMBLY_CLOUD_URL` | The Warmbly Cloud API a self-hosted instance links to for the hosted warmup pool ([guide](/guides/warmbly-cloud/)). Outbound HTTPS only | `https://api.warmbly.com` | no |
 | `INSTANCE_NAME` | The name shown on the Warmbly Cloud approval page when linking this instance | the hostname | no |
 | `WARMBLY_VERSION` | Version string reported to Warmbly Cloud on link requests | `dev` | no |
-| `WARMBLY_ALLOW_UNSAFE_WEBHOOK_URLS` | `true` lets customer webhooks point at `http://` and private addresses. Development only: it lets any workspace member make the backend reach into your internal network | `false` | yes |
+| `WARMBLY_ALLOW_UNSAFE_WEBHOOK_URLS` | `true` lets customer webhooks point at `http://` and private addresses. Honoured only on a self-hosted (`DEPLOYMENT_MODE=self_hosted`) or development (`APP_ENV=dev`) instance; a hosted production instance ignores it. It lets any workspace member make the backend reach into your internal network, so only set it where you control that network | `false` | yes |
 
 In Gin release mode, access logs omit successful health probes and internal GET lookups, including an expected missing email-message mapping. Authentication failures, server errors, other missing resources and all mutations remain logged. Gin debug mode keeps every access log. Query strings and credential path parameters remain redacted in both modes; organization audit events are unaffected.
 
@@ -507,6 +507,7 @@ Keep the copies private. GeoLite2 may not be redistributed, which is also why no
 | `ENCRYPTED_KEYS_BACKEND_URL` | Backend base the worker fetches organization keys from | unset | yes |
 | `ENCRYPTED_KEYS_WORKER_TOKEN` | The worker's copy of `INTERNAL_API_TOKEN` | unset | yes |
 | `MAIL_TLS_INSECURE` | Skips certificate verification on mailbox connections | `false` | yes |
+| `MAIL_ALLOW_PRIVATE_HOSTS` | Whether a mailbox's SMTP or IMAP server may resolve to a loopback, private, link-local, CGNAT, multicast or metadata address. Checked on every connection, against the address actually dialled. A hosted production instance always refuses them; a self-hosted or development instance allows them unless this is `false`. A joining node receives the value its control plane resolved | `true` on a self-host or in development, refused on hosted production | yes |
 
 <Callout type="warn" title="An unset key URL is silent">
 An empty `ENCRYPTED_KEYS_BACKEND_URL` or `ENCRYPTED_KEYS_WORKER_TOKEN` lets the worker start, subscribe and never register. There is no log line. The `no_worker_heartbeat` check on [Instance health](/development/instance-health/#no_worker_heartbeat) is what surfaces it.
@@ -516,10 +517,11 @@ Workers hold no database connection by design. Everything relational they need a
 
 ### What a joining node is given
 
-`warmbly join` renders `/etc/warmbly/node.env` from the backend's own environment, so most of this page reaches a node without being set twice. Three things are decided rather than copied:
+`warmbly join` renders `/etc/warmbly/node.env` from the backend's own environment, so most of this page reaches a node without being set twice. Four things are decided rather than copied:
 
 - **The crypto and blob providers are translated.** An instance on `KMS_PROVIDER=aws` hands its nodes `brokered`, and one on `BLOB_PROVIDER=s3` hands them `brokered` too, so no machine in the fleet carries a cloud credential. Providers that need no credential pass through unchanged.
 - **A worker never receives `PRIMARY_DB`.** A consumer does, because it opens Postgres itself. An instance that keeps its DSN in a secret manager rather than the environment has none to send, and the join script says so.
+- **`MAIL_ALLOW_PRIVATE_HOSTS` is resolved.** A node cannot tell a hosted instance from a self-host, so it receives the policy its control plane applies. A node that has not rejoined since an upgrade takes it from `node.local.env`; on a hosted instance, rejoin existing nodes or write `MAIL_ALLOW_PRIVATE_HOSTS=false` there.
 - **Addresses are inherited literally.** `NATS_URL`, `REDIS` and `ENCRYPTED_KEYS_BACKEND_URL` are used exactly as the backend has them, and a value that only resolves inside your container network produces a node that enrols cleanly and reaches nothing.
 
 ### Settings the control plane cannot know

@@ -157,7 +157,7 @@ func checkDevModePublic(ctx context.Context, d Deps, in Input) *Finding {
 }
 
 func checkUnsafeWebhookURLs(ctx context.Context, d Deps, in Input) *Finding {
-	if !truthy("WARMBLY_ALLOW_UNSAFE_WEBHOOK_URLS") {
+	if !config.UnsafeWebhookURLsAllowed() {
 		return nil
 	}
 	return result(CategorySecurity, SeverityWarning, "Unsafe webhook URLs are allowed",

@@ -166,7 +166,7 @@ The request that loaded this page carried an `X-Forwarded-For` header while `TRU
 
 ### unsafe_webhook_urls
 
-`WARMBLY_ALLOW_UNSAFE_WEBHOOK_URLS=true` lets customer webhooks point at `http://` and private addresses, which means any workspace member can make the backend reach into your internal network. Development only. See [webhooks](/guides/webhooks/).
+`WARMBLY_ALLOW_UNSAFE_WEBHOOK_URLS=true` lets customer webhooks point at `http://` and private addresses, which means any workspace member can make the backend reach into your internal network. It is honoured only on a self-hosted or development instance and the check fires only where it takes effect. See [webhooks](/guides/webhooks/).
 
 ### tls_verification_off
 

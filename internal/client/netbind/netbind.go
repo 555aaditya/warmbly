@@ -9,11 +9,17 @@
 package netbind
 
 import (
+	"context"
 	"crypto/tls"
+	"errors"
 	"net"
 	"os"
 	"sync"
+	"syscall"
 	"time"
+
+	"github.com/warmbly/warmbly/internal/config"
+	"github.com/warmbly/warmbly/internal/pkg/safehttp"
 )
 
 const (
@@ -46,14 +52,34 @@ func FromEnv() *net.TCPAddr {
 
 // Dialer returns a *net.Dialer bound to the given local address. If local is
 // nil, the env var is consulted. If still unset, the OS default route is used.
+// Unless config.PrivateMailHostsAllowed, it refuses any peer that is not publicly routable.
 func Dialer(local *net.TCPAddr) *net.Dialer {
 	if local == nil {
 		local = FromEnv()
 	}
-	return &net.Dialer{
+	d := &net.Dialer{
 		Timeout:   defaultTimeout,
 		LocalAddr: local,
 	}
+	if !config.PrivateMailHostsAllowed() {
+		d.ControlContext = publicPeerOnly
+	}
+	return d
+}
+
+// ErrPrivateMailHost is returned when a mail connection targets a non-public address.
+var ErrPrivateMailHost = errors.New("mail server address is not publicly routable")
+
+// publicPeerOnly checks the resolved address each connection attempt is about to use.
+func publicPeerOnly(_ context.Context, _, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	if safehttp.IsBlockedIP(net.ParseIP(host)) {
+		return ErrPrivateMailHost
+	}
+	return nil
 }
 
 // TLSDialer mirrors Dialer for TLS connections (IMAP, HTTPS).
