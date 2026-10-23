@@ -49,7 +49,8 @@ type UniboxRepository interface {
 	GetByThread(ctx context.Context, orgID, emailID uuid.UUID, threadID string, limit int, cursor string) (*models.MailSearchResult, error)
 	// GetByThreadWithin is GetByThread held to the allowed mailboxes before paging; nil allows every mailbox.
 	GetByThreadWithin(ctx context.Context, orgID, emailID uuid.UUID, threadID string, limit int, cursor string, allowed []uuid.UUID) (*models.MailSearchResult, error)
-	GetBySender(ctx context.Context, userID uuid.UUID, sender string, limit int, cursor string) (*models.MailSearchResult, error)
+	// GetBySender is the organization's mail from sender, newest first, across every mailbox.
+	GetBySender(ctx context.Context, orgID uuid.UUID, sender string, limit int, cursor string) (*models.MailSearchResult, error)
 	Search(ctx context.Context, orgID uuid.UUID, params *models.MailSearchParams) (*models.MailSearchResult, error)
 	GetUnseenCount(ctx context.Context, orgID uuid.UUID, emailAccountID *uuid.UUID) (int64, error)
 	MarkSeen(ctx context.Context, userID, id uuid.UUID, seen bool) error
@@ -665,16 +666,17 @@ func (r *uniboxRepository) annotateAnsweredMailboxes(ctx context.Context, orgID 
 	return nil
 }
 
-func (r *uniboxRepository) GetBySender(ctx context.Context, userID uuid.UUID, sender string, limit int, cursor string) (*models.MailSearchResult, error) {
+func (r *uniboxRepository) GetBySender(ctx context.Context, orgID uuid.UUID, sender string, limit int, cursor string) (*models.MailSearchResult, error) {
 	query := fmt.Sprintf(`
 		SELECT %s
 		FROM unibox_emails
-		WHERE user_id = $1 AND ($2 = ANY(from_addr) OR EXISTS (
+		WHERE email_id = ANY(ARRAY(SELECT id FROM email_accounts WHERE organization_id = $1))
+		  AND ($2 = ANY(from_addr) OR EXISTS (
 			SELECT 1 FROM unnest(from_addr) a(addr) WHERE %s = lower(btrim($2))
 		))
 	`, strings.Join(mailFieldsPreview, ", "), bareAddrSQL("a.addr"))
 
-	args := []any{userID, sender}
+	args := []any{orgID, sender}
 	argPos := 3
 
 	if cursor != "" {
@@ -682,7 +684,8 @@ func (r *uniboxRepository) GetBySender(ctx context.Context, userID uuid.UUID, se
 		if err == nil {
 			query += fmt.Sprintf(`
 				AND (internal_date, id) < (
-					SELECT internal_date, id FROM unibox_emails WHERE id = $%d AND user_id = $1
+					SELECT internal_date, id FROM unibox_emails
+					WHERE id = $%d AND email_id = ANY(ARRAY(SELECT id FROM email_accounts WHERE organization_id = $1))
 				)`, argPos)
 			args = append(args, cursorID)
 			argPos++
