@@ -1896,6 +1896,11 @@ func main() {
 			GoogleSignin:      googleSignin,
 			Prover:            domainProver,
 		})
+		if w, ok := poolLinkService.(interface {
+			WireDelegation(poollink.DelegatedTokenBroker)
+		}); ok {
+			w.WireDelegation(delegationService)
+		}
 		go delegationService.StartHealth(ctx)
 
 		// Inbox vendor accounts: keys sealed per workspace, mailboxes imported by API.
