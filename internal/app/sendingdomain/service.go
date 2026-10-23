@@ -127,7 +127,7 @@ func markTarget(r *models.DomainRedirect, own []string) {
 	}
 }
 
-const targetInactiveMessage = "Not in use: the destination is not on one of this workspace's own domains, so visitors get the domain's default page instead. Point it at a page on a domain the workspace has a mailbox on."
+const targetInactiveMessage = "Not in use: the destination is no longer on one of this workspace's own domains, so visitors get the domain's default page instead. This happens when the mailbox or verified domain it relied on was removed. Point the redirect at a page on a domain the workspace has a mailbox on, its verified tracking domain, or its verified forms domain, or reconnect that domain."
 
 func normalizeDomain(d string) string {
 	return mailhost.NormalizeDomain(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(d)), "www."))

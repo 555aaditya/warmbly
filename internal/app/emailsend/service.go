@@ -169,7 +169,7 @@ func (s *emailSendService) SendEmail(ctx context.Context, userID, orgID, account
 			return nil, errx.InternalError()
 		}
 		if models.BanScope(scope).Has(models.BanScopeSend) {
-			return nil, errx.New(errx.Forbidden, "this account cannot send email")
+			return nil, errx.ErrAccountSendingSuspended
 		}
 	}
 
@@ -183,7 +183,7 @@ func (s *emailSendService) SendEmail(ctx context.Context, userID, orgID, account
 			return nil, errx.InternalError()
 		}
 		if states[orgID].BlocksSending() {
-			return nil, errx.New(errx.Forbidden, "this workspace is suspended from sending while it is under review")
+			return nil, errx.ErrWorkspaceSendingSuspended
 		}
 	}
 

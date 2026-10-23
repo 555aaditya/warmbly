@@ -29,7 +29,7 @@ func (s *tokenService) RefreshToken(ctx context.Context, refreshToken string) (*
 
 	// Neither a revoked session nor one past its absolute expiry refreshes back to life.
 	if !sess.Live(time.Now()) {
-		return nil, errx.ErrToken
+		return nil, errx.ErrSessionEnded
 	}
 
 	if sess.RefreshNonce != t.Nonce {

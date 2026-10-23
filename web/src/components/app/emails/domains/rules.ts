@@ -158,14 +158,16 @@ export const REDIRECT_NOT_OWN_DOMAIN = "redirect_target_not_own_domain";
 
 /** Where a redirect may point, shown under every destination field. */
 export const OWN_DOMAIN_HINT =
-    "Must be a page on one of your workspace's own domains: a domain you have a mailbox on, your verified forms domain, or a subdomain of one.";
+    "Must be a page on one of your workspace's own domains: a domain you have a mailbox on (not gmail.com or another shared provider), your verified tracking domain, your verified forms domain, or a subdomain of one.";
 
 export function redirectPill(d: SendingDomain): PillInfo {
     if (d.redirect && d.redirect.target_active === false) {
         return {
             tone: "amber",
             label: "Not in use",
-            title: d.redirect.target_inactive_reason || `${d.redirect.target_url} is not on one of this workspace's own domains.`,
+            title:
+                d.redirect.target_inactive_reason ||
+                `${d.redirect.target_url} is no longer on one of this workspace's own domains, so visitors get the domain's default page. Point it at one of your own domains.`,
         };
     }
     switch (redirectState(d)) {

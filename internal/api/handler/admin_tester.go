@@ -62,7 +62,7 @@ func testerPasswordLifetime(req adminCreateTesterRequest) (time.Duration, *errx.
 		hours = testerPasswordDefaultHours
 	}
 	if hours < 1 || hours > testerPasswordMaxHours {
-		return 0, errx.New(errx.BadRequest, "the password can be valid for 1 to 48 hours")
+		return 0, errx.New(errx.BadRequest, "The initial password can be valid for 1 to 48 hours. Set password_hours to a whole number from 1 to 48.")
 	}
 	return time.Duration(hours) * time.Hour, nil
 }

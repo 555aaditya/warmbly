@@ -251,7 +251,7 @@ func (s *authService) refuseSuspended(ctx context.Context, userID uuid.UUID) *er
 		return errx.InternalError()
 	}
 	if models.BanScope(scope).Has(models.BanScopeLogin) {
-		return errx.New(errx.Forbidden, "this account has been suspended")
+		return errx.ErrAccountSuspended
 	}
 	return nil
 }

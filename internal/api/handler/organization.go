@@ -417,7 +417,7 @@ func (h *Handler) GetPendingInvitations(c *gin.Context) {
 	case "true":
 		includeExpired = true
 	default:
-		errx.JSON(c, errx.New(errx.BadRequest, "include_expired must be true or false"))
+		errx.JSON(c, errx.New(errx.BadRequest, "include_expired must be true or false. Leave it out to list only invitations that can still be accepted."))
 		return
 	}
 

@@ -276,13 +276,14 @@ func readFormImageUpload(c *gin.Context, kind string) (body []byte, mime, ext st
 	if kind == "cover" || kind == "background" {
 		maxBytes, maxDim = formCoverMaxBytes, formCoverMaxDim
 	}
+	lim := imageLimits{label: kind, formats: "PNG or JPG", maxBytes: maxBytes, maxDim: maxDim}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes+1024)
 	fh, err := c.FormFile("file")
 	if err != nil {
 		return nil, "", "", errx.New(errx.BadRequest, "file is required")
 	}
 	if fh.Size > maxBytes {
-		return nil, "", "", errx.New(errx.BadRequest, fmt.Sprintf("the %s must be smaller than %d MB", kind, maxBytes>>20))
+		return nil, "", "", lim.tooLarge()
 	}
 	src, err := fh.Open()
 	if err != nil {
@@ -296,14 +297,14 @@ func readFormImageUpload(c *gin.Context, kind string) (body []byte, mime, ext st
 	body = buf.Bytes()
 	format, cfg, err := imagetype.Detect(body, avatarFormats...)
 	if errors.Is(err, imagetype.ErrUnreadable) {
-		return nil, "", "", errx.New(errx.BadRequest, "image could not be parsed")
+		return nil, "", "", lim.unreadable()
 	}
 	if err != nil {
-		return nil, "", "", errx.New(errx.BadRequest, fmt.Sprintf("the %s must be a PNG or JPG", kind))
+		return nil, "", "", lim.wrongFormat()
 	}
 	mime, ext = format.MIME, format.Ext
 	if cfg.Width > maxDim || cfg.Height > maxDim {
-		return nil, "", "", errx.New(errx.BadRequest, fmt.Sprintf("the %s must be %dpx or smaller", kind, maxDim))
+		return nil, "", "", lim.tooWide()
 	}
 	return body, mime, ext, nil
 }

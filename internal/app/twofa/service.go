@@ -264,7 +264,7 @@ func (s *service) reserveAttempt(ctx context.Context, key string, limit int64, w
 	ok, err := s.cache.ReserveAttempt(ctx, key, limit, window)
 	if err != nil {
 		errs.CaptureException(err)
-		return false, errx.ErrServiceDown
+		return false, errx.ErrAttemptCheckUnavailable
 	}
 	return ok, nil
 }

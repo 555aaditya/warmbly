@@ -71,8 +71,12 @@ func (h *Handler) UploadEmailImage(c *gin.Context) {
 		errx.JSON(c, errx.New(errx.BadRequest, "file is required"))
 		return
 	}
-	if fh.Size <= 0 || fh.Size > emailImageMaxBytes {
-		errx.JSON(c, errx.New(errx.BadRequest, fmt.Sprintf("the image must be between 1 byte and %d MB", mb(emailImageMaxBytes))))
+	if fh.Size <= 0 {
+		errx.JSON(c, emailImageLimits.unreadable())
+		return
+	}
+	if fh.Size > emailImageMaxBytes {
+		errx.JSON(c, emailImageLimits.tooLarge())
 		return
 	}
 
@@ -93,16 +97,16 @@ func (h *Handler) UploadEmailImage(c *gin.Context) {
 	// back from our own public origin.
 	format, cfg, err := imagetype.Detect(body, allowedEmailImageFormats...)
 	if errors.Is(err, imagetype.ErrUnreadable) {
-		errx.JSON(c, errx.New(errx.BadRequest, "the image could not be parsed"))
+		errx.JSON(c, emailImageLimits.unreadable())
 		return
 	}
 	if err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "the image must be a PNG, JPG, GIF or WebP"))
+		errx.JSON(c, emailImageLimits.wrongFormat())
 		return
 	}
 	mimeType, ext := format.MIME, format.Ext
 	if cfg.Width > emailImageMaxDimension || cfg.Height > emailImageMaxDimension {
-		errx.JSON(c, errx.New(errx.BadRequest, fmt.Sprintf("the image must be %dpx or smaller on each side", emailImageMaxDimension)))
+		errx.JSON(c, emailImageLimits.tooWide())
 		return
 	}
 

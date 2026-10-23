@@ -106,7 +106,7 @@ func (s *service) VerifyLogin(ctx context.Context, pendingToken, code, ipaddr, u
 			return nil, errx.InternalError()
 		}
 		if models.BanScope(scope).Has(models.BanScopeLogin) {
-			return nil, errx.New(errx.Forbidden, "this account has been suspended")
+			return nil, errx.ErrAccountSuspended
 		}
 	}
 	// A carried identity links only here, once both factors have passed.

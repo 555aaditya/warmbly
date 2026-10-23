@@ -18,7 +18,7 @@ All errors follow this structure:
 }
 ```
 
-`error` and `message` are for people. Client logic should use `code`, HTTP status, and endpoint-specific fields such as `retry_after`. Include `request_id` when contacting support.
+`error` and `message` are for people. Client logic should use `code`, HTTP status, and endpoint-specific fields such as `retry_after`. Include `request_id` when contacting support. A few codes also carry an optional `reason`, a finer key for when the same code has more than one next step; each is listed with its code, and a client should treat an unknown or missing `reason` as the plain code.
 
 ## HTTP status codes
 
@@ -96,11 +96,27 @@ Fields are named by their JSON key, with nested fields as a dotted path (`inner.
 
 Versioned API routes check every query parameter name and value before the endpoint runs, including endpoints that read filters directly. The legacy `/invitations/lookup` alias applies the same validation. NUL characters, invalid UTF-8 and malformed query encoding return `400` rather than sending unsupported text to the database. For example, `?q=%00` returns `Query parameter "q[0]" contains a NUL character, which is not supported.` Valid Unicode text and properly encoded punctuation remain unchanged.
 
-Every route takes each query parameter at most once. A parameter repeated in the query string returns `400` with `code: "duplicate_query_parameter"` and a `request_id`, whatever the values. The parameters documented as lists accept repeats: `status` on `GET /v1/advisor/recommendations`, and `campaign_ids` and `folder_ids` on `GET /v1/analytics/dashboard`. Send any other list as one comma-separated value where the endpoint documents one.
+Every route takes each query parameter at most once. A parameter repeated in the query string returns `400` with `code: "duplicate_query_parameter"` and a `request_id`, whatever the values, and the `message` names it: `The query parameter "status" appears more than once. Send it once per request.` The parameters documented as lists accept repeats: `status` on `GET /v1/advisor/recommendations`, and `campaign_ids` and `folder_ids` on `GET /v1/analytics/dashboard`. Send any other list as one comma-separated value where the endpoint documents one.
 
-A request carrying more than one `Authorization`, `X-Warmbly-Token`, `Idempotency-Key` or `Origin` header line returns `400` with `code: "duplicate_header"`. Send each of them once. Repeated `X-Forwarded-For` lines are read as one list in arrival order, and for `X-Forwarded-Proto`, `X-Forwarded-Host`, `X-Forwarded-Port` and `X-Real-IP` the last line is used, the one the nearest proxy wrote. Forwarded headers are believed only from [`TRUSTED_PROXIES`](/development/configuration/#network-and-proxy).
+A request carrying more than one `Authorization`, `X-Warmbly-Token`, `Idempotency-Key` or `Origin` header line returns `400` with `code: "duplicate_header"`, and the `message` names the header. Send each of them once. Repeated `X-Forwarded-For` lines are read as one list in arrival order, and for `X-Forwarded-Proto`, `X-Forwarded-Host`, `X-Forwarded-Port` and `X-Real-IP` the last line is used, the one the nearest proxy wrote. Forwarded headers are believed only from [`TRUSTED_PROXIES`](/development/configuration/#network-and-proxy).
 
-The public forms service answers a repeated query parameter or `X-Warmbly-Render` header on its `/api/forms/` routes with `400` and `{"error": "duplicate_query_parameter"}` or `{"error": "duplicate_header"}`.
+The public forms service answers its `/api/forms/` routes with `error` and `code` holding the same slug, and a `message` to show:
+
+| `code` | Status | Meaning |
+|--------|--------|---------|
+| `duplicate_query_parameter`, `duplicate_header` | 400 | A query parameter or the `X-Warmbly-Render` header was sent more than once. The `message` names it |
+| `stale_page` | 403 | The page was open long enough for its submission token to lapse. Reload it and submit again |
+| `not_found` | 404 | The form does not exist or is not published, or no forms API route matches the path |
+| `unavailable` | 503 | The forms service could not reach the backend. Try again in a few minutes |
+| `form_submit_failed` | 400, 413, 502 | The submission was refused (the `message` names the field or rule), was too large, or could not be passed on. Fix and submit again, or retry a `502` |
+
+```json
+{
+  "error": "stale_page",
+  "message": "This page has been open too long. Reload it and try again.",
+  "code": "stale_page"
+}
+```
 
 Resource IDs on email, campaign and contact routes must be UUIDs. Email `tags` and campaign `email_tags` and `folders` arrays also require UUID values. Malformed values return `400` with `code: "bad_request"` and a `request_id` before a database write. Valid UUIDs are normalized and repeated relation IDs are deduplicated; workspace ownership checks still apply.
 
@@ -148,12 +164,43 @@ Resource IDs on email, campaign and contact routes must be UUIDs. Email `tags` a
 | `recipient_suppressed` | `POST /emails/:id/send`, `POST /unibox/reply` or `POST /unibox/compose` named a `to`, `cc` or `bcc` address on the workspace [suppression list](/guides/unsubscribe/#the-suppression-list), directly or through its domain. The `message` names the address and the entry. Nothing was queued. A forward (`POST /unibox/reply` with `forward_message_id`) is not checked against the list |
 | `invalid_message_id` | `POST /emails/:id/send` or `POST /unibox/reply` was given an `in_reply_to` entry that is not one Message-ID: printable characters with no spaces or line breaks, with or without the surrounding `<` and `>` |
 
+#### Image upload refusals
+
+Avatars, OAuth app logos, form logos, covers and backgrounds, and images placed in an email are checked by what the file contains, not by its name or the type the browser sends.
+
+| `code` | Status | Meaning |
+|--------|--------|---------|
+| `image_unreadable` | 400 | The file is empty or does not decode as an image: it is damaged, or it is a different format than its name suggests |
+| `image_format_not_allowed` | 400 | The file is an image, but not a format this upload takes |
+| `image_too_large` | 400 | The file is over the size limit |
+| `image_dimensions_too_large` | 400 | The image is wider or taller than the limit |
+| `image_too_small` | 400 | An OAuth app logo is under 32px on a side |
+
+| Upload | Formats | Size | Each side |
+|--------|---------|------|-----------|
+| Avatar, OAuth app logo | PNG or JPG | 2 MB | 1024px |
+| Form logo | PNG or JPG | 1 MB | 1024px |
+| Form cover or background | PNG or JPG | 4 MB | 2560px |
+| Email image | PNG, JPG, GIF or WebP | 5 MB | 4000px |
+
+```json
+{
+  "error": "Bad Request",
+  "message": "The avatar could not be read as an image. The file looks damaged, or it is a different format than its name suggests. Upload a PNG or JPG file up to 2 MB and 1024px on each side.",
+  "code": "image_unreadable",
+  "request_id": "4bbbd1b2-8f86-47dd-8a7f-9476501ad20e"
+}
+```
+
 #### Password refusals
 
 | `code` | Status | Meaning |
 |--------|--------|---------|
 | `password_breached` | 400 | The password appears in a public list of breached passwords and was refused. Choose one that does not |
 | `sso_link_expired` | 400 | The pending token from a `link_required` sign-in is unknown, expired (ten minutes), already used, or has had three wrong passwords. Start the provider sign-in again |
+| `reset_link_invalid` | 401 | `POST /auth/reset-password/session` or `/confirm` was given a reset link or reset session that expired, was already used, or was issued before the password last changed. Request a new link |
+| `api_credentials_revoke_unsupported` | 400 | `POST /auth/reset-password/confirm` or `POST /auth/me/password` asked to end connected apps and API keys (`revoke_api_credentials`) on a server that cannot. The password was not changed. Send it again without that option, then remove apps and keys from Settings |
+| `sessions_not_ended` | 503 | The same two routes could not sign out every device on the account, so the password was not changed. The response carries `Retry-After`; retry after it |
 
 A password must be 8 to 128 characters. There is no composition rule, but it is checked against the 100,000 most commonly breached passwords published by the UK National Cyber Security Centre, case-insensitively.
 
@@ -252,7 +299,7 @@ Hosts are compared in lowercase, without a trailing dot and in their ASCII form,
 ```json
 {
   "error": "Bad Request",
-  "message": "The redirect has to go to a page on one of this workspace's own domains: a domain it has a mailbox on, its verified forms domain, or a subdomain of one of them.",
+  "message": "The redirect has to go to a page on one of this workspace's own domains: a domain it has a mailbox on (not a shared provider such as gmail.com), its verified tracking domain, its verified forms domain, or a subdomain of one of them. Use an address on one of those, or connect a mailbox or verify a domain first.",
   "code": "redirect_target_not_own_domain",
   "request_id": "4bbbd1b2-8f86-47dd-8a7f-9476501ad20e"
 }
@@ -503,7 +550,18 @@ Returned when authentication fails.
 - Check if your key has expired or been revoked
 - Generate a new key if necessary
 
-Two `401` variants are not about API keys at all. `setup_token_invalid` is returned by the first-run claim endpoint when the setup link is invalid, already used or expired. Print a new one with `warmblyctl setup-link`, described in [first run](/development/first-run/).
+`session_ended` means the dashboard session behind the token was signed out, revoked, or ended by a password change. Refreshing will not help; sign in again.
+
+```json
+{
+  "error": "Unauthorized",
+  "message": "Your session has ended. Sign in again to continue.",
+  "code": "session_ended",
+  "request_id": "4bbbd1b2-8f86-47dd-8a7f-9476501ad20e"
+}
+```
+
+Two more `401` variants are not about API keys at all. `setup_token_invalid` is returned by the first-run claim endpoint when the setup link is invalid, already used or expired. Print a new one with `warmblyctl setup-link`, described in [first run](/development/first-run/).
 
 `sso_wrong_browser` is returned by `POST /auth/sso/exchange` when the handoff code is collected without the binding secret that `POST /auth/<provider>/begin` handed the browser that started the sign-in. The handoff is deliberately non-transferable: a sign-in link that was forwarded, or opened in another browser, cannot sign the recipient in. Start the sign-in again in the browser you want to use.
 
@@ -579,6 +637,9 @@ Signup and invitation refusals carry their own `code`, so a client can branch on
 | `registration_invite_only` | 403 | The server runs `DISABLE_REGISTRATION=invite_only`. Creating an account requires an invitation link, which carries the token that permits the signup |
 | `registration_closed` | 403 | The server runs `DISABLE_REGISTRATION=true`. Signups are off and invitations do not override it |
 | `invitation_invalid` | 403 | The invitation is expired, cancelled, already used, or was issued for a different email address |
+| `invitation_expired` | 400 | `POST /invitations/accept` on an invitation older than 48 hours. It stays on the team page, where it can be sent again |
+| `invitation_used_or_expired` | 400 | `POST /invitations/accept` on an invitation that was accepted or expired while the request was in flight. Ask for it to be sent again |
+| `invitation_roles_removed` | 400 | `POST /invitations/accept` on an invitation whose roles were all deleted since it was sent. Ask for a new invitation |
 | `setup_already_complete` | 403 | The first-run claim was attempted on an instance that already has an account |
 
 ```json
@@ -591,6 +652,26 @@ Signup and invitation refusals carry their own `code`, so a client can branch on
 ```
 
 **How to fix:** on a self-hosted deployment these are configuration, not faults. See [accounts and access](/development/accounts-and-access/#registration-modes).
+
+#### Account and workspace standing
+
+An account or workspace that support or the instance's administrators have restricted answers with its own `code`. These are not permission problems, and a role change does not lift them.
+
+| `code` | Status | Meaning |
+|--------|--------|---------|
+| `account_suspended` | 403 | The account is suspended and cannot sign in, by password, passkey or two-factor confirmation |
+| `account_sending_suspended` | 403 | The account may not send mail. A manual send (`POST /emails/:id/send`, `POST /unibox/*`) is refused; nothing else is affected |
+| `account_workspace_create_suspended` | 403 | The account may not create workspaces. It can still join one it is invited to |
+| `workspace_sending_suspended` | 403 | Sending is paused for the whole workspace while it is under review. Contact support to resolve the review |
+
+```json
+{
+  "error": "Forbidden",
+  "message": "Sending is paused for this workspace while it is under review. Contact support to resolve the review; nothing else in the workspace is affected.",
+  "code": "workspace_sending_suspended",
+  "request_id": "4bbbd1b2-8f86-47dd-8a7f-9476501ad20e"
+}
+```
 
 #### Confirmation required
 
@@ -811,7 +892,18 @@ On a self-hosted deployment that means `MAIL_TRANSPORT` and the `SMTP_` variable
 
 Returned when the service is temporarily unavailable.
 
-Every endpoint that checks a password, an emailed or two-factor code, or a sign-in link charges an attempt to its budget before it compares anything. When that budget cannot be read, the request is refused with this code and nothing is compared, so a sign-in can briefly fail during a cache outage. Retry it.
+Every endpoint that checks a password, an emailed or two-factor code, or a sign-in link charges an attempt to its budget before it compares anything. When that budget cannot be read, the request is refused with `code: "attempt_check_unavailable"` and a `Retry-After` header, nothing is compared and the attempt is not counted, so a sign-in can briefly fail during a cache outage. Retry after the header. Looking up a CLI or Warmbly Cloud pairing code (`/auth/cli/codes/:code`, `/pool-link/codes/:code`) answers the same code when its lookup budget cannot be read.
+
+```json
+{
+  "error": "Service Unavailable",
+  "message": "We couldn't check this attempt right now, so it was not counted. Wait a few seconds and try again.",
+  "code": "attempt_check_unavailable",
+  "request_id": "4bbbd1b2-8f86-47dd-8a7f-9476501ad20e"
+}
+```
+
+Other temporary failures answer the generic form:
 
 **Example:**
 
@@ -959,7 +1051,7 @@ A `400` whose `code` is `mailbox_auth_refused` comes from the SMTP and IMAP conn
 
 #### `mailbox_unreachable`
 
-A `400` whose `code` is `mailbox_unreachable` comes from the same endpoints. The worker could not open a connection to the server at all: the name did not resolve, the port refused, or a firewall dropped the packets. The message says which server and which of those it was. Nothing was saved.
+A `400` whose `code` is `mailbox_unreachable` comes from the same endpoints. The worker could not open a connection to the server at all: the name did not resolve, the port refused, a firewall dropped the packets, or the host name points to a private network address. The message says which server and which of those it was. Nothing was saved.
 
 ```json
 {
@@ -973,6 +1065,7 @@ A `400` whose `code` is `mailbox_unreachable` comes from the same endpoints. The
 **How to fix:**
 - Check the host and port for typos
 - The connection leaves from the worker, not from your browser or from the API host: the worker's network has to reach the server on that port. Some hosting providers block outbound mail ports until asked
+- A host name that points to a private network address (such as `10.x`, `192.168.x` or a loopback address) is refused, because Warmbly only connects mailboxes to public addresses. Use the host name your provider gives for connecting from outside your network. On a self-hosted instance, the message also names `MAIL_ALLOW_PRIVATE_HOSTS=true`, which the operator can set to connect mail servers on a private network (see [configuration](/development/configuration/))
 
 #### `mailbox_tls_failed`
 
@@ -981,13 +1074,13 @@ A `400` whose `code` is `mailbox_tls_failed` comes from the same endpoints. The 
 ```json
 {
   "error": "Bad Request",
-  "message": "IMAP (mail.example.com:143) did not complete a secure connection: the server offers no STARTTLS on this port. Nothing was saved.",
+  "message": "IMAP (mail.example.com:143) did not complete a secure connection: the server offers no STARTTLS on this port, and Warmbly only signs in over an encrypted connection. Use the server's SSL/TLS port (usually 993) or a port that offers STARTTLS (usually 143). Nothing was saved.",
   "code": "mailbox_tls_failed",
   "request_id": "6f3c0a1e-2d47-4c6b-9a1f-2b7c5f0e8d31"
 }
 ```
 
-When the certificate is what failed, the message also names the certificate the server presented: who it is for, who issued it (or that it is self-signed) and the SHA-256 fingerprint of its public key.
+When the certificate is what failed, the message says why (issued for a different host name, expired, or not vouched for by a recognised certificate authority) and names the certificate the server presented: who it is for, who issued it (or that it is self-signed) and the SHA-256 fingerprint of its public key. When the server can be trusted on its own certificate instead, the message ends by saying so and the response carries `"reason": "certificate_untrusted"`; the dashboard's connect and reconnect forms then offer **Trust this server's own certificate**.
 
 **How to fix:**
 - Match the security setting to the port: `tls` for 465 and 993, `starttls` for 587 and 143, unless the provider documents otherwise
@@ -1008,10 +1101,11 @@ Both are warnings: the mailbox is not deactivated, its credentials are not marke
 **How to fix:**
 - Check with the server's owner that the change is expected
 - Open **Settings > Server certificates** on the mailbox and choose **Re-confirm**, or call `POST /emails/onboarding/smtp-imap/:id/certificates/check` and then `.../certificates/confirm` with the fingerprints it reported. The error clears once the confirmed certificates connect
+- If the confirm call answers `mailbox_tls_failed` saying the server did not present the certificate with the fingerprint you confirmed, a fingerprint was mistyped or the certificate changed after the check. Nothing was changed; run the check again and confirm what it reports
 
 #### `mailbox_server_declined`
 
-A `400` whose `code` is `mailbox_server_declined` comes from the same endpoints. The sign-in could not be completed for a reason other than the credentials: the server asked for a retry later (a `4xx` reply, often a login rate limit), it offers no sign-in method Warmbly implements, it answered with a `5xx` that is not about the password (a mechanism it does not support, a STARTTLS it insists on), the conversation broke, or the probe itself failed before a reply arrived. The message carries the server's reply when there is one. Nothing was saved.
+A `400` whose `code` is `mailbox_server_declined` comes from the same endpoints. The sign-in could not be completed for a reason other than the credentials: the server asked for a retry later (a `4xx` reply, often a login rate limit), it offers no sign-in method Warmbly implements, it answered with a `5xx` that is not about the password (a mechanism it does not support, a STARTTLS it insists on), it only offers sign-in without encryption, the conversation broke, or the probe itself failed before a reply arrived. The message carries the server's reply when there is one. Nothing was saved.
 
 ```json
 {
@@ -1024,7 +1118,8 @@ A `400` whose `code` is `mailbox_server_declined` comes from the same endpoints.
 
 **How to fix:**
 - For a `4xx` reply, wait a few minutes and retry
-- For a server that offers only mechanisms Warmbly does not implement (NTLM, GSSAPI), use the provider's documented SMTP submission host, which normally offers `LOGIN` or `PLAIN`; a different password does not add a mechanism
+- For a server that offers only mechanisms Warmbly does not implement (NTLM, GSSAPI, XOAUTH2), use the provider's documented SMTP submission host, which normally offers `LOGIN` or `PLAIN`; a different password does not add a mechanism. The message lists what the server offered
+- A server that only offers sign-in over an unencrypted connection is refused before any password is sent. Use its SSL/TLS port (usually 465) or a port that offers STARTTLS (usually 587)
 
 #### `mailbox_worker_unreachable`
 
@@ -1188,6 +1283,8 @@ Retry-After: 60
 ```
 
 Use the `Retry-After` header to determine when to retry.
+
+Looking up a CLI or Warmbly Cloud pairing code is budgeted per signed-in person, and past it answers `429` with `code: "code_lookup_limited"` and `Retry-After: 60`. Check the code shown on the other device before trying again.
 
 ## Admin device request errors
 

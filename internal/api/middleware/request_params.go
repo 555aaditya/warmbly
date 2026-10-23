@@ -26,7 +26,7 @@ func SingleValuedQuery() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if name, dup := DuplicateQueryParam(c.Request.URL.RawQuery, RepeatableQuery[c.FullPath()]); dup {
 			c.Abort()
-			errx.JSON(c, errx.NewWithIdentifier(errx.BadRequest, "duplicate_query_parameter", duplicateMessage("query parameter", name)))
+			errx.JSON(c, errx.NewWithIdentifier(errx.BadRequest, "duplicate_query_parameter", DuplicateMessage("query parameter", name)))
 			return
 		}
 		c.Next()
@@ -70,7 +70,7 @@ func RequestHeaders() gin.HandlerFunc {
 		for _, name := range singleValuedHeaders {
 			if len(h.Values(name)) > 1 {
 				c.Abort()
-				errx.JSON(c, errx.NewWithIdentifier(errx.BadRequest, "duplicate_header", duplicateMessage("header", name)))
+				errx.JSON(c, errx.NewWithIdentifier(errx.BadRequest, "duplicate_header", DuplicateMessage("header", name)))
 				return
 			}
 		}
@@ -100,9 +100,11 @@ func normalizeForwardedHeaders(h http.Header) {
 
 var plainParamName = regexp.MustCompile(`^[A-Za-z0-9_.\[\]-]{1,64}$`)
 
-func duplicateMessage(kind, name string) string {
+// DuplicateMessage names the repeated parameter or header when its name is
+// plain enough to echo back, and says how to fix the request.
+func DuplicateMessage(kind, name string) string {
 	if plainParamName.MatchString(name) {
-		return kind + " " + name + " may appear only once"
+		return "The " + kind + " " + name + " appears more than once. Send it once per request."
 	}
-	return "a " + kind + " may appear only once"
+	return "A " + kind + " appears more than once. Send each one once per request."
 }

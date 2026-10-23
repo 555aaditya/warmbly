@@ -1162,7 +1162,7 @@ function DnsRedirect({
                     ) : redirect?.target_active === false && url.trim() === redirect.target_url ? (
                         <p className="mt-1 text-[11px] text-amber-800 leading-relaxed">
                             {redirect.target_inactive_reason ||
-                                "Not in use: the destination is not on one of this workspace's own domains, so visitors get the domain's default page instead."}
+                                "Not in use: the destination is no longer on one of this workspace's own domains, so visitors get the domain's default page instead. This happens when the mailbox or verified domain it relied on was removed; point it at one of your own domains or reconnect that domain."}
                         </p>
                     ) : null}
                     <p className="mt-1 text-[11px] text-slate-500 leading-relaxed">{OWN_DOMAIN_HINT}</p>

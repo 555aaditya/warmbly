@@ -138,8 +138,31 @@ func (s *authService) sendResetEmailWithRetry(ctx context.Context, to, subject, 
 	return s.sendAuthEmail(ctx, to, subject, message)
 }
 
+// ErrResetLinkInvalid answers a reset link or reset session that is expired,
+// already used, or older than the account's current password.
+var ErrResetLinkInvalid = errx.NewWithIdentifier(errx.Unauthorized, "reset_link_invalid",
+	"This password reset link has expired or was already used. Request a new one with Forgot password on the sign-in page.")
+
+// ErrSessionsNotEnded refuses a password write whose other sessions could not
+// all be ended; the old password stays in place and the request can be retried.
+var ErrSessionsNotEnded = &errx.Error{Code: errx.ServiceUnavailable, Identifier: "sessions_not_ended", RetryAfter: 5,
+	Message: "Your password was not changed because the devices signed in to this account could not all be signed out. Wait a few seconds and try again."}
+
+// ErrCredentialRevokeUnsupported refuses a password write that asked to end app
+// grants and API keys on an instance that has no way to end them.
+var ErrCredentialRevokeUnsupported = errx.NewWithIdentifier(errx.BadRequest, "api_credentials_revoke_unsupported",
+	"This server cannot sign out connected apps and API keys, so your password was not changed. Untick that option and try again, then remove apps and keys from Settings.")
+
 // verifyResetLink checks an emailed reset link token without spending it.
 func (s *authService) verifyResetLink(ctx context.Context, linkToken string) (*tokenpkg.TokenClaims, *errx.Error) {
+	sess, err := s.verifyResetLinkToken(ctx, linkToken)
+	if err != nil && err.Code == errx.Unauthorized {
+		return nil, ErrResetLinkInvalid
+	}
+	return sess, err
+}
+
+func (s *authService) verifyResetLinkToken(ctx context.Context, linkToken string) (*tokenpkg.TokenClaims, *errx.Error) {
 	sess, err := s.tokenService.VerifyTokenFor(tokenpkg.PurposePasswordReset, linkToken)
 	if err != nil {
 		return nil, err
@@ -222,6 +245,9 @@ func (s *authService) ResetPasswordConfirm(ctx context.Context, data *ResetPassw
 		handle = session
 		var err *errx.Error
 		if linkToken, err = s.getResetHandle(ctx, handle); err != nil {
+			if err.Code == errx.Unauthorized {
+				return ErrResetLinkInvalid
+			}
 			return err
 		}
 	}
@@ -239,7 +265,8 @@ func (s *authService) ResetPasswordConfirm(ctx context.Context, data *ResetPassw
 	// failure refuses the reset while the link is still good for a retry.
 	if s.tokenService != nil {
 		if err := s.tokenService.RevokeOtherSessions(ctx, sess.UserID, uuid.Nil); err != nil {
-			return err
+			errs.CaptureException(err)
+			return ErrSessionsNotEnded
 		}
 	}
 	if data.RevokeAPICredentials {
@@ -281,7 +308,7 @@ func (s *authService) ResetPasswordConfirm(ctx context.Context, data *ResetPassw
 // they created; any failure refuses the password write that asked for it.
 func (s *authService) revokeAPICredentials(ctx context.Context, userID uuid.UUID) *errx.Error {
 	if len(s.credentialRevokers) == 0 {
-		return errx.New(errx.BadRequest, "connected apps and API keys cannot be signed out on this instance")
+		return ErrCredentialRevokeUnsupported
 	}
 	for _, r := range s.credentialRevokers {
 		if err := r.RevokeUserCredentials(ctx, userID); err != nil {
@@ -368,7 +395,8 @@ func (s *authService) ChangePassword(ctx context.Context, userID uuid.UUID, curr
 			keep = current.ID
 		}
 		if err := s.tokenService.RevokeOtherSessions(ctx, userID, keep); err != nil {
-			return nil, err
+			errs.CaptureException(err)
+			return nil, ErrSessionsNotEnded
 		}
 	}
 	if data.RevokeAPICredentials {

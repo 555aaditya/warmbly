@@ -272,7 +272,7 @@ func (s *authService) reserveAttempt(ctx context.Context, key string, limit int6
 	ok, err := s.cache.ReserveAttempt(ctx, key, limit, window)
 	if err != nil {
 		errs.CaptureException(err)
-		return false, errx.ErrServiceDown
+		return false, errx.ErrAttemptCheckUnavailable
 	}
 	return ok, nil
 }

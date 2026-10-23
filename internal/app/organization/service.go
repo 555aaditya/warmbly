@@ -310,7 +310,7 @@ func (s *organizationService) Create(ctx context.Context, userID uuid.UUID, name
 		return nil, errx.InternalError()
 	}
 	if models.BanScope(scope).Has(models.BanScopeOrgCreate) {
-		return nil, errx.New(errx.Forbidden, "this account cannot create new workspaces")
+		return nil, errx.ErrAccountWorkspaceCreateSuspended
 	}
 
 	// Daily creation throttle — caps "new workspaces per owner per
@@ -951,7 +951,7 @@ func (s *organizationService) acceptResolved(ctx context.Context, inv *models.Or
 
 	// An expired invitation stays listed so the team page can send it again.
 	if inv.IsExpired() {
-		return nil, errx.New(errx.BadRequest, "invitation has expired")
+		return nil, errx.NewWithIdentifier(errx.BadRequest, "invitation_expired", "This invitation has expired. Invitations last 48 hours; ask the person who invited you to send it again from the Team page.")
 	}
 
 	// Check if already a member
@@ -992,7 +992,7 @@ func (s *organizationService) acceptResolved(ctx context.Context, inv *models.Or
 		if err := s.orgRepo.DeleteInvitation(ctx, inv.ID); err != nil {
 			errs.CaptureException(err)
 		}
-		return nil, errx.New(errx.BadRequest, "the roles for this invitation no longer exist — ask for a new invite")
+		return nil, errx.NewWithIdentifier(errx.BadRequest, "invitation_roles_removed", "The roles this invitation granted no longer exist. Ask the person who invited you to send a new invitation.")
 	}
 
 	// Add the membership row, then assign the full role set (which recomputes
@@ -1013,7 +1013,7 @@ func (s *organizationService) acceptResolved(ctx context.Context, inv *models.Or
 	}
 	if err := s.orgRepo.AcceptInvitation(ctx, inv.ID, member, liveRoleIDs); err != nil {
 		if errors.Is(err, repository.ErrInvitationInvalid) {
-			return nil, errx.New(errx.BadRequest, "this invitation has already been used or has expired")
+			return nil, errx.NewWithIdentifier(errx.BadRequest, "invitation_used_or_expired", "This invitation has already been used or has expired. Ask the person who invited you to send it again from the Team page.")
 		}
 		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to add member")

@@ -58,7 +58,7 @@ func (s *tokenService) ValidateAccessToken(ctx context.Context, accessToken stri
 	// stops working without waiting for the cache TTL or a refresh. A session
 	// past its expires_at is dead the same way.
 	if !session.Live(time.Now()) {
-		return nil, errx.ErrToken
+		return nil, errx.ErrSessionEnded
 	}
 
 	if session.AccessNonce != t.Nonce || !sameTokenIssueTime(session.LastRefreshedAt, t.IssuedAt.Time) {

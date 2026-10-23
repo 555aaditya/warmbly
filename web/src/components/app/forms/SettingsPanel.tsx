@@ -91,13 +91,15 @@ export default function SettingsPanel({
                         </p>
                     ) : redirectInactive ? (
                         <p className="text-[11px] text-amber-700 mt-1">
-                            Not in use: this page is not on one of your workspace's own domains, so visitors see the
-                            success message instead.
+                            Not in use: this page is no longer on one of your workspace's own domains, so visitors see
+                            the success message instead. This happens when the mailbox or verified domain it relied on
+                            was removed. Point it at one of your own domains, or reconnect that domain.
                         </p>
                     ) : null}
                     <p className="text-[11px] text-slate-500 mt-1">
-                        Must be a page on one of your workspace's own domains: a domain you have a mailbox on, your
-                        verified forms domain, or a subdomain of one. Leave empty to show the success message instead.
+                        Must be a page on one of your workspace's own domains: a domain you have a mailbox on (not
+                        gmail.com or another shared provider), your verified tracking domain, your verified forms
+                        domain, or a subdomain of one. Leave empty to show the success message instead.
                     </p>
                 </div>
             </Section>

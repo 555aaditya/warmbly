@@ -68,6 +68,9 @@ export function useResetPasswordConfirmForm() {
                 { loading: "Loading...", success: "Password successfully changed", error: (err: AppError) => buildError(err) }
             );
             navigate({ to: "/auth/login", search: { action: "1" } });
+        } catch (err) {
+            // The link died meanwhile (used, expired, or the password changed): show the request-a-new-one screen.
+            if ((err as AppError)?.code === "reset_link_invalid") setLinkState("invalid");
         } finally { setPending(false); }
     };
 

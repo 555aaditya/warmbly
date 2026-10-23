@@ -314,7 +314,7 @@ func (h *Handler) UploadOAuthAppLogo(c *gin.Context) {
 		errx.JSON(c, oauthAppWriteError(err))
 		return
 	}
-	raw, _, _, xerr := readAvatarUpload(c)
+	raw, _, _, xerr := readImageUpload(c, appLogoLimits)
 	if xerr != nil {
 		errx.JSON(c, xerr)
 		return

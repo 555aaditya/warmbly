@@ -20,9 +20,11 @@ const ErrIDNotOwn = "redirect_target_not_own_domain"
 
 // Refusal is the save-time error for a destination outside the workspace's own domains.
 func Refusal() *errx.Error {
-	return errx.NewWithIdentifier(errx.BadRequest, ErrIDNotOwn,
-		"The redirect has to go to a page on one of this workspace's own domains: a domain it has a mailbox on, its verified forms domain, or a subdomain of one of them.")
+	return errx.NewWithIdentifier(errx.BadRequest, ErrIDNotOwn, RefusalMessage)
 }
+
+// RefusalMessage names the kinds of domain a redirect may point at.
+const RefusalMessage = "The redirect has to go to a page on one of this workspace's own domains: a domain it has a mailbox on (not a shared provider such as gmail.com), its verified tracking domain, its verified forms domain, or a subdomain of one of them. Use an address on one of those, or connect a mailbox or verify a domain first."
 
 // Mailboxes lists the domains the workspace has a mailbox on and its verified tracking hosts.
 type Mailboxes interface {

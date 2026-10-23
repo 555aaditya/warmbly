@@ -280,6 +280,11 @@ func (h *Handler) requireOrgOwner(c *gin.Context, orgID, userID uuid.UUID) *errx
 // readAvatarUpload pulls the "file" field out of the request, enforces
 // the size cap, decides the format from the bytes, and returns them ready for S3.
 func readAvatarUpload(c *gin.Context) ([]byte, string, string, *errx.Error) {
+	return readImageUpload(c, avatarLimits)
+}
+
+// readImageUpload is readAvatarUpload with the refusals worded for lim.
+func readImageUpload(c *gin.Context, lim imageLimits) ([]byte, string, string, *errx.Error) {
 	// Cap the request body before parsing so a 50MB upload doesn't
 	// pin a gin worker.
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, avatarMaxBytes+1024)
@@ -289,7 +294,7 @@ func readAvatarUpload(c *gin.Context) ([]byte, string, string, *errx.Error) {
 		return nil, "", "", errx.New(errx.BadRequest, "file is required")
 	}
 	if fh.Size > avatarMaxBytes {
-		return nil, "", "", errx.New(errx.BadRequest, "avatar must be smaller than 2 MB")
+		return nil, "", "", lim.tooLarge()
 	}
 
 	src, err := fh.Open()
@@ -308,10 +313,10 @@ func readAvatarUpload(c *gin.Context) ([]byte, string, string, *errx.Error) {
 	// format's own decoder have to agree.
 	format, cfg, err := imagetype.Detect(body, avatarFormats...)
 	if errors.Is(err, imagetype.ErrUnreadable) {
-		return nil, "", "", errx.New(errx.BadRequest, "image could not be parsed")
+		return nil, "", "", lim.unreadable()
 	}
 	if err != nil {
-		return nil, "", "", errx.New(errx.BadRequest, "avatar must be a PNG or JPG")
+		return nil, "", "", lim.wrongFormat()
 	}
 	mime, ext := format.MIME, format.Ext
 
@@ -319,10 +324,7 @@ func readAvatarUpload(c *gin.Context) ([]byte, string, string, *errx.Error) {
 	// this is a backstop against a raw camera dump or a bypass of the
 	// JS resizer.
 	if cfg.Width > avatarMaxDimension || cfg.Height > avatarMaxDimension {
-		return nil, "", "", errx.New(
-			errx.BadRequest,
-			fmt.Sprintf("avatar dimensions must be %dpx or smaller — please resize before uploading", avatarMaxDimension),
-		)
+		return nil, "", "", lim.tooWide()
 	}
 	return body, mime, ext, nil
 }

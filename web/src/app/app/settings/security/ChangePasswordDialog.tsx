@@ -64,9 +64,11 @@ export default function ChangePasswordDialog({ open, onClose }: { open: boolean;
             if (err.code === "password_changed_sign_in_again") {
                 toast.error(err.message);
                 onClose();
-                endSession();
+                endSession({ notice: false });
                 return;
             }
+            // Only the option can be refused here, so clear it for the retry.
+            if (err.code === "api_credentials_revoke_unsupported") setRevokeApi(false);
             toast.error(buildError(err));
         } finally {
             setPending(false);

@@ -87,7 +87,7 @@ func (s *service) FinishLogin(ctx context.Context, session string, credential []
 		return nil, errx.InternalError()
 	}
 	if models.BanScope(scope).Has(models.BanScopeLogin) {
-		return nil, errx.New(errx.Forbidden, "this account has been suspended")
+		return nil, errx.ErrAccountSuspended
 	}
 
 	// No TOTP step: a user-verified passkey is possession plus a PIN or
