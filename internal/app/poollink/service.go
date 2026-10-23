@@ -74,7 +74,7 @@ type Service interface {
 	AuthenticateInstance(ctx context.Context, token, version string) (*models.PoolLinkInstance, *errx.Error)
 	InstanceInfo(ctx context.Context, inst *models.PoolLinkInstance) (*models.PoolLinkInstanceInfo, *errx.Error)
 	ListInstances(ctx context.Context, orgID uuid.UUID) ([]models.PoolLinkInstance, *errx.Error)
-	// RevokeInstance ends a link and removes every mailbox it enrolled.
+	// RevokeInstance stops and releases every mailbox the link enrolled, then ends the link.
 	RevokeInstance(ctx context.Context, orgID, instanceID uuid.UUID) *errx.Error
 
 	Enroll(ctx context.Context, inst *models.PoolLinkInstance, req models.PoolLinkEnrollRequest) (*models.PoolLinkMailboxState, *errx.Error)
@@ -433,17 +433,36 @@ func (s *service) RevokeInstance(ctx context.Context, orgID, instanceID uuid.UUI
 			return errx.InternalError()
 		}
 	}
-	if err := s.repo.RevokeInstance(ctx, inst.ID); err != nil {
-		return errx.InternalError()
-	}
 	mailboxes, err := s.repo.ListMailboxes(ctx, inst.ID)
 	if err != nil {
 		return errx.InternalError()
 	}
+	// Stopped while the link still authenticates, so a failure leaves the instance's disconnect retryable.
 	for _, m := range mailboxes {
-		if xerr := s.unenroll(ctx, inst, m.RemoteID, false); xerr != nil {
+		if xerr := s.stopParticipation(ctx, inst, m); xerr != nil {
+			return xerr
+		}
+	}
+	if err := s.repo.RevokeInstance(ctx, inst.ID); err != nil {
+		return errx.InternalError()
+	}
+	// Re-listed after the revoke, so a mailbox enrolled meanwhile is stopped too.
+	mailboxes, err = s.repo.ListMailboxes(ctx, inst.ID)
+	if err != nil {
+		return errx.InternalError()
+	}
+	for _, m := range mailboxes {
+		if xerr := s.unenroll(ctx, inst, m.RemoteID); xerr != nil {
 			log.Warn().Str("account_id", m.EmailAccountID.String()).Msg("pool link: mailbox removal failed during revoke; continuing")
 		}
+	}
+	return nil
+}
+
+// stopParticipation ends a linked mailbox's Cloud warmup in both directions and retires its unstarted sends.
+func (s *service) stopParticipation(ctx context.Context, inst *models.PoolLinkInstance, m models.PoolLinkMailbox) *errx.Error {
+	if _, xerr := s.emailSvc.SetWarmupLifecycle(ctx, inst.OrganizationID.String(), m.EmailAccountID.String(), "stop"); xerr != nil && xerr != errx.ErrNotFound {
+		return xerr
 	}
 	return nil
 }
@@ -878,12 +897,12 @@ func (s *service) PatchMailbox(ctx context.Context, inst *models.PoolLinkInstanc
 }
 
 func (s *service) Unenroll(ctx context.Context, inst *models.PoolLinkInstance, remoteID uuid.UUID) *errx.Error {
-	return s.unenroll(ctx, inst, remoteID, true)
+	return s.unenroll(ctx, inst, remoteID)
 }
 
-func (s *service) unenroll(ctx context.Context, inst *models.PoolLinkInstance, remoteID uuid.UUID, stopManaged bool) *errx.Error {
+func (s *service) unenroll(ctx context.Context, inst *models.PoolLinkInstance, remoteID uuid.UUID) *errx.Error {
 	if _, ok := s.repo.(repository.PoolLinkManagedRepository); ok && !managedOperationLocked(ctx) {
-		return s.withManagedOperationLock(ctx, inst.ID, func(ctx context.Context) *errx.Error { return s.unenroll(ctx, inst, remoteID, stopManaged) })
+		return s.withManagedOperationLock(ctx, inst.ID, func(ctx context.Context) *errx.Error { return s.unenroll(ctx, inst, remoteID) })
 	}
 	if r, ok := s.repo.(repository.PoolLinkManagedRepository); ok {
 		if err := r.RevokeManagedOperations(ctx, inst.ID, &remoteID); err != nil {
@@ -897,12 +916,11 @@ func (s *service) unenroll(ctx context.Context, inst *models.PoolLinkInstance, r
 	if m == nil {
 		return ErrMailboxNotFound
 	}
-	// Individual removal stops Cloud participation; an instance disconnect only releases its mirrors.
-	if m.Managed && stopManaged {
-		if _, xerr := s.emailSvc.SetWarmupLifecycle(ctx, inst.OrganizationID.String(), m.EmailAccountID.String(), "stop"); xerr != nil && xerr != errx.ErrNotFound {
-			return xerr
-		}
-	} else if !m.Managed {
+	// A released mailbox sends and receives no Cloud warmup, whether Cloud keeps it or deletes it.
+	if xerr := s.stopParticipation(ctx, inst, *m); xerr != nil {
+		return xerr
+	}
+	if !m.Managed {
 		if xerr := s.emailSvc.Delete(ctx, inst.OrganizationID.String(), m.EmailAccountID.String()); xerr != nil && xerr != errx.ErrNotFound {
 			return xerr
 		}
