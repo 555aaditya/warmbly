@@ -108,7 +108,7 @@ func TestRecordModeAcceptsAndReportsTheCertificate(t *testing.T) {
 		t.Fatalf("record-mode handshake: %v", err)
 	}
 	got := capture.Certificate(nil)
-	if got == nil || got.Fingerprint != Fingerprint(cert.Leaf) || !got.SelfSigned {
+	if got == nil || got.Fingerprint != Fingerprint(cert.Leaf) || !got.SelfSigned || got.Trusted {
 		t.Fatalf("captured %+v", got)
 	}
 }

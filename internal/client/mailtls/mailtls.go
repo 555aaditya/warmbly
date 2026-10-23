@@ -14,7 +14,6 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"errors"
-	"strings"
 	"sync"
 	"time"
 
@@ -69,15 +68,16 @@ func (e *PinError) Error() string {
 type Capture struct {
 	mu      sync.Mutex
 	leaf    *x509.Certificate
+	trusted bool
 	refusal *PinError
 }
 
-func (c *Capture) record(leaf *x509.Certificate, refusal *PinError) {
+func (c *Capture) record(leaf *x509.Certificate, trusted bool, refusal *PinError) {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
-	c.leaf, c.refusal = leaf, refusal
+	c.leaf, c.trusted, c.refusal = leaf, trusted, refusal
 	c.mu.Unlock()
 }
 
@@ -95,9 +95,10 @@ func (c *Capture) Refusal() *PinError {
 // from a CA verification failure carried by err.
 func (c *Capture) Certificate(err error) *models.MailCertificate {
 	var leaf *x509.Certificate
+	trusted := false
 	if c != nil {
 		c.mu.Lock()
-		leaf = c.leaf
+		leaf, trusted = c.leaf, c.trusted
 		c.mu.Unlock()
 	}
 	if leaf == nil {
@@ -109,7 +110,9 @@ func (c *Capture) Certificate(err error) *models.MailCertificate {
 	if leaf == nil {
 		return nil
 	}
-	return Describe(leaf)
+	desc := Describe(leaf)
+	desc.Trusted = trusted
+	return desc
 }
 
 // Describe summarises a certificate for the owner to confirm.
@@ -133,18 +136,7 @@ func Fingerprint(cert *x509.Certificate) string {
 // "sha256:" prefix, in either case, and returns it as 64 lowercase hex
 // characters, or "" when it is not one.
 func NormalizePin(pin string) string {
-	pin = strings.TrimSpace(pin)
-	if len(pin) > 7 && strings.EqualFold(pin[:7], "sha256:") {
-		pin = pin[7:]
-	}
-	pin = strings.ToLower(strings.NewReplacer(":", "", " ", "", "-", "").Replace(pin))
-	if len(pin) != sha256.Size*2 {
-		return ""
-	}
-	if _, err := hex.DecodeString(pin); err != nil {
-		return ""
-	}
-	return pin
+	return models.NormalizeTLSPin(pin)
 }
 
 // Config returns the TLS configuration for host under policy p, recording
@@ -155,9 +147,10 @@ func Config(host string, p Policy, capture *Capture) *tls.Config {
 		MinVersion: tls.VersionTLS12,
 	}
 	if !p.Unverified {
-		cfg.InsecureSkipVerify = netbind.InsecureTLS() //nolint:gosec // MAIL_TLS_INSECURE, honoured only in development
+		skip := netbind.InsecureTLS()
+		cfg.InsecureSkipVerify = skip //nolint:gosec // MAIL_TLS_INSECURE, honoured only in development
 		cfg.VerifyConnection = func(cs tls.ConnectionState) error {
-			capture.record(leafOf(cs), nil)
+			capture.record(leafOf(cs), !skip, nil)
 			return nil
 		}
 		return cfg
@@ -169,7 +162,7 @@ func Config(host string, p Policy, capture *Capture) *tls.Config {
 	cfg.VerifyConnection = func(cs tls.ConnectionState) error {
 		leaf := leafOf(cs)
 		refusal := verifyPin(leaf, pin, p.Record)
-		capture.record(leaf, refusal)
+		capture.record(leaf, caTrusted(host, cs), refusal)
 		if refusal != nil {
 			return refusal
 		}
@@ -192,6 +185,19 @@ func verifyPin(leaf *x509.Certificate, pin string, record bool) *PinError {
 		return &PinError{Kind: PinChanged, Observed: got}
 	}
 	return nil
+}
+
+// caTrusted reports whether the chain would also pass CA and host name verification.
+func caTrusted(host string, cs tls.ConnectionState) bool {
+	if len(cs.PeerCertificates) == 0 {
+		return false
+	}
+	inter := x509.NewCertPool()
+	for _, c := range cs.PeerCertificates[1:] {
+		inter.AddCert(c)
+	}
+	_, err := cs.PeerCertificates[0].Verify(x509.VerifyOptions{DNSName: host, Intermediates: inter})
+	return err == nil
 }
 
 func leafOf(cs tls.ConnectionState) *x509.Certificate {

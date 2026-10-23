@@ -154,7 +154,7 @@ func legSentence(leg string, svc *models.Service, res models.EmailValidationLeg)
 	case models.MailProbeUnreachable:
 		return fmt.Sprintf("%s could not be reached from the worker%s.", where, detail)
 	case models.MailProbeTLS:
-		return fmt.Sprintf("%s did not complete a secure connection%s.", where, detail)
+		return fmt.Sprintf("%s did not complete a secure connection%s.%s", where, detail, presented(res.Certificate))
 	case models.MailProbeTemporary:
 		return fmt.Sprintf("%s declined the sign-in for now and asks for a retry%s.", where, detail)
 	case models.MailProbeCleartext:
@@ -164,6 +164,23 @@ func legSentence(leg string, svc *models.Service, res models.EmailValidationLeg)
 	default:
 		return fmt.Sprintf("%s did not accept the sign-in%s.", where, detail)
 	}
+}
+
+// presented names the certificate a server showed, so its owner can compare it before trusting it.
+func presented(cert *models.MailCertificate) string {
+	if cert == nil || cert.Fingerprint == "" {
+		return ""
+	}
+	s := " It presented a certificate"
+	if cert.Subject != "" {
+		s += " for " + cert.Subject
+	}
+	if cert.SelfSigned {
+		s += " (self-signed)"
+	} else if cert.Issuer != "" {
+		s += " issued by " + cert.Issuer
+	}
+	return s + " with SHA-256 key fingerprint " + cert.Fingerprint + "."
 }
 
 // failedLeg is one side of a verdict that did not pass, with the service it

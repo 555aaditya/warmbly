@@ -588,6 +588,7 @@ func Run(
 				emails.POST("/:id/auth-check", m.RequireAccess(models.PermManageEmails, models.APIPermWriteEmails), middleware.RequireEmailAccountParam("id"), h.RefreshEmailAuthCheck)
 				emails.GET("/:id/sync", m.RequireAccess(models.PermViewCampaigns, models.APIPermReadEmails), middleware.RequireEmailAccountParam("id"), h.GetEmailSync)
 				emails.PUT("/:id/sync", m.RequireAccess(models.PermManageEmails, models.APIPermWriteEmails), middleware.RequireEmailAccountParam("id"), h.UpdateEmailSync)
+				emails.GET("/:id/certificates", m.RequireAccess(models.PermViewCampaigns, models.APIPermReadEmails), middleware.RequireEmailAccountParam("id"), h.GetEmailCertificates)
 				// Which addresses the provider will let this mailbox send as,
 				// and where its signature came from. The refresh is the only
 				// half that calls the provider, and storing its answer is what
@@ -624,6 +625,9 @@ func Run(
 				// manage-emails bar as PATCH /emails/:id.
 				onboardingEmails.POST("/oauth/reauth/:id", m.RequireOrganization(), m.RequirePermission(models.PermManageEmails), h.ReauthEmailOAuth)
 				onboardingEmails.PUT("/smtp-imap/:id", m.RequireOrganization(), m.RequirePermission(models.PermManageEmails), h.UpdateEmailSMTPIMAP)
+				// Both sign in with the stored password, so they sit with the reconnect flows.
+				onboardingEmails.POST("/smtp-imap/:id/certificates/check", m.RequireOrganization(), m.RequirePermission(models.PermManageEmails), h.CheckEmailCertificates)
+				onboardingEmails.POST("/smtp-imap/:id/certificates/confirm", m.RequireOrganization(), m.RequirePermission(models.PermManageEmails), h.ConfirmEmailCertificates)
 				onboardingEmails.POST("/app-password/:id", m.RequireOrganization(), m.RequirePermission(models.PermManageEmails), h.SwitchEmailToAppPassword)
 			}
 

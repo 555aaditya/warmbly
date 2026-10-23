@@ -35,6 +35,11 @@ type SMTPCredentials struct {
 	IMAPUser     string
 	IMAPPassword string
 	IMAPSecurity string
+	// Owner opt-outs from CA verification and the pinned SPKI SHA-256 for each server.
+	SMTPTLSUnverified bool
+	SMTPTLSPin        string
+	IMAPTLSUnverified bool
+	IMAPTLSPin        string
 }
 
 // OAuthCredentials holds OAuth token credentials
@@ -440,14 +445,18 @@ func (r *emailRepository) ConvertGoogleToAppPassword(ctx context.Context, orgID,
 	return r.convertTx(ctx, query, []any{orgID, accountID, mailHost}, []txStep{
 		{`DELETE FROM email_accounts_oauth WHERE email_account_id = $1`, []any{accountID}},
 		{`INSERT INTO email_accounts_smtp_imap (email_account_id, smtp_host, smtp_port, smtp_user, smtp_password, smtp_security,
-		      imap_host, imap_port, imap_user, imap_password, imap_security)
-		  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		      imap_host, imap_port, imap_user, imap_password, imap_security,
+		      smtp_tls_unverified, smtp_tls_pin, imap_tls_unverified, imap_tls_pin)
+		  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		  ON CONFLICT (email_account_id) DO UPDATE SET smtp_host = EXCLUDED.smtp_host, smtp_port = EXCLUDED.smtp_port,
 		      smtp_user = EXCLUDED.smtp_user, smtp_password = EXCLUDED.smtp_password, smtp_security = EXCLUDED.smtp_security,
 		      imap_host = EXCLUDED.imap_host, imap_port = EXCLUDED.imap_port, imap_user = EXCLUDED.imap_user,
-		      imap_password = EXCLUDED.imap_password, imap_security = EXCLUDED.imap_security`,
+		      imap_password = EXCLUDED.imap_password, imap_security = EXCLUDED.imap_security,
+		      smtp_tls_unverified = EXCLUDED.smtp_tls_unverified, smtp_tls_pin = EXCLUDED.smtp_tls_pin,
+		      imap_tls_unverified = EXCLUDED.imap_tls_unverified, imap_tls_pin = EXCLUDED.imap_tls_pin`,
 			[]any{accountID, sealed[0], creds.SMTP.Port, sealed[1], sealed[2], models.ResolveSMTPSecurity(creds.SMTP.Security, creds.SMTP.Port),
-				sealed[3], creds.IMAP.Port, sealed[4], sealed[5], models.ResolveIMAPSecurity(creds.IMAP.Security, creds.IMAP.Port)}},
+				sealed[3], creds.IMAP.Port, sealed[4], sealed[5], models.ResolveIMAPSecurity(creds.IMAP.Security, creds.IMAP.Port),
+				creds.SMTP.TLSUnverified, creds.SMTP.StoredTLSPin(), creds.IMAP.TLSUnverified, creds.IMAP.StoredTLSPin()}},
 		// The Gmail cursor means nothing to IMAP, and its history is already imported.
 		{`INSERT INTO email_sync_state (email_id, user_id, backfill_status, backfill_completed_at)
 		  SELECT id, user_id, 'complete', now() FROM email_accounts WHERE id = $1
@@ -1109,10 +1118,12 @@ func (r *emailRepository) NewSMTPIMAPAccount(ctx context.Context, userID string,
 		INSERT INTO email_accounts_smtp_imap (
 		  email_account_id,
 		  smtp_host, smtp_port, smtp_user, smtp_password, smtp_security,
-		  imap_host, imap_port, imap_user, imap_password, imap_security
+		  imap_host, imap_port, imap_user, imap_password, imap_security,
+		  smtp_tls_unverified, smtp_tls_pin, imap_tls_unverified, imap_tls_pin
 		) VALUES (
 		 $1, $2, $3, $4, $5, $6,
-		 $7, $8, $9, $10, $11)
+		 $7, $8, $9, $10, $11,
+		 $12, $13, $14, $15)
 	`
 
 	params = []any{
@@ -1120,6 +1131,7 @@ func (r *emailRepository) NewSMTPIMAPAccount(ctx context.Context, userID string,
 		models.ResolveSMTPSecurity(data.SMTP.Security, data.SMTP.Port),
 		imaphost, data.IMAP.Port, imapuser, imappass,
 		models.ResolveIMAPSecurity(data.IMAP.Security, data.IMAP.Port),
+		data.SMTP.TLSUnverified, data.SMTP.StoredTLSPin(), data.IMAP.TLSUnverified, data.IMAP.StoredTLSPin(),
 	}
 
 	_, err = tx.Exec(
@@ -2610,7 +2622,8 @@ func (r *emailRepository) GetSMTPCredentials(ctx context.Context, emailAccountID
 	}
 	query := `
 		SELECT ea.organization_id, s.smtp_host, s.smtp_port, s.smtp_user, s.smtp_password, s.smtp_security,
-		       s.imap_host, s.imap_port, s.imap_user, s.imap_password, s.imap_security
+		       s.imap_host, s.imap_port, s.imap_user, s.imap_password, s.imap_security,
+		       s.smtp_tls_unverified, COALESCE(s.smtp_tls_pin, ''), s.imap_tls_unverified, COALESCE(s.imap_tls_pin, '')
 		FROM email_accounts_smtp_imap s
 		JOIN email_accounts ea ON ea.id = s.email_account_id
 		WHERE s.email_account_id = $1
@@ -2621,6 +2634,7 @@ func (r *emailRepository) GetSMTPCredentials(ctx context.Context, emailAccountID
 	err := r.transportQueryRow(ctx, query, emailAccountID).Scan(
 		&orgID, &creds.SMTPHost, &creds.SMTPPort, &creds.SMTPUser, &creds.SMTPPassword, &creds.SMTPSecurity,
 		&creds.IMAPHost, &creds.IMAPPort, &creds.IMAPUser, &creds.IMAPPassword, &creds.IMAPSecurity,
+		&creds.SMTPTLSUnverified, &creds.SMTPTLSPin, &creds.IMAPTLSUnverified, &creds.IMAPTLSPin,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
