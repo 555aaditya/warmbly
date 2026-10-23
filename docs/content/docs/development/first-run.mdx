@@ -210,6 +210,8 @@ Loads the showcase workspace: mailboxes, campaigns, contacts and two weeks of hi
 
 <Callout type="warn" title="The demo seed plants a published super-admin credential">
 `make seed-demo` runs with `SEED_FULL=true`, which also inserts `admin@warmbly.local` with the password `Test1234!`, **every platform admin permission**, and a full-access API key whose secret is a constant in this repository. All three values are public. Never run it on an instance anyone else can reach, and if you already did, delete that account and revoke the key before you expose the instance.
+
+The seeder runs only when `APP_ENV` is `dev`, `development` or `local`. An unset `APP_ENV` or `prod` refuses before anything is written, so an instance configured for production cannot be seeded.
 </Callout>
 
 Seeding also spends the first-launch exemption, so a seeded instance never issues a claim link again. That is fine when you seeded on purpose; it is the surprise described in [if the instance already has accounts](#if-the-instance-already-has-accounts) when you did not.
