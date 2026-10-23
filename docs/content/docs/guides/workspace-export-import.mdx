@@ -136,6 +136,8 @@ Warmbly does not keep it on either instance. If you lose it, the credentials ins
 
 Leave the option off and the credential fields travel empty. Everything else imports normally, and each mailbox arrives marked for reconnection: open it on the destination and sign in again, exactly like connecting it the first time.
 
+Either way, an SMTP/IMAP mailbox keeps its [server certificate](/guides/mailboxes/#servers-with-their-own-certificate) choice and the fingerprints it trusts, because they are not secret and describe the same server on any instance.
+
 Webhook signing secrets follow the same rule, including the one an [OAuth app](/api/oauth/#receiving-events-as-an-app-webhooks) signs its deliveries with. Without the option, rotate the app's webhook secret on the destination before relying on its deliveries.
 
 </Fold>

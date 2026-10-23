@@ -170,7 +170,9 @@ The request that loaded this page carried an `X-Forwarded-For` header while `TRU
 
 ### tls_verification_off
 
-`SMTP_TLS_INSECURE_SKIP_VERIFY` or `MAIL_TLS_INSECURE` is on, so TLS certificate verification is disabled for platform mail or for mailbox connections. Only legitimate for a relay using a private certificate authority.
+`SMTP_TLS_INSECURE_SKIP_VERIFY` is on, or `MAIL_TLS_INSECURE` is on under `APP_ENV=dev`, so TLS certificate verification is disabled for platform mail or for mailbox connections. Only legitimate for a relay using a private certificate authority, or the local sandbox.
+
+`MAIL_TLS_INSECURE` set under any other `APP_ENV` has no effect, and the check reports it at Info so the variable can be removed. Mailbox certificates are verified there; a mailbox on a server with a self-signed or private certificate is trusted through its own [certificate choice](/guides/mailboxes/#servers-with-their-own-certificate), which pins that server's certificate.
 
 ## URLs and reachability
 

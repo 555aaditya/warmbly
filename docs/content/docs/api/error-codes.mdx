@@ -131,6 +131,8 @@ Resource IDs on email, campaign and contact routes must be UUIDs. Email `tags` a
 | `invalid_setting` | `PATCH /outreach/settings` (or a campaign's advanced settings) carried a value outside the documented vocabulary, for example a `reply_intent.crm_task_intents` entry that is not a reply intent, or an `inbox_tagging.questions` entry with no question text, a label that is missing, repeated or built in, or a choice question with fewer than two options, or an `inbox_tagging.languages` entry that is not a supported language code |
 | `invalid_slug` | `PATCH /organization/current` was given a `slug` that is not 2 to 80 lowercase letters, numbers or dashes starting and ending with a letter or number |
 | `invalid_sync_folder` | `PUT /emails/:id/sync` was given a folder the sync always follows (`INBOX`, or a sent, drafts, spam, trash or archive folder by attribute or name), a name that is empty after trimming, longer than 255 characters or carrying a control character, more than 50 names, or a mailbox that is not IMAP. The `message` names the entry refused |
+| `invalid_tls_pin` | An SMTP/IMAP connect or reconnect carried a `tls_pin` that is not a SHA-256 fingerprint (64 hexadecimal characters; colons, spaces and a `sha256:` prefix are ignored), or `POST /emails/onboarding/smtp-imap/:id/certificates/confirm` was missing the fingerprint of a server the mailbox trusts on its own certificate |
+| `mailbox_certificate_not_pinned` | `POST /emails/onboarding/smtp-imap/:id/certificates/confirm` on a mailbox whose servers are both verified by a certificate authority, so there is no certificate to confirm |
 | `no_organization` | The request needs a workspace and the caller has none selected. Every entitlement, limit and suppression rule is scoped to a workspace, so a write that would run unscoped is refused rather than run without those checks. API keys always carry their workspace; a dashboard session picks one at sign-in, so this normally means the session predates the workspace being chosen. Select a workspace and retry |
 | `lead_cc_limit` | [Set a lead's CC](/api/reference/campaigns/#set-a-leads-cc) was given more than `2` contacts |
 | `lead_cc_self` | [Set a lead's CC](/api/reference/campaigns/#set-a-leads-cc) named the lead itself as a copy |
@@ -975,9 +977,27 @@ A `400` whose `code` is `mailbox_tls_failed` comes from the same endpoints. The 
 }
 ```
 
+When the certificate is what failed, the message also names the certificate the server presented: who it is for, who issued it (or that it is self-signed) and the SHA-256 fingerprint of its public key.
+
 **How to fix:**
 - Match the security setting to the port: `tls` for 465 and 993, `starttls` for 587 and 143, unless the provider documents otherwise
 - Use the host name the certificate is issued for, which is the one in the provider's documentation rather than an alias or an IP address
+- For a server with a self-signed or company certificate, compare the fingerprint with the one the server's owner gives you, then connect again with `tls_unverified: true` on that server (in the dashboard, **Trust this server's own certificate**). The mailbox is then trusted on that certificate only. See [servers with their own certificate](/guides/mailboxes/#servers-with-their-own-certificate)
+
+#### Mailbox errors `TLS_CERTIFICATE_CHANGED` and `TLS_CERTIFICATE_UNCONFIRMED`
+
+These are not responses to a request. They are the error a connected SMTP/IMAP mailbox reports (in the mailbox drawer, `GET /analytics/accounts/:id`, and the `EMAIL_SERVER_ERROR` notification) when it trusts a server on its own certificate and Warmbly did not connect:
+
+| Code | Meaning |
+| --- | --- |
+| `TLS_CERTIFICATE_CHANGED` | The server presented a public key other than the one confirmed for it, for example after a certificate was replaced with a new key |
+| `TLS_CERTIFICATE_UNCONFIRMED` | The mailbox trusts the server on its own certificate but no fingerprint has been confirmed for it yet |
+
+Both are warnings: the mailbox is not deactivated, its credentials are not marked invalid, and nothing it was due to send or sync is dropped. It retries on its usual interval.
+
+**How to fix:**
+- Check with the server's owner that the change is expected
+- Open **Settings > Server certificates** on the mailbox and choose **Re-confirm**, or call `POST /emails/onboarding/smtp-imap/:id/certificates/check` and then `.../certificates/confirm` with the fingerprints it reported. The error clears once the confirmed certificates connect
 
 #### `mailbox_server_declined`
 

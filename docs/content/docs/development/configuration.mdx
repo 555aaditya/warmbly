@@ -506,7 +506,7 @@ Keep the copies private. GeoLite2 may not be redistributed, which is also why no
 | `WARMBLY_NODE_REGION` | Free-form label for where this node egresses from, e.g. `eu-central`. Placement prefers a worker near where a mailbox's provider expects sign-ins; unset scores neutral. Written by the join script from `--region` | unset | yes |
 | `ENCRYPTED_KEYS_BACKEND_URL` | Backend base the worker fetches organization keys from | unset | yes |
 | `ENCRYPTED_KEYS_WORKER_TOKEN` | The worker's copy of `INTERNAL_API_TOKEN` | unset | yes |
-| `MAIL_TLS_INSECURE` | Skips certificate verification on mailbox connections | `false` | yes |
+| `MAIL_TLS_INSECURE` | Development only: skips certificate verification on mailbox connections and lets SMTP continue on a server that offers no STARTTLS, for the local sandbox. A password is still only sent over TLS or to this machine. Honoured only when `APP_ENV` is `dev` (or unset) and ignored everywhere else, where a server with a self-signed or private certificate is trusted through its mailbox's own [certificate choice](/guides/mailboxes/#servers-with-their-own-certificate) instead | `false` | yes |
 
 <Callout type="warn" title="An unset key URL is silent">
 An empty `ENCRYPTED_KEYS_BACKEND_URL` or `ENCRYPTED_KEYS_WORKER_TOKEN` lets the worker start, subscribe and never register. There is no log line. The `no_worker_heartbeat` check on [Instance health](/development/instance-health/#no_worker_heartbeat) is what surfaces it.
