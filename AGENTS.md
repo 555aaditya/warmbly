@@ -418,7 +418,7 @@ Web conventions:
 
 ### Developer WebSocket
 
-API keys with the `REALTIME_SUBSCRIBE` permission (bit 11) can connect to the same socket, presenting the key (or a `wmat_` OAuth token) in the `x-warmbly-token` header; the query-string form for them is deprecated and kept only for existing clients, while the 10-minute ws ticket rides the query string. Connection spam is bounded by per-user concurrent-connection caps (plan-based, default 10), per-IP (50), a global cap, join rate limits, and per-key IP restrictions. Documented in `docs/content/docs/api/realtime.mdx` — keep that page in sync with channel/limit changes.
+API keys with the `REALTIME_SUBSCRIBE` permission (bit 11) can connect to the same socket, presenting the key (or a `wmat_` OAuth token) in the `x-warmbly-token` header; in the query string they are refused unless the realtime service sets `REALTIME_ALLOW_QUERY_CREDENTIALS=true`. Such a socket reaches only the credential's own workspace, with member permissions narrowed to its read scopes (`Auth.confine`). The 10-minute ws ticket rides the query string, opens one socket, and names its session, which must still be live; `admin:platform` additionally requires that session to have verified a second factor. Connection spam is bounded by per-user concurrent-connection caps (plan-based, default 10), per-IP (50), a global cap, join rate limits, and per-key IP restrictions. Documented in `docs/content/docs/api/realtime.mdx` — keep that page in sync with channel/limit changes.
 
 ## System Shape
 

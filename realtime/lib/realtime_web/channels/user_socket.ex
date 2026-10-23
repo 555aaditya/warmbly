@@ -25,8 +25,8 @@ defmodule RealtimeWeb.UserSocket do
   channel("org:*", RealtimeWeb.OrgChannel)
   channel("admin:*", RealtimeWeb.AdminChannel)
 
-  # API keys and OAuth tokens belong in this header; the query string, which
-  # proxies record, is a deprecated fallback for them kept for existing clients.
+  # API keys and OAuth tokens belong in this header. The query string, which
+  # proxies record, carries them only where REALTIME_ALLOW_QUERY_CREDENTIALS is set.
   @credential_header "x-warmbly-token"
 
   @impl true
@@ -47,11 +47,15 @@ defmodule RealtimeWeb.UserSocket do
         {:ok, header}
 
       present?(query) and Auth.long_lived?(query) ->
-        Logger.info(
-          "Socket credential in the query string; send it in the x-warmbly-token header"
-        )
+        if Application.get_env(:realtime, :allow_query_credentials, false) do
+          Logger.info(
+            "Socket credential in the query string; send it in the x-warmbly-token header"
+          )
 
-        {:ok, query}
+          {:ok, query}
+        else
+          {:error, :credential_in_query}
+        end
 
       present?(query) ->
         {:ok, query}
@@ -75,7 +79,7 @@ defmodule RealtimeWeb.UserSocket do
   defp authenticate(token, socket, connect_info) do
     ip = client_ip(token, connect_info)
 
-    with {:ok, user_id, auth_type} <- Auth.verify_token(token, ip: ip),
+    with {:ok, user_id, auth_type, context} <- Auth.verify_token(token, ip: ip),
          limits <- Subscription.get_limits(user_id),
          :ok <- check_connection_limit(user_id, ip, limits),
          :ok <- check_rate_limit(user_id, limits) do
@@ -87,6 +91,10 @@ defmodule RealtimeWeb.UserSocket do
         |> assign(:ip_address, ip)
         |> assign(:auth_type, auth_type)
         |> assign(:rate_limits, limits)
+        # nil for a ticket; an API key or OAuth token's workspace and scope grant otherwise.
+        |> assign(:credential, Map.get(context, :credential))
+        |> assign(:session_id, Map.get(context, :session_id))
+        |> assign(:mfa_verified, Map.get(context, :mfa_verified) == true)
 
       {:ok, socket}
     else
