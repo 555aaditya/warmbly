@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 )
 
 // The offline layers read every reply with the base vocabulary below, and a
@@ -144,7 +146,8 @@ var languageRules = map[string]langRules{
 		ooo:        []string{"absent du bureau", "absente du bureau"},
 		declined: []string{
 			"pas intéressé", "pas intéressée", "pas intéressés", "pas intéressées", "aucun intérêt",
-			"ne nous intéresse pas", "ne m'intéresse pas", "ne suis plus intéressé", "ne sommes plus intéressés",
+			"ne nous intéresse pas", "ne m'intéresse pas", "ne suis plus intéressé", "ne suis plus intéressée",
+			"ne sommes plus intéressés", "ne sommes plus intéressées",
 		},
 		negative: []string{
 			"non merci", "non, merci", "pas le bon interlocuteur", "pas la bonne personne",
@@ -398,8 +401,41 @@ type ruleSet struct {
 	inclusive map[string]bool
 	months    map[string]int
 	bounce    []string
-	declined  []string
-	negative  []string
+	declined  []phrase
+	negative  []phrase
+}
+
+// phrase is a sentiment phrase as compiled. The English base set keeps the
+// substring match it always had; a chosen language's phrase must stand as
+// whole words, so "no gracias" never matches inside "bueno gracias".
+type phrase struct {
+	text    string
+	bounded bool
+}
+
+func (p phrase) in(text string) bool {
+	if !p.bounded {
+		return strings.Contains(text, p.text)
+	}
+	for i := 0; i < len(text); {
+		j := strings.Index(text[i:], p.text)
+		if j < 0 {
+			return false
+		}
+		start, end := i+j, i+j+len(p.text)
+		before, _ := utf8.DecodeLastRuneInString(text[:start])
+		after, _ := utf8.DecodeRuneInString(text[end:])
+		if !wordRune(before) && !wordRune(after) {
+			return true
+		}
+		_, size := utf8.DecodeRuneInString(text[start:])
+		i = start + size
+	}
+	return false
+}
+
+func wordRune(r rune) bool {
+	return r != utf8.RuneError && (unicode.IsLetter(r) || unicode.IsDigit(r))
 }
 
 var ruleSets sync.Map // sorted codes joined by "," -> *ruleSet
@@ -431,7 +467,7 @@ func rulesFor(langs []string) *ruleSet {
 func compileRules(parts []langRules) *ruleSet {
 	rs := &ruleSet{inclusive: map[string]bool{}, months: map[string]int{}}
 	var separators, cues []string
-	for _, p := range parts {
+	for i, p := range parts {
 		rs.quote = append(rs.quote, p.quote...)
 		separators = append(separators, p.separators...)
 		for _, m := range p.ooo {
@@ -447,11 +483,12 @@ func compileRules(parts []langRules) *ruleSet {
 			}
 		}
 		rs.bounce = append(rs.bounce, p.bounce...)
+		// parts[0] is always baseRules.
 		for _, d := range p.declined {
-			rs.declined = append(rs.declined, accentFolder.Replace(strings.ToLower(d)))
+			rs.declined = append(rs.declined, phrase{text: accentFolder.Replace(strings.ToLower(d)), bounded: i > 0})
 		}
 		for _, n := range p.negative {
-			rs.negative = append(rs.negative, accentFolder.Replace(strings.ToLower(n)))
+			rs.negative = append(rs.negative, phrase{text: accentFolder.Replace(strings.ToLower(n)), bounded: i > 0})
 		}
 	}
 	rs.quote = append(rs.quote, quoteMarker{re: regexp.MustCompile(`(?i)-{2,}\s*(` + strings.Join(separators, `|`) + `)\s*-{2,}`)})

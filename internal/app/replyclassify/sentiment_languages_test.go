@@ -75,6 +75,7 @@ func TestInterestedRepliesAreNotReadAsNegative(t *testing.T) {
 			"Je suis intéressée, quel est le tarif ?",
 		},
 		"es": {
+			"Bueno gracias, estoy interesado en una demo.",
 			"Me interesa mucho, ¿hablamos el jueves?",
 			"Gracias, estoy interesado en saber más.",
 			"Sí, gracias, envíeme la propuesta.",
@@ -98,5 +99,25 @@ func TestChosenLanguagesKeepTheEnglishPhrases(t *testing.T) {
 		if base.Class != withLanguages.Class {
 			t.Errorf("%q = %q without languages, %q with them", body, base.Class, withLanguages.Class)
 		}
+	}
+}
+
+// A chosen language's phrase must stand as whole words; the English base set
+// keeps its substring match.
+func TestLanguagePhrasesMatchWholeWords(t *testing.T) {
+	bounded := phrase{text: "no gracias", bounded: true}
+	for text, want := range map[string]bool{
+		"no gracias":                 true,
+		"vale, no gracias.":          true,
+		"bueno gracias, me interesa": false,
+		"bueno gracias y no gracias": true,
+		"no graciasx":                false,
+	} {
+		if got := bounded.in(text); got != want {
+			t.Errorf("bounded %q in %q = %v, want %v", bounded.text, text, got, want)
+		}
+	}
+	if !(phrase{text: "n't interested"}).in("we aren't interested") {
+		t.Error("an English phrase lost its substring match")
 	}
 }

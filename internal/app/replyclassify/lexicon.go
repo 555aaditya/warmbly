@@ -34,7 +34,7 @@ func classifyLexicon(in Input) (Result, bool) {
 
 	// 2. Declined interest => negative, before "interested" reads as interest.
 	for _, kw := range rules.declined {
-		if strings.Contains(folded, kw) {
+		if kw.in(folded) {
 			return Result{Class: ClassNegative, Confidence: 0.8, Source: SourceLexicon}, true
 		}
 	}
@@ -48,7 +48,7 @@ func classifyLexicon(in Input) (Result, bool) {
 
 	// 4. Clear rejection => negative.
 	for _, kw := range rules.negative {
-		if strings.Contains(folded, kw) {
+		if kw.in(folded) {
 			return Result{Class: ClassNegative, Confidence: 0.8, Source: SourceLexicon}, true
 		}
 	}
