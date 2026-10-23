@@ -338,7 +338,7 @@ var (
 		return MError(
 			MailErrorWarning,
 			MailErrorCodeTLSCertificateChanged,
-			fmt.Sprintf("The %s server's certificate changed since it was confirmed for this mailbox, so Warmbly did not connect. If the server's owner replaced it, re-confirm the certificate in the mailbox's settings.", server),
+			fmt.Sprintf("The %s server's certificate changed since it was confirmed for this mailbox, so Warmbly did not connect. If the server's owner replaced it, re-confirm the certificate under Settings > Server certificates on the mailbox.", server),
 			MailErrorResolveMethodReload,
 		)
 	}
@@ -346,7 +346,7 @@ var (
 		return MError(
 			MailErrorWarning,
 			MailErrorCodeTLSCertificateUnconfirmed,
-			fmt.Sprintf("This mailbox trusts its %s server without a certificate authority, but the server's certificate has not been confirmed yet, so Warmbly did not connect. Confirm it in the mailbox's settings.", server),
+			fmt.Sprintf("This mailbox trusts its %s server without a certificate authority, but the server's certificate has not been confirmed yet, so Warmbly did not connect. Confirm it under Settings > Server certificates on the mailbox.", server),
 			MailErrorResolveMethodReload,
 		)
 	}
@@ -414,10 +414,10 @@ func (e *MailError) GetUserErrorInfo() UserErrorInfo {
 		info.ActionRequired = "The recipient address was not accepted"
 	case MailErrorCodeTLSCertificateChanged:
 		info.Title = "Server certificate changed"
-		info.ActionRequired = "Check with the server's owner, then re-confirm the certificate under the mailbox's Connection settings"
+		info.ActionRequired = "Check with the server's owner, then re-confirm the certificate under Settings > Server certificates on the mailbox"
 	case MailErrorCodeTLSCertificateUnconfirmed:
 		info.Title = "Server certificate not confirmed"
-		info.ActionRequired = "Confirm the server's certificate under the mailbox's Connection settings"
+		info.ActionRequired = "Confirm the server's certificate under Settings > Server certificates on the mailbox"
 	}
 
 	return info
