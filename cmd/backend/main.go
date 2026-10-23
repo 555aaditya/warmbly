@@ -1985,6 +1985,10 @@ func main() {
 		}); ok {
 			w.WireScheduler(tasksService)
 		}
+		// Stops Cloud warmup on mailboxes of links revoked before revocation stopped it; a no-op once complete.
+		if j, ok := poolLinkService.(interface{ StopDetachedWarmup(context.Context) error }); ok {
+			go jobrun.Loop(ctx, "pool_link_detached_warmup_stop", 10*time.Minute, true, j.StopDetachedWarmup)
+		}
 
 		// Admin outreach composer — sends from the platform mailer
 		// (SES/SMTP) with a configurable Reply-To, audits every send.

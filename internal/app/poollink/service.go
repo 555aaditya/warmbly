@@ -565,6 +565,14 @@ func (s *service) Enroll(ctx context.Context, inst *models.PoolLinkInstance, req
 	return s.GetMailbox(ctx, inst, req.RemoteID)
 }
 
+// enrollError reports an enrollment refused on a revoked link as revoked, and anything else as internal.
+func enrollError(err error) *errx.Error {
+	if errors.Is(err, repository.ErrPoolLinkInstanceRevoked) {
+		return ErrInstanceRevoked
+	}
+	return errx.InternalError()
+}
+
 // commitEnrollment records and starts a mailbox under the instance lock RevokeInstance holds, so a revoke either stops it or refuses it.
 func (s *service) commitEnrollment(ctx context.Context, inst *models.PoolLinkInstance, userID string, m *models.PoolLinkMailbox, req models.PoolLinkEnrollRequest) (bool, *errx.Error) {
 	if _, ok := s.repo.(repository.PoolLinkManagedRepository); ok && !managedOperationLocked(ctx) {
@@ -577,10 +585,7 @@ func (s *service) commitEnrollment(ctx context.Context, inst *models.PoolLinkIns
 		return recorded, xerr
 	}
 	if err := s.repo.EnrollMailbox(ctx, m); err != nil {
-		if errors.Is(err, repository.ErrPoolLinkInstanceRevoked) {
-			return false, ErrInstanceRevoked
-		}
-		return false, errx.InternalError()
+		return false, enrollError(err)
 	}
 	s.activateEnrolled(ctx, inst, userID, m.EmailAccountID, req)
 	return true, nil

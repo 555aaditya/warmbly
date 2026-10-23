@@ -444,7 +444,7 @@ func (s *service) connectBrokered(ctx context.Context, st brokerState, code stri
 	remoteID := uuid.New()
 	if err := s.repo.EnrollMailbox(ctx, &models.PoolLinkMailbox{InstanceID: inst.ID, RemoteID: remoteID, EmailAccountID: acc.ID, Managed: true}); err != nil {
 		_ = s.emailSvc.Delete(ctx, orgID.String(), acc.ID.String())
-		return uuid.Nil, errx.InternalError()
+		return uuid.Nil, enrollError(err)
 	}
 	s.startWarmup(ctx, orgID.String(), acc.ID)
 	return remoteID, nil
@@ -593,7 +593,7 @@ func (s *service) Adopt(ctx context.Context, inst *models.PoolLinkInstance, req 
 		return nil, ErrAlreadyAdopted
 	}
 	if err := s.repo.EnrollMailbox(ctx, &models.PoolLinkMailbox{InstanceID: inst.ID, RemoteID: req.RemoteID, EmailAccountID: acc.ID, Managed: true}); err != nil {
-		return nil, errx.InternalError()
+		return nil, enrollError(err)
 	}
 	s.startWarmup(ctx, inst.OrganizationID.String(), acc.ID)
 	return s.GetMailbox(ctx, inst, req.RemoteID)
