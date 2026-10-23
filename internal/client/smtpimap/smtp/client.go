@@ -34,7 +34,15 @@ import (
 const SendTimeout = 90 * time.Second
 
 // errNoSTARTTLS distinguishes a missing upgrade from a network failure.
-var errNoSTARTTLS = errors.New("the server does not offer STARTTLS")
+var errNoSTARTTLS = errors.New(errx.MailConnectionReasonNoSTARTTLS)
+
+// tlsFailure reports a handshake that failed for a reason other than a pin.
+func tlsFailure(base *errx.MailError, stage string, err error) *errx.MailError {
+	if mailtls.CertificateRefused(err) {
+		base = errx.ErrMailServerUnreachableAt(stage, errors.New(errx.MailConnectionReasonCertificate))
+	}
+	return sendFailure(base, err, stage, "mailbox")
+}
 
 // pinFailure reports a pinned certificate refusal as a retryable mailbox
 // connection error, never as a credentials failure.
@@ -361,7 +369,11 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 		if err == nil {
 			err = errors.New("dial returned no connection")
 		}
-		return sendFailure(errx.ErrMailServerUnreachableAt("dial "+addr, dialCause(err)), err, "dial", "mailbox")
+		cause := dialCause(err)
+		if errors.Is(err, netbind.ErrPrivateMailHost) {
+			cause = errors.New(errx.MailConnectionReasonPrivateHost)
+		}
+		return sendFailure(errx.ErrMailServerUnreachableAt("dial "+addr, cause), err, "dial", "mailbox")
 	}
 	conn := dialed.Conn
 	defer conn.Close()
@@ -382,7 +394,7 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 			if perr := mailtls.AsPinError(err, capture); perr != nil {
 				return pinFailure(perr)
 			}
-			return sendFailure(errx.ErrMailServerUnreachableAt("dial "+addr, err), err, "dial", "mailbox")
+			return tlsFailure(errx.ErrMailServerUnreachableAt("dial "+addr, err), "dial", err)
 		}
 		conn = tlsConn
 	}
@@ -407,14 +419,14 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 	// even when the relay advertises it: a self-signed certificate no client
 	// can verify is exactly why the mode was chosen. The MAIL_TLS_INSECURE
 	// dev knob additionally allows a server with no STARTTLS at all (the
-	// local mailpit sink); it is honoured only under APP_ENV=dev.
+	// local mailpit sink); it is honoured on self-hosted and development instances.
 	if !implicitTLS && resolved != models.MailSecurityNone {
 		if ok, _ := client.Extension("STARTTLS"); ok {
 			if err := client.StartTLS(tlsConf); err != nil {
 				if perr := mailtls.AsPinError(err, capture); perr != nil {
 					return pinFailure(perr)
 				}
-				return sendFailure(errx.ErrMailServerUnreachable, err, "starttls", "mailbox")
+				return tlsFailure(errx.ErrMailServerUnreachable, "starttls", err)
 			}
 		} else if !netbind.InsecureTLS() && !c.plaintext {
 			return sendFailure(errx.ErrMailServerUnreachableAt("starttls", errNoSTARTTLS), errNoSTARTTLS, "starttls", "mailbox")

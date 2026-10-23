@@ -360,8 +360,8 @@ func (w *WorkerService) failSend(ctx context.Context, sendEmail models.SendEmail
 
 // Fixed reasons for a send the worker could not open; they never carry the underlying error.
 const (
-	sendReasonKeyUnavailable = "The workspace encryption key could not be loaded, so nothing was sent."
-	sendReasonUndecryptable  = "The message could not be decrypted, so nothing was sent."
+	sendReasonKeyUnavailable = "Nothing was sent because Warmbly could not load this workspace's encryption key just now. This is a problem on Warmbly's side, not with the mailbox or the recipient. A campaign tries the step again on its own; send a single email again in a few minutes. If it keeps happening, contact Warmbly support, or your instance's operator if Warmbly is self-hosted."
+	sendReasonUndecryptable  = "Nothing was sent because Warmbly could not read the stored message. This is a problem on Warmbly's side, not with the mailbox or the recipient. Contact Warmbly support, or your instance's operator if Warmbly is self-hosted, and mention when it failed."
 )
 
 var (

@@ -108,9 +108,9 @@ func InsecureTLS() bool {
 		insecureTLS = config.MailTLSInsecureAllowed()
 		switch {
 		case insecureTLS:
-			log.Warn().Msg("MAIL_TLS_INSECURE=true: mailbox certificates are not verified and SMTP may skip STARTTLS")
+			log.Warn().Msg("MAIL_TLS_INSECURE=true: mailbox certificates are not verified and SMTP may skip STARTTLS. Unset it to verify them; a mailbox on a server with its own certificate can trust that server in its own settings instead")
 		case set:
-			log.Error().Msg("MAIL_TLS_INSECURE=true is ignored on hosted production: mailbox certificates are verified unless the mailbox records its own opt-out")
+			log.Error().Msg("MAIL_TLS_INSECURE=true is ignored on hosted production: mailbox certificates are verified, and a mailbox on a server with its own certificate trusts it in its own settings. Remove the variable from this node's environment")
 		}
 	})
 	return insecureTLS

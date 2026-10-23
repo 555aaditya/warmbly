@@ -227,3 +227,12 @@ func AsPinError(err error, capture *Capture) *PinError {
 	}
 	return nil
 }
+
+// CertificateRefused reports whether err is a certificate that failed CA, host name or validity checks.
+func CertificateRefused(err error) bool {
+	var verr *tls.CertificateVerificationError
+	var unknown x509.UnknownAuthorityError
+	var invalid x509.CertificateInvalidError
+	var host x509.HostnameError
+	return errors.As(err, &verr) || errors.As(err, &unknown) || errors.As(err, &invalid) || errors.As(err, &host)
+}

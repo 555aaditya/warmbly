@@ -2,6 +2,7 @@ package email
 
 import (
 	"context"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -107,6 +108,9 @@ func (s *emailService) ConfirmMailboxCertificates(ctx context.Context, orgID *uu
 	}
 	// The worker refuses any certificate other than the confirmed pin.
 	if xerr := s.checkCredentials(ctx, *orgID, account.WorkerID, creds); xerr != nil {
+		if xerr.Identifier == ErrIDMailboxTLSFailed && strings.Contains(xerr.Message, models.MailProbeDetailPinMismatch) {
+			return nil, nil, errx.ErrEmailCertificatePinMismatch
+		}
 		return nil, nil, xerr
 	}
 	if err := s.emailRepository.ReplaceSMTPIMAPCredentials(ctx, accountID, creds); err != nil {

@@ -2,6 +2,7 @@ package email
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"io"
 	"net"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/warmbly/warmbly/internal/client/mailtls"
+	"github.com/warmbly/warmbly/internal/client/netbind"
 	"github.com/warmbly/warmbly/internal/models"
 )
 
@@ -42,13 +44,33 @@ func tlsFail(ctx context.Context, err error, capture *mailtls.Capture) ProbeResu
 	if perr := mailtls.AsPinError(err, capture); perr != nil {
 		res.Reason = models.MailProbeTLS
 		if perr.Kind == mailtls.PinMissing {
-			res.Detail = "the server's certificate has not been confirmed for this mailbox"
+			res.Detail = "the server's certificate has not been confirmed for this mailbox. Confirm it under Settings > Server certificates on the mailbox"
 		} else {
-			res.Detail = "the server's certificate does not match the one confirmed for this mailbox"
+			res.Detail = models.MailProbeDetailPinMismatch + ". If the server's owner replaced it, re-confirm it under Settings > Server certificates on the mailbox"
 		}
+	} else if detail := certificateDetail(err); detail != "" {
+		res.Reason, res.Detail = models.MailProbeTLS, detail
 	}
 	res.Certificate = capture.Certificate(err)
 	return res
+}
+
+// certificateDetail says in plain words why a certificate did not verify, or "" when err is not about one.
+func certificateDetail(err error) string {
+	var host x509.HostnameError
+	var invalid x509.CertificateInvalidError
+	var unknown x509.UnknownAuthorityError
+	switch {
+	case errors.As(err, &host):
+		return "the server's certificate is issued for a different host name. Use the host name the certificate names, usually the one in your provider's documentation"
+	case errors.As(err, &invalid) && invalid.Reason == x509.Expired:
+		return "the server's certificate has expired or is not valid yet"
+	case errors.As(err, &unknown), errors.As(err, &invalid):
+		return "the server's certificate is not one a recognised certificate authority vouches for, which is normal for a self-signed or company certificate"
+	case mailtls.CertificateRefused(err):
+		return "the server's certificate could not be verified"
+	}
+	return ""
 }
 
 func probeOK() ProbeResult { return ProbeResult{OK: true} }
@@ -79,6 +101,9 @@ func isServerReply(err error) bool {
 // both ends of the socket when the worker binds a local address, and the
 // worker's address is not the customer's to see.
 func netDetail(err error) string {
+	if errors.Is(err, netbind.ErrPrivateMailHost) {
+		return models.MailProbeDetailPrivateHost
+	}
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
 		if dnsErr.IsNotFound {

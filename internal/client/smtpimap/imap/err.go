@@ -12,11 +12,15 @@ import (
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/rs/zerolog/log"
+	"github.com/warmbly/warmbly/internal/client/netbind"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 )
 
 func connectionFailureReason(err error) string {
+	if errors.Is(err, netbind.ErrPrivateMailHost) {
+		return errx.MailConnectionReasonPrivateHost
+	}
 	var dns *net.DNSError
 	if errors.As(err, &dns) {
 		if dns.IsTimeout {

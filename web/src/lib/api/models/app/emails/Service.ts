@@ -46,6 +46,15 @@ export interface MailboxCertificates {
 /** The error code the backend answers when a server's TLS handshake or certificate failed. */
 export const MAILBOX_TLS_FAILED = "mailbox_tls_failed";
 
+/** The reason on a mailbox_tls_failed the owner can resolve by trusting the server's own certificate. */
+export const CERTIFICATE_UNTRUSTED = "certificate_untrusted";
+
+/** True when a test failed on a certificate no authority vouches for, not on a missing STARTTLS or a dead port. */
+export function offersCertificateTrust(e: unknown): boolean {
+    const err = e as { code?: string; reason?: string } | undefined;
+    return err?.code === MAILBOX_TLS_FAILED && err.reason === CERTIFICATE_UNTRUSTED;
+}
+
 /** Groups a hex fingerprint in pairs for reading aloud and comparing. */
 export function formatFingerprint(fp: string): string {
     return (fp.match(/.{1,2}/g) ?? []).join(":").toUpperCase();

@@ -117,7 +117,7 @@ func verifySMTPSession(ctx context.Context, conn net.Conn, resolved, host, user,
 				return tlsFail(ctx, err, capture)
 			}
 		} else if !netbind.InsecureTLS() {
-			return probeFailText(models.MailProbeTLS, "the server offers no STARTTLS on this port")
+			return probeFailText(models.MailProbeTLS, "the server offers no STARTTLS on this port, and Warmbly only signs in over an encrypted connection. Use the server's SSL/TLS port (usually 465) or a port that offers STARTTLS (usually 587)")
 		}
 	}
 
@@ -126,7 +126,10 @@ func verifySMTPSession(ctx context.Context, conn net.Conn, resolved, host, user,
 	// PLAIN, and no password mechanism runs outside TLS or loopback.
 	auth, aerr := wsmtp.NegotiateAuth(c, user, pass, host)
 	if errors.Is(aerr, wsmtp.ErrSMTPCleartextAuth) {
-		return probeFail(ctx, models.MailProbeCleartext, aerr)
+		return probeFailText(models.MailProbeCleartext, "the server only offers sign-in over an unencrypted connection, and Warmbly never sends a password unencrypted. Use the server's SSL/TLS port (usually 465) or a port that offers STARTTLS (usually 587)")
+	}
+	if errors.Is(aerr, wsmtp.ErrSMTPNoSupportedAuth) {
+		return probeFailText(models.MailProbeProtocol, noSupportedAuthDetail(c))
 	}
 	if aerr != nil {
 		return probeFail(ctx, models.MailProbeProtocol, aerr)
@@ -181,4 +184,13 @@ func ehloName(user string) string {
 		return user[at+1:]
 	}
 	return "localhost"
+}
+
+// noSupportedAuthDetail names the sign-in methods the server offered when none is one Warmbly speaks.
+func noSupportedAuthDetail(c *smtp.Client) string {
+	detail := "the server offers no sign-in method Warmbly supports (Warmbly signs in with LOGIN, PLAIN or CRAM-MD5)"
+	if _, offered := c.Extension("AUTH"); offered != "" {
+		detail = "the server offers no sign-in method Warmbly supports: it offers " + probeDetail(errors.New(offered)) + ", and Warmbly signs in with LOGIN, PLAIN or CRAM-MD5"
+	}
+	return detail + ". Use the provider's documented SMTP submission host, which usually offers one of them"
 }

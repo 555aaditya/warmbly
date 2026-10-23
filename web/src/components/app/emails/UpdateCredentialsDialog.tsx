@@ -18,7 +18,7 @@ import {
     allowsNoEncryption,
     defaultImapSecurity,
     defaultSmtpSecurity,
-    MAILBOX_TLS_FAILED,
+    offersCertificateTrust,
     validPort,
     type MailSecurity,
 } from "@/lib/api/models/app/emails/Service";
@@ -154,7 +154,7 @@ export default function UpdateCredentialsDialog({
             onClose();
         } catch (e) {
             // Surfaced by the toast; a certificate failure also offers the opt-out.
-            if ((e as AppError)?.code === MAILBOX_TLS_FAILED) setCertFailed(true);
+            if (offersCertificateTrust(e)) setCertFailed(true);
         } finally {
             setSubmitting(false);
         }

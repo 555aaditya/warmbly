@@ -60,7 +60,7 @@ import {
     allowsNoEncryption,
     defaultImapSecurity,
     defaultSmtpSecurity,
-    MAILBOX_TLS_FAILED,
+    offersCertificateTrust,
     validPort,
     type MailSecurity,
 } from "@/lib/api/models/app/emails/Service";
@@ -1088,7 +1088,7 @@ function SmtpImapPanel({ onDone, onError }: { onDone: () => void; onError: (e: u
             onDone();
         } catch (e) {
             // Surfaced by the toast, except a full allowance, which gets its dialog.
-            if ((e as AppError)?.code === MAILBOX_TLS_FAILED) setCertFailed(true);
+            if (offersCertificateTrust(e)) setCertFailed(true);
             onError(e);
         } finally {
             setSubmitting(false);

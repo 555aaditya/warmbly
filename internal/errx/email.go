@@ -2,6 +2,7 @@ package errx
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -173,18 +174,48 @@ const (
 	MailConnectionReasonClosed        = "connection closed"
 	MailConnectionReasonTimeout       = "connection timed out"
 	MailConnectionReasonFailed        = "connection failed"
+	MailConnectionReasonPrivateHost   = "private network address"
+	MailConnectionReasonNoSTARTTLS    = "no STARTTLS offered"
 	MailConnectionStageIMAPDial       = "IMAP dial"
 	MailConnectionStageIMAPTLS        = "IMAP TLS"
 	MailConnectionStageIMAPSTARTTLS   = "IMAP STARTTLS"
-	mailServerUnreachableFormat       = "The connection to the mail server could not be established (%s: %s). The server may be offline or blocking the connection."
+	mailServerUnreachablePrefix       = "The connection to the mail server could not be established (%s: %s). "
+	mailServerUnreachableHint         = "The server may be offline or blocking the connection."
+	// MailPrivateHostHint is what a mailbox owner reads when its server resolves to a private address.
+	MailPrivateHostHint = "The server's host name points to a private network address, and Warmbly only connects mailboxes to public addresses. Use the host name your provider gives for connecting from outside your network."
+	// MailCertificateHint is what a mailbox owner reads when its server's certificate did not verify.
+	MailCertificateHint = "The server's certificate is not one a recognised certificate authority vouches for, has expired, or is for another host name. Use the host name the certificate is issued for. For a server with its own certificate, choose Update credentials on the mailbox and trust the certificate when the test offers it."
+	// MailCleartextAuthMessage is the refusal to sign in over a link that is not encrypted.
+	MailCleartextAuthMessage = "This mail server only offers sign-in over an unencrypted connection, and Warmbly never sends a mailbox password unencrypted. Use the server's SSL/TLS port (usually 465) or a port that offers STARTTLS (usually 587)."
+	// MailNoSTARTTLSHint is what a mailbox owner reads when the port offers no encryption.
+	MailNoSTARTTLSHint = "The server offers no STARTTLS on this port, and Warmbly only signs in over an encrypted connection. Use the server's SSL/TLS port (usually 465) or a port that offers STARTTLS (usually 587)."
 )
 
+// connectionHints are the reasons with something more specific to say than the default.
+var connectionHints = map[string]string{
+	MailConnectionReasonPrivateHost: MailPrivateHostHint,
+	MailConnectionReasonCertificate: MailCertificateHint,
+	MailConnectionReasonNoSTARTTLS:  MailNoSTARTTLSHint,
+}
+
+// mailServerUnreachableMessage is the stored message for a connection failure at stage.
+func mailServerUnreachableMessage(stage, reason string) string {
+	hint, ok := connectionHints[reason]
+	if !ok {
+		hint = mailServerUnreachableHint
+	}
+	return fmt.Sprintf(mailServerUnreachablePrefix, stage, reason) + hint
+}
+
+// IsKnownIMAPConnectionMessage accepts each fixed IMAP connection message,
+// in its current wording and the generic one earlier workers still send.
 func IsKnownIMAPConnectionMessage(message string) bool {
 	for _, stage := range [...]string{MailConnectionStageIMAPDial, MailConnectionStageIMAPTLS, MailConnectionStageIMAPSTARTTLS} {
 		for _, reason := range [...]string{MailConnectionReasonDNSFailure, MailConnectionReasonDNSTimeout, MailConnectionReasonCertificate,
 			MailConnectionReasonWorkerAddress, MailConnectionReasonRefused, MailConnectionReasonRoute, MailConnectionReasonClosed,
-			MailConnectionReasonTimeout, MailConnectionReasonFailed} {
-			if message == fmt.Sprintf(mailServerUnreachableFormat, stage, reason) {
+			MailConnectionReasonTimeout, MailConnectionReasonFailed, MailConnectionReasonPrivateHost} {
+			if message == mailServerUnreachableMessage(stage, reason) ||
+				message == fmt.Sprintf(mailServerUnreachablePrefix, stage, reason)+mailServerUnreachableHint {
 				return true
 			}
 		}
@@ -211,7 +242,7 @@ var (
 		return MError(
 			MailErrorWarning,
 			MailErrorCodeServerUnreachable,
-			fmt.Sprintf(mailServerUnreachableFormat, stage, cause),
+			mailServerUnreachableMessage(stage, cause.Error()),
 			MailErrorResolveMethodRetry,
 		)
 	}
@@ -313,13 +344,13 @@ var (
 	ErrMailCleartextAuth = MError(
 		MailErrorCritical,
 		MailErrorCodeAuthUnsupported,
-		"This mail server offers no encrypted connection, and Warmbly will not send a mailbox password in the clear. Use the server's TLS or STARTTLS port.",
+		MailCleartextAuthMessage,
 		MailErrorResolveMethodReload,
 	)
 	ErrMailAuthUnsupported = MError(
 		MailErrorCritical,
 		MailErrorCodeAuthUnsupported,
-		"This mail server asks for a sign-in method Warmbly does not support. Check the server's documentation for an app password or an alternative SMTP host.",
+		"This mail server offers no sign-in method Warmbly supports (Warmbly signs in with LOGIN, PLAIN or CRAM-MD5). Use the provider's documented SMTP submission host, which usually offers one of them, or check the server's documentation for an app password.",
 		MailErrorResolveMethodReload,
 	)
 	ErrMailDomainAuthRejected = MError(
@@ -382,6 +413,17 @@ func (e *MailError) GetUserErrorInfo() UserErrorInfo {
 	case MailErrorCodeServerUnreachable:
 		info.Title = "Connection Error"
 		info.ActionRequired = "The email server is temporarily unavailable. We'll retry automatically."
+		switch {
+		case strings.Contains(e.Message, MailPrivateHostHint):
+			info.Title = "Server address is not public"
+			info.ActionRequired = "Choose Update credentials on the mailbox and enter the server's public host name"
+		case strings.Contains(e.Message, MailCertificateHint):
+			info.Title = "Server certificate not verified"
+			info.ActionRequired = "Choose Update credentials on the mailbox to correct the host name or trust the server's own certificate"
+		case strings.Contains(e.Message, MailNoSTARTTLSHint):
+			info.Title = "No encrypted connection offered"
+			info.ActionRequired = "Choose Update credentials on the mailbox and use the server's SSL/TLS port or a port that offers STARTTLS"
+		}
 	case MailErrorCodeNotFound:
 		info.Title = "Mailbox Item Missing"
 		info.ActionRequired = "The folder or message is no longer on the mail server. Nothing to do; we'll skip it."
@@ -409,6 +451,10 @@ func (e *MailError) GetUserErrorInfo() UserErrorInfo {
 	case MailErrorCodeAuthUnsupported:
 		info.Title = "Sign-in method not supported"
 		info.ActionRequired = "This server asks for an authentication method Warmbly does not support. An app password, or the provider's documented SMTP host, usually works."
+		if strings.HasPrefix(e.Message, MailCleartextAuthMessage) {
+			info.Title = "Encrypted sign-in not offered"
+			info.ActionRequired = "Choose Update credentials on the mailbox and use the server's SSL/TLS port or a port that offers STARTTLS"
+		}
 	case MailErrorCodeRecipientRejected:
 		info.Title = "Recipient Rejected"
 		info.ActionRequired = "The recipient address was not accepted"
