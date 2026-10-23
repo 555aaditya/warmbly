@@ -13,7 +13,7 @@ test("existing Google and Outlook Cloud mailboxes connect in bulk with individua
   await page.route("**/v1/auth/me", async (route) => {
     const response = await route.fetch();
     const user = await response.json();
-    await route.fulfill({ response, json: { ...user, admin_permissions: user.admin_permissions | (1 << 14), session_mfa_verified: true } });
+    await route.fulfill({ response, json: { ...user, admin_permissions: user.admin_permissions | (1 << 14), session_mfa_verified: true, product_tour_completed_at: "2026-01-01T00:00:00Z" } });
   });
   await page.route("**/v1/auth/config", async (route) => {
     const response = await route.fetch();
