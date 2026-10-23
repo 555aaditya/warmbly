@@ -1306,6 +1306,8 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
     const confirm = useConfirm();
     const off = !mailbox.warmup || mailbox.test_mode === "off";
     const paused = !off && !!mailbox.warmup && (!!mailbox.warmup_paused_at || !diagnosticSendingAllowed(mailbox));
+    // Warmup on with sending off is receive-only, which still receives; only a real pause stops both.
+    const receiveOnly = paused && !mailbox.warmup_paused_at;
     const active = diagnosticWarmupActive(mailbox);
     // When Warmbly Cloud warms this mailbox the local controls step aside.
     const pool = useCloudPool();
@@ -1355,8 +1357,8 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
                         <FlameIcon className="w-4 h-4" />
                     </div>
                     <div className="min-w-0">
-                        <div className="text-[12.5px] font-medium text-slate-900">{active ? "Warming up" : paused ? "Paused" : "Warmup off"}</div>
-                        <div className="text-[11px] text-slate-400 truncate">{active ? "Automated diagnostic traffic, not organic engagement" : paused && !off ? "Sending paused; receiving permission is separate" : "Sending and receiving diagnostic tests disabled"}</div>
+                        <div className="text-[12.5px] font-medium text-slate-900">{active ? "Warming up" : receiveOnly ? "Receiving only" : paused ? "Paused" : "Warmup off"}</div>
+                        <div className="text-[11px] text-slate-400 truncate">{active ? "Automated diagnostic traffic, not organic engagement" : receiveOnly ? "Receives warmup mail; sending is off" : paused && !off ? "Paused: no warmup mail is sent or received" : "Sending and receiving diagnostic tests disabled"}</div>
                     </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
@@ -1440,7 +1442,7 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
                             <Toggle value={!!form.test_receive_enabled} onChange={(v) => update({ test_receive_enabled: v })} ariaLabel="Allow receiving tests and automated mailbox actions" />
                         </div>
                     </>}
-                    <p className="text-xs text-slate-500">Save to apply. Sending also requires an active schedule and sender role. Receiving allows automated spam rescue, reads, importance and stars or flags where supported. Receive-only does not authorize replies. Actions are probabilistic, not human engagement or a guaranteed reputation improvement. Off also stops placement tests, not legitimate campaign mail.</p>
+                    <p className="text-xs text-slate-500">Save to apply. Sending also requires an active schedule and sender role. Receiving also requires warmup to be on; a paused mailbox receives nothing. Receiving allows automated spam rescue, reads, importance and stars or flags where supported. Receive-only does not authorize replies. Actions are probabilistic, not human engagement or a guaranteed reputation improvement. Off also stops placement tests, not legitimate campaign mail.</p>
                     <label className="flex items-center justify-between gap-3 text-xs text-slate-700">
                         <span>Shared daily send limit (all send types; 0 uses configured caps)</span>
                         <NumberInput value={form.shared_daily_limit ?? 0} min={0} onChange={(n) => update({ shared_daily_limit: n })} className="w-24 shrink-0" />
