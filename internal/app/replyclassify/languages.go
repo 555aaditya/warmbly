@@ -30,9 +30,14 @@ type langRules struct {
 	months          map[int][]string
 	// bounce are non-delivery subject prefixes, lower case.
 	bounce []string
+	// declined turns down interest and is read before any interest phrase;
+	// negative is any other clear no. Both are phrases, never single words.
+	declined, negative []string
 }
 
 var baseRules = langRules{
+	declined: declinedInterestKeywords,
+	negative: negativeKeywords,
 	quote: []quoteMarker{
 		{re: attribution(`on`, `wrote:`)},
 		{re: regexp.MustCompile(`(?i)_{10,}`)},
@@ -124,17 +129,41 @@ var languageRules = map[string]langRules{
 		// GMX and web.de put the date first: "Gesendet: ... Von: ...".
 		quote:      []quoteMarker{{re: headerBlock(`von`, `gesendet|datum`)}, {re: headerBlock(`gesendet`, `von`)}},
 		separators: []string{`ursprüngliche nachricht`, `original-nachricht`, `weitergeleitete nachricht`},
+		declined: []string{
+			"kein interesse", "keinerlei interesse", "nicht interessiert", "nicht mehr interessiert",
+			"interessiert uns nicht", "interessiert mich nicht",
+		},
+		negative: []string{
+			"nein danke", "nein, danke", "kein bedarf", "keinen bedarf", "falscher ansprechpartner", "falschen ansprechpartner",
+			"nicht der richtige ansprechpartner", "nicht die richtige ansprechpartnerin", "nicht zuständig",
+		},
 	},
 	"fr": {
 		quote:      []quoteMarker{{re: headerBlock(`de ?`, `envoyé ?|date ?`)}},
 		separators: []string{`message d'origine`, `message transféré`},
 		ooo:        []string{"absent du bureau", "absente du bureau"},
+		declined: []string{
+			"pas intéressé", "pas intéressée", "pas intéressés", "pas intéressées", "aucun intérêt",
+			"ne nous intéresse pas", "ne m'intéresse pas", "ne suis plus intéressé", "ne sommes plus intéressés",
+		},
+		negative: []string{
+			"non merci", "non, merci", "pas le bon interlocuteur", "pas la bonne personne",
+			"nous avons déjà une solution", "nous avons déjà un prestataire",
+		},
 	},
 	"es": {
 		quote:      []quoteMarker{{re: headerBlock(`de`, `enviado|fecha`)}},
 		separators: []string{`mensaje original`, `mensaje reenviado`},
 		ooo:        []string{"fuera de la oficina"},
 		bounce:     []string{"no se puede entregar"},
+		declined: []string{
+			"no estoy interesado", "no estoy interesada", "no estamos interesados", "no estamos interesadas",
+			"no me interesa", "no nos interesa", "no tengo interés", "no tenemos interés", "sin interés",
+		},
+		negative: []string{
+			"no gracias", "no, gracias", "no soy la persona", "persona equivocada",
+			"ya tenemos una solución", "ya tenemos proveedor",
+		},
 	},
 	"pt": {
 		quote: []quoteMarker{
@@ -369,6 +398,8 @@ type ruleSet struct {
 	inclusive map[string]bool
 	months    map[string]int
 	bounce    []string
+	declined  []string
+	negative  []string
 }
 
 var ruleSets sync.Map // sorted codes joined by "," -> *ruleSet
@@ -416,6 +447,12 @@ func compileRules(parts []langRules) *ruleSet {
 			}
 		}
 		rs.bounce = append(rs.bounce, p.bounce...)
+		for _, d := range p.declined {
+			rs.declined = append(rs.declined, accentFolder.Replace(strings.ToLower(d)))
+		}
+		for _, n := range p.negative {
+			rs.negative = append(rs.negative, accentFolder.Replace(strings.ToLower(n)))
+		}
 	}
 	rs.quote = append(rs.quote, quoteMarker{re: regexp.MustCompile(`(?i)-{2,}\s*(` + strings.Join(separators, `|`) + `)\s*-{2,}`)})
 	rs.cue = regexp.MustCompile(`(?i)\b(` + strings.Join(longestFirst(cues), `|`) + `)\b`)
