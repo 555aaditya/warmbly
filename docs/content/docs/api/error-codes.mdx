@@ -225,6 +225,31 @@ Names are shown to other people, including in invitation and notification emails
 
 A name from Google, Apple or a single sign-on provider that breaks these rules is dropped rather than refusing the sign-in, and you are asked for it during onboarding.
 
+#### Redirect destination refusals
+
+| `code` | Status | Meaning |
+|--------|--------|---------|
+| `redirect_target_not_own_domain` | 400 | A form's `redirect_url`, a sending domain's redirect `target_url`, or a vendor forwarding `url` is not on one of the workspace's own domains. Bulk setup answers it on the refused domain's row |
+
+A redirect may only send visitors to a page on one of the workspace's own domains, or a subdomain of one:
+
+- a domain the workspace has a mailbox on, other than a shared email provider such as `gmail.com`
+- a verified tracking host of one of its mailboxes
+- the workspace's custom forms domain, once it is verified
+
+Hosts are compared in lowercase, without a trailing dot and in their ASCII form, so `bücher.de` and `xn--bcher-kva.de` are the same domain. A subdomain matches its parent (`shop.acme.com` is on `acme.com`), but a name that only starts or ends the same way does not (`acme.com.example.net` and `notacme.com` are not on `acme.com`). An empty value still means no redirect.
+
+```json
+{
+  "error": "Bad Request",
+  "message": "The redirect has to go to a page on one of this workspace's own domains: a domain it has a mailbox on, its verified forms domain, or a subdomain of one of them.",
+  "code": "redirect_target_not_own_domain",
+  "request_id": "4bbbd1b2-8f86-47dd-8a7f-9476501ad20e"
+}
+```
+
+A destination saved earlier that no longer passes, because the workspace removed its last mailbox on that domain for example, is kept but not used: see the [forms guide](/guides/forms/#settings) and [root redirects](/guides/sending-domains/#root-redirects).
+
 #### Mailbox import refusals
 
 The [mailbox import](/guides/mailbox-import/) routes (`/emails/imports`) answer these. A row that fails to connect is not an HTTP error: the import carries it, with its reason in the row's `cause` (listed in [the guide](/guides/mailbox-import/#when-rows-fail)).

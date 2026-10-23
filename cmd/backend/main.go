@@ -92,6 +92,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/organization"
 	orgrisk "github.com/warmbly/warmbly/internal/app/orgrisk"
 	"github.com/warmbly/warmbly/internal/app/orgtransfer"
+	"github.com/warmbly/warmbly/internal/app/owndomain"
 	"github.com/warmbly/warmbly/internal/app/passkey"
 	"github.com/warmbly/warmbly/internal/app/pipedrive"
 	"github.com/warmbly/warmbly/internal/app/placement"
@@ -1409,6 +1410,9 @@ func main() {
 		formService.SetLinks(repository.NewFormLinkRepository(primaryDB))
 		formService.SetEvents(formEventRepository)
 		formService.SetDomains(organizationRepoForHandler)
+		// One definition of the workspace's own domains, the only destinations a form or domain redirect may send a visitor to.
+		ownDomains := owndomain.New(emailRepostory, organizationRepoForHandler)
+		formService.SetOwnDomains(ownDomains)
 		go jobs.NewFormEventsRetentionJob(formEventRepository).WireRetention(instanceSettings).Start(ctx, 12*time.Hour)
 		go jobs.NewFormsDomainSweep(organizationRepoForHandler).Start(ctx, time.Hour)
 		go jobs.NewContactMailHostSweep(contactRepoForHandler, cache, streamingPublisher).Start(ctx)
@@ -1919,6 +1923,7 @@ func main() {
 		// Sending domains: tracking host per domain and the bare-domain redirect.
 		sendingDomainService = sendingdomain.NewService(repository.NewDomainRedirectRepository(primaryDB), emailRepostory, nil, domainProver)
 		sendingDomainService.WireAuditor(auditService)
+		sendingDomainService.WireOwnDomains(ownDomains)
 		// A linked self-hosted instance can have Warmbly Cloud serve a redirect instead.
 		sendingDomainService.WireCloud(cloudLinkService)
 		cloudLinkService.OnDisconnect(sendingDomainService.MarkCloudUnlinked)

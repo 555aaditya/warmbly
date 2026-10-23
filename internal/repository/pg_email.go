@@ -192,6 +192,8 @@ type EmailRepository interface {
 	DomainsOverview(ctx context.Context, orgID uuid.UUID) ([]models.SendingDomain, *errx.Error)
 	// CountDomainMailboxes is how many of the workspace's mailboxes are on a domain.
 	CountDomainMailboxes(ctx context.Context, orgID uuid.UUID, domain string) (int, *errx.Error)
+	// OwnedDomains are the domains the workspace has a mailbox on and the tracking hosts verified on them.
+	OwnedDomains(ctx context.Context, orgID uuid.UUID) ([]string, *errx.Error)
 	// SetDomainTracking sets one tracking host on every workspace mailbox on a domain.
 	SetDomainTracking(ctx context.Context, orgID uuid.UUID, domain, host string, verified bool, verifiedAt *time.Time) (int, *errx.Error)
 	// SetVendorLink records which vendor account a mailbox came from, for automatic reconnects.
@@ -614,6 +616,34 @@ func (r *emailRepository) CountDomainMailboxes(ctx context.Context, orgID uuid.U
 		return 0, errx.InternalError()
 	}
 	return n, nil
+}
+
+func (r *emailRepository) OwnedDomains(ctx context.Context, orgID uuid.UUID) ([]string, *errx.Error) {
+	query := `
+		SELECT lower(split_part(email, '@', 2)) FROM email_accounts
+		WHERE organization_id = $1 AND position('@' in email) > 0
+		UNION
+		SELECT lower(tracking_domain) FROM email_accounts
+		WHERE organization_id = $1 AND tracking_domain <> '' AND tracking_domain_verified`
+	rows, err := r.DB.Query(ctx, query, orgID)
+	if err != nil {
+		db.CaptureError(err, query, nil, "query")
+		return nil, errx.InternalError()
+	}
+	defer rows.Close()
+	out := make([]string, 0)
+	for rows.Next() {
+		var d string
+		if err := rows.Scan(&d); err != nil {
+			db.CaptureError(err, query, nil, "scan")
+			return nil, errx.InternalError()
+		}
+		out = append(out, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errx.InternalError()
+	}
+	return out, nil
 }
 
 func (r *emailRepository) SetDomainTracking(ctx context.Context, orgID uuid.UUID, domain, host string, verified bool, verifiedAt *time.Time) (int, *errx.Error) {
