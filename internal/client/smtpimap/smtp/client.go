@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/warmbly/warmbly/internal/client/mailtls"
 	"github.com/warmbly/warmbly/internal/client/netbind"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
@@ -34,6 +35,15 @@ const SendTimeout = 90 * time.Second
 
 // errNoSTARTTLS distinguishes a missing upgrade from a network failure.
 var errNoSTARTTLS = errors.New("the server does not offer STARTTLS")
+
+// pinFailure reports a pinned certificate refusal as a retryable mailbox
+// connection error, never as a credentials failure.
+func pinFailure(perr *mailtls.PinError) *errx.MailError {
+	return errx.WithSendFailure(mailtls.MailError(perr, "SMTP"), errx.SendFailure{
+		Provider: "smtp", Protocol: "smtp", Stage: "tls", Scope: "mailbox",
+		ObservedAt: time.Now().UTC(), Disposition: errx.SendRetry,
+	})
+}
 
 // dialCause removes local and duplicated remote addresses from a dial error.
 func dialCause(err error) error {
@@ -305,12 +315,14 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 	var host string
 	var port int
 	var security string
+	var policy mailtls.Policy
 
 	switch c.AuthType {
 	case models.AuthPlain:
 		host = c.Credentials.Host
 		port = c.Credentials.Port
 		security = c.Credentials.Security
+		policy = mailtls.PolicyFor(c.Credentials)
 	case models.AuthOAuth2:
 		host = c.Oauth2.Host
 		port = c.Oauth2.Port
@@ -321,11 +333,8 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 	// literal.
 	host = models.NormalizeMailHost(host)
 	addr := models.MailDialAddress(host, port)
-	tlsConf := &tls.Config{
-		ServerName:         host,
-		InsecureSkipVerify: netbind.InsecureTLS(), //nolint:gosec // MAIL_TLS_INSECURE, local dev only
-		MinVersion:         tls.VersionTLS12,
-	}
+	capture := &mailtls.Capture{}
+	tlsConf := mailtls.Config(host, policy, capture)
 
 	// Everything after the dial gets a deadline. net/smtp sets none of its
 	// own and only the connect was bounded, so a peer that stopped answering
@@ -370,6 +379,9 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 	if implicitTLS {
 		tlsConn := tls.Client(conn, tlsConf)
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			if perr := mailtls.AsPinError(err, capture); perr != nil {
+				return pinFailure(perr)
+			}
 			return sendFailure(errx.ErrMailServerUnreachableAt("dial "+addr, err), err, "dial", "mailbox")
 		}
 		conn = tlsConn
@@ -395,10 +407,13 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 	// even when the relay advertises it: a self-signed certificate no client
 	// can verify is exactly why the mode was chosen. The MAIL_TLS_INSECURE
 	// dev knob additionally allows a server with no STARTTLS at all (the
-	// local mailpit sink), never taken in production, where it is unset.
+	// local mailpit sink); it is honoured only under APP_ENV=dev.
 	if !implicitTLS && resolved != models.MailSecurityNone {
 		if ok, _ := client.Extension("STARTTLS"); ok {
 			if err := client.StartTLS(tlsConf); err != nil {
+				if perr := mailtls.AsPinError(err, capture); perr != nil {
+					return pinFailure(perr)
+				}
 				return sendFailure(errx.ErrMailServerUnreachable, err, "starttls", "mailbox")
 			}
 		} else if !netbind.InsecureTLS() && !c.plaintext {
@@ -419,6 +434,9 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 		// bracketed IPv6 literal differs from the normalized form, so the
 		// stored string would fail on the address it is correct about.
 		auth, aerr := NegotiateAuth(client, c.Credentials.Username, c.Credentials.Password, host)
+		if errors.Is(aerr, ErrSMTPCleartextAuth) {
+			return errx.ErrMailCleartextAuth
+		}
 		if aerr != nil {
 			return errx.ErrMailAuthUnsupported
 		}

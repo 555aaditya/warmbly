@@ -12,6 +12,7 @@ import (
 	"unicode"
 
 	"github.com/emersion/go-imap/v2"
+	"github.com/warmbly/warmbly/internal/client/mailtls"
 	"github.com/warmbly/warmbly/internal/models"
 )
 
@@ -25,11 +26,29 @@ type ProbeResult struct {
 	// than the one asked for.
 	Port     int
 	Security string
+	// Certificate is the leaf the server presented, when TLS got that far.
+	Certificate *models.MailCertificate
 }
 
 // Leg converts the result to the wire shape the worker publishes.
 func (r ProbeResult) Leg() models.EmailValidationLeg {
-	return models.EmailValidationLeg{OK: r.OK, Reason: r.Reason, Detail: r.Detail, Port: r.Port, Security: r.Security}
+	return models.EmailValidationLeg{OK: r.OK, Reason: r.Reason, Detail: r.Detail, Port: r.Port, Security: r.Security, Certificate: r.Certificate}
+}
+
+// tlsFail classifies a failed handshake and keeps the certificate the server
+// presented, so the owner can be shown what a confirmation would trust.
+func tlsFail(ctx context.Context, err error, capture *mailtls.Capture) ProbeResult {
+	res := probeFail(ctx, models.MailProbeTLS, err)
+	if perr := mailtls.AsPinError(err, capture); perr != nil {
+		res.Reason = models.MailProbeTLS
+		if perr.Kind == mailtls.PinMissing {
+			res.Detail = "the server's certificate has not been confirmed for this mailbox"
+		} else {
+			res.Detail = "the server's certificate does not match the one confirmed for this mailbox"
+		}
+	}
+	res.Certificate = capture.Certificate(err)
+	return res
 }
 
 func probeOK() ProbeResult { return ProbeResult{OK: true} }

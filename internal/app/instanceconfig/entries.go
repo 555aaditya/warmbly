@@ -809,7 +809,7 @@ var table = []Entry{
 	},
 	{
 		Key: "MAIL_TLS_INSECURE", Group: GroupWorkers, RuntimeChangeable: ChangeBootOnly,
-		Effect:     "true disables certificate verification on customer mailbox connections.",
+		Effect:     "true disables certificate verification on customer mailbox connections, only when APP_ENV=dev (the local sandbox). Elsewhere it is ignored and a mailbox opts out in its own settings, which pins the server's certificate.",
 		DocsAnchor: docsWorkers,
 		Resolve:    boolOr("MAIL_TLS_INSECURE", false),
 	},

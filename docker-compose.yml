@@ -529,8 +529,9 @@ services:
         BUILT_AT: ${WARMBLY_BUILD_TIME:-}
     environment:
       <<: *selfhost-env
-      # Dovecot in the sandbox profile uses a self-signed cert. Set
-      # MAIL_TLS_INSECURE=false once you only connect real mailboxes.
+      # Dovecot in the sandbox profile uses a self-signed cert. Honoured only
+      # with APP_ENV=dev; a production mailbox on a self-signed server opts
+      # out of verification in its own settings, which pins the certificate.
       MAIL_TLS_INSECURE: ${MAIL_TLS_INSECURE:-true}
       ENCRYPTED_KEYS_PROVIDER: http
       ENCRYPTED_KEYS_BACKEND_URL: ${ENCRYPTED_KEYS_BACKEND_URL:-http://backend:8080}

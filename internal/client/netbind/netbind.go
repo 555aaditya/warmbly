@@ -12,8 +12,11 @@ import (
 	"crypto/tls"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -72,14 +75,30 @@ var (
 	insecureTLS  bool
 )
 
-// InsecureTLS reports whether MAIL_TLS_INSECURE=true is set. Local-dev-only
-// escape hatch for the sandbox stack (mailpit/dovecot with self-signed or no
-// TLS); production deployments never set it, so mail TLS stays verified.
+// InsecureTLS reports whether MAIL_TLS_INSECURE=true applies. It is honoured
+// only in development (APP_ENV dev or unset), for the local sandbox; anywhere
+// else a server without a valid certificate needs the mailbox's own opt-out.
 func InsecureTLS() bool {
 	insecureOnce.Do(func() {
-		insecureTLS = os.Getenv(envInsecureTLS) == "true"
+		set := os.Getenv(envInsecureTLS) == "true"
+		insecureTLS = insecureTLSApplies(set, os.Getenv("APP_ENV"))
+		switch {
+		case insecureTLS:
+			log.Warn().Msg("MAIL_TLS_INSECURE=true: mailbox certificates are not verified and SMTP may skip STARTTLS (development only)")
+		case set:
+			log.Error().Msg("MAIL_TLS_INSECURE=true is ignored outside APP_ENV=dev: mailbox certificates are verified unless the mailbox records its own opt-out")
+		}
 	})
 	return insecureTLS
+}
+
+// insecureTLSApplies uses the backend's reading of APP_ENV: unset is dev.
+func insecureTLSApplies(set bool, appEnv string) bool {
+	switch strings.ToLower(strings.TrimSpace(appEnv)) {
+	case "", "dev", "development", "local":
+		return set
+	}
+	return false
 }
 
 // LoopbackPeer reports whether conn's peer is this machine.

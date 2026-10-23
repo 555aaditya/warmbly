@@ -228,8 +228,10 @@ func (s *emailService) resolveCredentialErrors(ctx context.Context, accountID uu
 	if s.accountErrors == nil {
 		return
 	}
-	codes := make([]string, 0, len(errx.CredentialMailErrorCodes))
-	for _, c := range errx.CredentialMailErrorCodes {
+	// The certificate errors clear too: every reconnect path first passed a
+	// connection test under the TLS settings it stored.
+	codes := make([]string, 0, len(errx.CredentialMailErrorCodes)+len(errx.TLSCertificateMailErrorCodes))
+	for _, c := range append(append([]errx.MailErrorCode{}, errx.CredentialMailErrorCodes...), errx.TLSCertificateMailErrorCodes...) {
 		codes = append(codes, string(c))
 	}
 	if xerr := s.accountErrors.ResolveByCodes(ctx, accountID, codes, "reconnect"); xerr != nil {

@@ -527,6 +527,23 @@ type Service struct {
 	// from the port", which is how rows and events written before the field
 	// existed behave.
 	Security string `json:"security,omitempty" avro:"security"`
+	// TLSUnverified is the owner's recorded choice to trust this server on its
+	// pinned certificate (TLSPin) instead of a certificate authority.
+	TLSUnverified bool `json:"tls_unverified,omitempty" avro:"tls_unverified"`
+	// TLSPin is the confirmed SHA-256 of the leaf's SubjectPublicKeyInfo,
+	// lowercase hex. Only read when TLSUnverified is set.
+	TLSPin string `json:"tls_pin,omitempty" avro:"tls_pin"`
+}
+
+// MailCertificate describes the certificate a mail server presented.
+type MailCertificate struct {
+	// Fingerprint is the SHA-256 of the leaf's SubjectPublicKeyInfo, lowercase hex.
+	Fingerprint string `json:"fingerprint"`
+	Subject     string `json:"subject,omitempty"`
+	Issuer      string `json:"issuer,omitempty"`
+	// NotAfter is the expiry, RFC 3339.
+	NotAfter   string `json:"not_after,omitempty"`
+	SelfSigned bool   `json:"self_signed,omitempty"`
 }
 
 type Oauth2Service struct {
