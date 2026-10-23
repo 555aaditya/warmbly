@@ -93,7 +93,7 @@ func TestInterestedRepliesAreNotReadAsNegative(t *testing.T) {
 
 // Choosing a language adds its phrases and keeps the English ones.
 func TestChosenLanguagesKeepTheEnglishPhrases(t *testing.T) {
-	for _, body := range []string{"Not interested, thanks.", "No thanks.", "Sounds good, let's talk."} {
+	for _, body := range []string{"Not interested, thanks.", "No thanks.", "Sounds good, let's talk.", "Not réally interested? I am, tell me more."} {
 		base := ClassifyOffline(Input{BodyText: body})
 		withLanguages := ClassifyOffline(Input{BodyText: body, Languages: []string{"de", "fr", "es"}})
 		if base.Class != withLanguages.Class {
@@ -113,11 +113,22 @@ func TestLanguagePhrasesMatchWholeWords(t *testing.T) {
 		"bueno gracias y no gracias": true,
 		"no graciasx":                false,
 	} {
-		if got := bounded.in(text); got != want {
+		if got := bounded.in(text, text); got != want {
 			t.Errorf("bounded %q in %q = %v, want %v", bounded.text, text, got, want)
 		}
 	}
-	if !(phrase{text: "n't interested"}).in("we aren't interested") {
+	if !(phrase{text: "n't interested"}).in("we aren't interested", "we aren't interested") {
 		t.Error("an English phrase lost its substring match")
+	}
+}
+
+// The English base set reads the reply as written, so folding accents for the
+// chosen languages never changes an English verdict.
+func TestEnglishPhrasesReadTheTextAsWritten(t *testing.T) {
+	if (phrase{text: "not really interested"}).in("not réally interested", "not really interested") {
+		t.Error("an English phrase matched the accent-folded text")
+	}
+	if got := ClassifyOffline(Input{BodyText: "Not réally interested? I am, tell me more."}); got.Class == ClassNegative {
+		t.Errorf("English reply with an accent = %q, want it read as before", got.Class)
 	}
 }

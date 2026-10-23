@@ -29,12 +29,12 @@ func classifyLexicon(in Input) (Result, bool) {
 		return Result{Class: ClassUnsubscribe, Confidence: 0.9, Source: SourceLexicon}, true
 	}
 
-	// Accents only: whitespace stays as written, so the English phrases match exactly as before.
+	// Accents only, and read only by a chosen language's phrases; English matches the text as written.
 	rules, folded := rulesFor(in.Languages), accentFolder.Replace(text)
 
 	// 2. Declined interest => negative, before "interested" reads as interest.
 	for _, kw := range rules.declined {
-		if kw.in(folded) {
+		if kw.in(text, folded) {
 			return Result{Class: ClassNegative, Confidence: 0.8, Source: SourceLexicon}, true
 		}
 	}
@@ -48,7 +48,7 @@ func classifyLexicon(in Input) (Result, bool) {
 
 	// 4. Clear rejection => negative.
 	for _, kw := range rules.negative {
-		if kw.in(folded) {
+		if kw.in(text, folded) {
 			return Result{Class: ClassNegative, Confidence: 0.8, Source: SourceLexicon}, true
 		}
 	}

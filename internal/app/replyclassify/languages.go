@@ -413,10 +413,13 @@ type phrase struct {
 	bounded bool
 }
 
-func (p phrase) in(text string) bool {
+// in matches an English base phrase against the text as written and a chosen
+// language's phrase, whole words only, against its accent-folded form.
+func (p phrase) in(text, folded string) bool {
 	if !p.bounded {
 		return strings.Contains(text, p.text)
 	}
+	text = folded
 	for i := 0; i < len(text); {
 		j := strings.Index(text[i:], p.text)
 		if j < 0 {
