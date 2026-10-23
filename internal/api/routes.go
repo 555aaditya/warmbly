@@ -131,6 +131,7 @@ func Run(
 	r.GET("/addresses/outlook/callback", h.EmailOAuthCallbackOutlook)
 	// A linked instance's brokered sign-in opens here first: the page names who is asking and binds the browser.
 	r.GET("/addresses/connect", m.PublicIPRateLimitMiddleware(), h.PoolLinkOAuthConsentPage)
+	r.POST("/addresses/connect/continue", m.PublicIPRateLimitMiddleware(), h.PoolLinkOAuthContinue)
 	r.GET("/addresses/connect/continue", m.PublicIPRateLimitMiddleware(), h.PoolLinkOAuthContinue)
 
 	// Public OAuth callback bouncer for third-party integrations (HubSpot,
@@ -401,6 +402,7 @@ func Run(
 		auth.POST("/register/confirm", h.RegistrationConfirm)
 		auth.POST("/refresh", h.RefreshToken)
 		auth.POST("/reset-password", h.ResetPasswordStart)
+		auth.POST("/reset-password/session", h.ResetPasswordSession)
 		auth.POST("/reset-password/confirm", h.ResetPasswordConfirm)
 
 		// Passkey (WebAuthn) sign-in is discoverable/usernameless: a passkey

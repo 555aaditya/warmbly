@@ -658,6 +658,9 @@ func (h *Handler) pipedriveAppCall(c *gin.Context) (pipedrive.AppCall, bool) {
 		c.Status(http.StatusNotFound)
 		return pipedrive.AppCall{}, false
 	}
+	// Pipedrive puts its signed token in the query; nothing here may pass the URL on.
+	c.Header("Referrer-Policy", "no-referrer")
+	c.Header("Cache-Control", "no-store")
 	q := c.Request.URL.Query()
 	for _, k := range []string{"userId", "companyId", "selectedIds", "token"} {
 		if len(q[k]) > 1 {

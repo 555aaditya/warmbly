@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -137,28 +138,24 @@ func (s *authService) sendResetEmailWithRetry(ctx context.Context, to, subject, 
 	return s.sendAuthEmail(ctx, to, subject, message)
 }
 
-func (s *authService) ResetPasswordConfirm(ctx context.Context, data *ResetPasswordConfirm, session, ipaddr string) *errx.Error {
-	// The caller's 400, not an incident. See LoginStart.
-	if err := s.verifyHuman(ctx, appattest.ActionResetPasswordConfirm, data.Turnstile, data.AppAttest, ipaddr); err != nil {
-		return err
-	}
-
-	sess, err := s.tokenService.VerifyTokenFor(tokenpkg.PurposePasswordReset, session)
+// verifyResetLink checks an emailed reset link token without spending it.
+func (s *authService) verifyResetLink(ctx context.Context, linkToken string) (*tokenpkg.TokenClaims, *errx.Error) {
+	sess, err := s.tokenService.VerifyTokenFor(tokenpkg.PurposePasswordReset, linkToken)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	if sess.ExpiresAt.Before(time.Now()) {
-		return errx.ErrToken
+	if sess.ExpiresAt == nil || sess.ExpiresAt.Before(time.Now()) {
+		return nil, errx.ErrToken
 	}
 
 	nonce, err := s.getResetPasswordSession(ctx, sess.SessionID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if nonce != sess.Nonce {
-		return errx.ErrToken
+		return nil, errx.ErrToken
 	}
 
 	// A link is only good for the password it was requested against. Once the
@@ -167,10 +164,71 @@ func (s *authService) ResetPasswordConfirm(ctx context.Context, data *ResetPassw
 	// long its own expiry has left.
 	changedAt, err := s.authRepository.PasswordChangedAt(ctx, sess.UserID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if resetLinkPredatesPassword(sess.IssuedAt, changedAt) {
-		return errx.ErrToken
+		return nil, errx.ErrToken
+	}
+	return sess, nil
+}
+
+// ResetPasswordSession exchanges an emailed link token for an opaque reset
+// session held server-side, so the confirm step carries no token in its URL.
+// The link stays single-use: only the confirm step spends it.
+func (s *authService) ResetPasswordSession(ctx context.Context, linkToken string) (*ResetPasswordSession, *errx.Error) {
+	sess, err := s.verifyResetLink(ctx, linkToken)
+	if err != nil {
+		return nil, err
+	}
+
+	expiresAt := time.Now().Add(PasswordResetSessionTTL)
+	if sess.ExpiresAt.Before(expiresAt) {
+		expiresAt = sess.ExpiresAt.Time
+	}
+
+	a, nerr := crypt.Nonce()
+	if nerr != nil {
+		errs.CaptureException(nerr)
+		return nil, errx.InternalError()
+	}
+	b, nerr := crypt.Nonce()
+	if nerr != nil {
+		errs.CaptureException(nerr)
+		return nil, errx.InternalError()
+	}
+	handle := a + b
+
+	if err := s.saveResetHandle(ctx, handle, linkToken, time.Until(expiresAt)); err != nil {
+		return nil, err
+	}
+	return &ResetPasswordSession{Session: handle, ExpiresAt: expiresAt}, nil
+}
+
+// isResetLinkToken tells the emailed link token (a JWT) from a reset session handle.
+func isResetLinkToken(session string) bool {
+	return strings.Count(session, ".") == 2
+}
+
+func (s *authService) ResetPasswordConfirm(ctx context.Context, data *ResetPasswordConfirm, session, ipaddr string) *errx.Error {
+	// The caller's 400, not an incident. See LoginStart.
+	if err := s.verifyHuman(ctx, appattest.ActionResetPasswordConfirm, data.Turnstile, data.AppAttest, ipaddr); err != nil {
+		return err
+	}
+
+	// A reset session resolves to its link token; a client that predates the
+	// exchange still sends the link token itself.
+	linkToken, handle := session, ""
+	if !isResetLinkToken(session) {
+		handle = session
+		var err *errx.Error
+		if linkToken, err = s.getResetHandle(ctx, handle); err != nil {
+			return err
+		}
+	}
+
+	sess, err := s.verifyResetLink(ctx, linkToken)
+	if err != nil {
+		return err
 	}
 
 	if perr := crypt.PasswordError(data.Password); perr != nil {
@@ -184,6 +242,11 @@ func (s *authService) ResetPasswordConfirm(ctx context.Context, data *ResetPassw
 			return err
 		}
 	}
+	if data.RevokeAPICredentials {
+		if err := s.revokeAPICredentials(ctx, sess.UserID); err != nil {
+			return err
+		}
+	}
 
 	if err := s.ForgetTrustedDevices(ctx, sess.UserID); err != nil {
 		return err
@@ -191,6 +254,9 @@ func (s *authService) ResetPasswordConfirm(ctx context.Context, data *ResetPassw
 
 	if err := s.deletePasswordResetSession(ctx, sess.SessionID); err != nil {
 		return err
+	}
+	if handle != "" {
+		s.deleteResetHandle(ctx, handle)
 	}
 
 	// Proving control of the mailbox clears any lockout that wrong passwords
@@ -208,6 +274,21 @@ func (s *authService) ResetPasswordConfirm(ctx context.Context, data *ResetPassw
 		return err
 	}
 
+	return nil
+}
+
+// revokeAPICredentials ends the user's app authorizations and the API keys
+// they created; any failure refuses the password write that asked for it.
+func (s *authService) revokeAPICredentials(ctx context.Context, userID uuid.UUID) *errx.Error {
+	if len(s.credentialRevokers) == 0 {
+		return errx.New(errx.BadRequest, "connected apps and API keys cannot be signed out on this instance")
+	}
+	for _, r := range s.credentialRevokers {
+		if err := r.RevokeUserCredentials(ctx, userID); err != nil {
+			errs.CaptureException(err)
+			return errx.InternalError()
+		}
+	}
 	return nil
 }
 
@@ -276,6 +357,22 @@ func (s *authService) ChangePassword(ctx context.Context, userID uuid.UUID, curr
 	// password in place rather than a changed one with devices still trusted.
 	if err := s.ForgetTrustedDevices(ctx, userID); err != nil {
 		return nil, err
+	}
+	// Every other session ends before the password is written, and a failure
+	// leaves the old password in place, so no session outlives the change.
+	if s.tokenService != nil {
+		keep := uuid.Nil
+		if current != nil {
+			keep = current.ID
+		}
+		if err := s.tokenService.RevokeOtherSessions(ctx, userID, keep); err != nil {
+			return nil, err
+		}
+	}
+	if data.RevokeAPICredentials {
+		if err := s.revokeAPICredentials(ctx, userID); err != nil {
+			return nil, err
+		}
 	}
 	if err := s.authRepository.ResetPassword(ctx, userID, newHash); err != nil {
 		return nil, err

@@ -1425,6 +1425,8 @@ func main() {
 		leadSyncServiceForHandler = leadsync.NewService(leadSyncRepository, integrationServiceForHandler, contactService)
 
 		apiKeyService = apikey.NewService(cache, apiKeyRepository)
+		// A password change or reset can also end the user's app grants and the API keys they created.
+		authService.WireCredentialRevokers(oauthService, apiKeyService)
 		// `warmbly auth login`: the browser approval mints an ordinary API key
 		// through the service above, so it has to be built after it.
 		cliAuthService = cliauth.NewService(repository.NewCLIAuthRepository(primaryDB.Pool), apiKeyService, organizationService, userService, organizationRepository)

@@ -219,6 +219,38 @@ func (s *authService) getResetPasswordSession(ctx context.Context, sessionID uui
 	return val, nil
 }
 
+// getResetHandleKey stores a reset session under its hash, so the cache never holds a usable handle.
+func getResetHandleKey(handle string) string {
+	return "reset_password_handle:" + crypt.SHA256(handle)
+}
+
+// saveResetHandle maps an opaque reset session to the link token it was opened with.
+func (s *authService) saveResetHandle(ctx context.Context, handle, linkToken string, ttl time.Duration) *errx.Error {
+	if err := s.cache.SetEx(ctx, getResetHandleKey(handle), linkToken, ttl).Err(); err != nil {
+		errs.CaptureException(err)
+		return errx.InternalError()
+	}
+	return nil
+}
+
+func (s *authService) getResetHandle(ctx context.Context, handle string) (string, *errx.Error) {
+	val, err := s.cache.Get(ctx, getResetHandleKey(handle)).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return "", errx.ErrToken
+		}
+		errs.CaptureException(err)
+		return "", errx.InternalError()
+	}
+	return val, nil
+}
+
+func (s *authService) deleteResetHandle(ctx context.Context, handle string) {
+	if err := s.cache.Del(ctx, getResetHandleKey(handle)).Err(); err != nil {
+		errs.CaptureException(err)
+	}
+}
+
 func (s *authService) deletePasswordResetSession(ctx context.Context, sessionID uuid.UUID) *errx.Error {
 	val, err := s.cache.Del(ctx, getResetPasswordSessionKey(sessionID)).Result()
 	if err != nil {
