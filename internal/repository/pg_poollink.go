@@ -291,13 +291,23 @@ func (r *poolLinkRepository) HasActiveInstance(ctx context.Context, orgID uuid.U
 	return ok, nil
 }
 
+// ErrPoolLinkInstanceRevoked refuses an enrollment on a link that has ended.
+var ErrPoolLinkInstanceRevoked = errors.New("pool link instance revoked")
+
+// EnrollMailbox share-locks the live instance row, so it commits before a concurrent revoke or is refused after it.
 func (r *poolLinkRepository) EnrollMailbox(ctx context.Context, m *models.PoolLinkMailbox) error {
 	query := `
 		INSERT INTO pool_link_mailboxes (instance_id, remote_id, email_account_id, managed)
-		VALUES ($1, $2, $3, $4)
+		SELECT i.id, $2, $3, $4 FROM pool_link_instances i
+		 WHERE i.id = $1 AND i.revoked_at IS NULL
+		   FOR SHARE
 		RETURNING enrolled_at
 	`
-	if err := r.db.QueryRow(ctx, query, m.InstanceID, m.RemoteID, m.EmailAccountID, m.Managed).Scan(&m.EnrolledAt); err != nil {
+	err := r.db.QueryRow(ctx, query, m.InstanceID, m.RemoteID, m.EmailAccountID, m.Managed).Scan(&m.EnrolledAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrPoolLinkInstanceRevoked
+	}
+	if err != nil {
 		db.CaptureError(err, query, nil, "queryrow")
 		return err
 	}
