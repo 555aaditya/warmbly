@@ -776,6 +776,8 @@ On a self-hosted deployment that means `MAIL_TRANSPORT` and the `SMTP_` variable
 
 Returned when the service is temporarily unavailable.
 
+Every endpoint that checks a password, an emailed or two-factor code, or a sign-in link charges an attempt to its budget before it compares anything. When that budget cannot be read, the request is refused with this code and nothing is compared, so a sign-in can briefly fail during a cache outage. Retry it.
+
 **Example:**
 
 ```json

@@ -303,10 +303,13 @@ func (s *organizationService) Create(ctx context.Context, userID uuid.UUID, name
 	// Ban-scope enforcement (migration 000045). Block new workspace
 	// creation when the admin's set the BanScopeOrgCreate bit, even
 	// if the user can otherwise log in.
-	if scope, scopeErr := s.userRepo.GetBanState(ctx, userID); scopeErr == nil {
-		if models.BanScope(scope).Has(models.BanScopeOrgCreate) {
-			return nil, errx.New(errx.Forbidden, "this account cannot create new workspaces")
-		}
+	scope, scopeErr := s.userRepo.GetBanState(ctx, userID)
+	if scopeErr != nil {
+		errs.CaptureException(scopeErr)
+		return nil, errx.InternalError()
+	}
+	if models.BanScope(scope).Has(models.BanScopeOrgCreate) {
+		return nil, errx.New(errx.Forbidden, "this account cannot create new workspaces")
 	}
 
 	// Daily creation throttle — caps "new workspaces per owner per

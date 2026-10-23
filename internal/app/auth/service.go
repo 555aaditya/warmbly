@@ -73,7 +73,7 @@ type AuthService interface {
 	// recovery-code regeneration). Reserve charges one attempt atomically and
 	// reports whether it was within budget; Release refunds an attempt that
 	// never checked a credential; Clear forgives the count on success.
-	ReserveReauthAttempt(ctx context.Context, userID uuid.UUID) bool
+	ReserveReauthAttempt(ctx context.Context, userID uuid.UUID) (bool, *errx.Error)
 	ReleaseReauthAttempt(ctx context.Context, userID uuid.UUID)
 	ClearReauthFailures(ctx context.Context, userID uuid.UUID)
 	LoginConfirm(ctx context.Context, data *ConfirmData, session, ipaddr, userAgent string) (*models.LoginResult, *errx.Error)
