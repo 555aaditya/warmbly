@@ -1417,20 +1417,38 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
             {!inCloud && (
                 <div className="px-5 py-4 space-y-3 border-t border-slate-100">
                     <Eyebrow>Diagnostic participation</Eyebrow>
-                    <select aria-label="Diagnostic participation mode" value={form.test_mode ?? "legacy"}
-                        onChange={(e) => update({ test_mode: e.target.value as Inbox["test_mode"], test_send_enabled: false, test_receive_enabled: false })}
-                        className="h-8 rounded border border-slate-200 text-sm">
-                        {(form.test_mode == null || form.test_mode === "legacy") && <option value="legacy" disabled>Legacy participation (unchanged until explicit action)</option>}
-                        <option value="diagnostic">Disclosed automated diagnostics</option>
-                        <option value="off">Off: no diagnostic sends or receipts</option>
-                    </select>
+                    <SelectMenu
+                        aria-label="Diagnostic participation mode"
+                        value={form.test_mode ?? "legacy"}
+                        onChange={(v) => update({ test_mode: v as Inbox["test_mode"], test_send_enabled: false, test_receive_enabled: false })}
+                        options={[
+                            ...(form.test_mode == null || form.test_mode === "legacy"
+                                ? [{ value: "legacy", label: "Legacy participation (unchanged until explicit action)", disabled: true }]
+                                : []),
+                            { value: "diagnostic", label: "Disclosed automated diagnostics" },
+                            { value: "off", label: "Off: no diagnostic sends or receipts" },
+                        ]}
+                        fullWidth
+                    />
                     {form.test_mode === "diagnostic" && <>
-                        <label className="flex items-center justify-between text-xs">Allow diagnostic sending and replies<Toggle value={!!form.test_send_enabled} onChange={(v) => update({ test_send_enabled: v })} /></label>
-                        <label className="flex items-center justify-between text-xs">Allow receiving tests and automated mailbox actions<Toggle value={!!form.test_receive_enabled} onChange={(v) => update({ test_receive_enabled: v })} /></label>
+                        <div className="flex items-center justify-between gap-3 text-xs text-slate-700">
+                            <span>Allow diagnostic sending and replies</span>
+                            <Toggle value={!!form.test_send_enabled} onChange={(v) => update({ test_send_enabled: v })} ariaLabel="Allow diagnostic sending and replies" />
+                        </div>
+                        <div className="flex items-center justify-between gap-3 text-xs text-slate-700">
+                            <span>Allow receiving tests and automated mailbox actions</span>
+                            <Toggle value={!!form.test_receive_enabled} onChange={(v) => update({ test_receive_enabled: v })} ariaLabel="Allow receiving tests and automated mailbox actions" />
+                        </div>
                     </>}
                     <p className="text-xs text-slate-500">Save to apply. Sending also requires an active schedule and sender role. Receiving allows automated spam rescue, reads, importance and stars or flags where supported. Receive-only does not authorize replies. Actions are probabilistic, not human engagement or a guaranteed reputation improvement. Off also stops placement tests, not legitimate campaign mail.</p>
-                    <label className="block text-xs">Shared daily send limit (all send types; 0 uses configured caps)<input type="number" min={0} value={form.shared_daily_limit ?? 0} onChange={(e) => update({ shared_daily_limit: Number(e.target.value) })} className="ml-2 w-20 rounded border border-slate-200" /></label>
-                    <label className="block text-xs">Recipients in rolling 24 hours (To/CC/BCC; 0 uses configured caps)<input type="number" min={0} value={form.rolling_recipient_limit ?? 0} onChange={(e) => update({ rolling_recipient_limit: Number(e.target.value) })} className="ml-2 w-20 rounded border border-slate-200" /></label>
+                    <label className="flex items-center justify-between gap-3 text-xs text-slate-700">
+                        <span>Shared daily send limit (all send types; 0 uses configured caps)</span>
+                        <NumberInput value={form.shared_daily_limit ?? 0} min={0} onChange={(n) => update({ shared_daily_limit: n })} className="w-24 shrink-0" />
+                    </label>
+                    <label className="flex items-center justify-between gap-3 text-xs text-slate-700">
+                        <span>Recipients in rolling 24 hours (To/CC/BCC; 0 uses configured caps)</span>
+                        <NumberInput value={form.rolling_recipient_limit ?? 0} min={0} onChange={(n) => update({ rolling_recipient_limit: n })} className="w-24 shrink-0" />
+                    </label>
                 </div>
             )}
 
