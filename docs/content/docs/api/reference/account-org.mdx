@@ -171,6 +171,8 @@ A new token pair, same shape as the login confirm success response (`access_toke
 
 Every refresh rotates the pair: store the new refresh token and discard the old one. A refresh token that has already been exchanged is refused with `401`. If it is presented again more than two minutes after it was exchanged, it has been used twice, so the whole session is ended and every token issued to it stops working. Inside those two minutes it is treated as two callers refreshing at once and only that request is refused.
 
+A session lasts at most 180 days from the sign-in that created it, however often it is refreshed. Past that point `POST /auth/refresh` answers `401` and its access tokens stop working, and no token a refresh issues expires later than the session itself. Sign in again to start a new one.
+
 ### Start password reset
 
 `POST /auth/reset-password`
