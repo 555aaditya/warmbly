@@ -193,11 +193,11 @@ Auth: public (not available to API keys).
 
 `200 OK` with an empty body.
 
-### Confirm password reset
+### Open a reset session
 
-`POST /auth/reset-password/confirm`
+`POST /auth/reset-password/session`
 
-Sets a new password using the emailed reset code (carried inside the signed `session` token). A reset token is single-use and bound to the password it was requested against: once the password is written by any path (this endpoint, the signed-in change, or an operator reset), every reset token issued before that write answers `401` however long its own expiry has left.
+Exchanges the token from the emailed reset link for a short-lived reset session, so the confirm step carries nothing in a URL. The link token is sent in the body and is not spent: only the confirm step spends it. A client should drop the link token from the address bar once it has the session.
 
 Auth: public (not available to API keys).
 
@@ -205,8 +205,34 @@ Auth: public (not available to API keys).
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `session` | string | yes | The reset session token tied to the email. |
+| `token` | string | yes | The `session` value from the emailed reset link. |
+
+#### Response
+
+```json
+{
+  "session": "q3Vh2c...",
+  "expires_at": "2026-10-23T12:15:00Z"
+}
+```
+
+The session lasts 15 minutes, or until the link expires if that is sooner. An expired, used or superseded link answers `401`.
+
+### Confirm password reset
+
+`POST /auth/reset-password/confirm`
+
+Sets a new password. A reset link is single-use and bound to the password it was requested against: once the password is written by any path (this endpoint, the signed-in change, or an operator reset), every link issued before that write answers `401` however long its own expiry has left. Every session the account holds ends before the new password is stored.
+
+Auth: public (not available to API keys).
+
+#### Request body
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `session` | string | yes | The session from [Open a reset session](#open-a-reset-session). The link token itself is still accepted, for clients that predate that step. |
 | `password` | string | yes | The new password. |
+| `revoke_api_credentials` | boolean | no | Also revoke every app you authorized (OAuth grants and their `wmat_` tokens) and every API key you created, in all your workspaces. Defaults to `false`. |
 | `turnstile` | string | yes, unless `app_attest` is sent | Cloudflare Turnstile token. |
 | `app_attest` | object | no | The native app's [App Attest proof](#app-attest-native-apps), sent instead of `turnstile`. |
 
@@ -535,7 +561,7 @@ Auth: Session only (not available to API keys).
 
 `POST /auth/me/password`
 
-Updates the signed-in user's password. Every session the account holds is ended, the one making the request included, and the response is the token pair of a new session for the calling device. Tokens issued before the change are refused after it, so the client must replace its stored pair with the one returned. Returns `200 OK`.
+Updates the signed-in user's password. Every other session the account holds is ended before the new password is stored, and if that fails the password is left unchanged. The session making the request ends with the change too, and the response is the token pair of a new session for the calling device. Tokens issued before the change are refused after it, so the client must replace its stored pair with the one returned. Returns `200 OK`.
 
 If the new password was stored but the device could not be issued a new session, the response is `409` with code `password_changed_sign_in_again`. The old tokens are not valid in that case either: discard them and sign in with the new password.
 
@@ -547,6 +573,7 @@ Auth: Session only (not available to API keys).
 |-------|------|----------|-------------|
 | `current_password` | string | yes | The existing password. |
 | `new_password` | string | yes | The new password. |
+| `revoke_api_credentials` | boolean | no | Also revoke every app you authorized (OAuth grants and their `wmat_` tokens) and every API key you created, in all your workspaces, including keys made by `warmbly auth login`. Defaults to `false`. |
 
 ```json
 {

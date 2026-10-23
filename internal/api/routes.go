@@ -401,6 +401,7 @@ func Run(
 		auth.POST("/register/confirm", h.RegistrationConfirm)
 		auth.POST("/refresh", h.RefreshToken)
 		auth.POST("/reset-password", h.ResetPasswordStart)
+		auth.POST("/reset-password/session", h.ResetPasswordSession)
 		auth.POST("/reset-password/confirm", h.ResetPasswordConfirm)
 
 		// Passkey (WebAuthn) sign-in is discoverable/usernameless: a passkey
