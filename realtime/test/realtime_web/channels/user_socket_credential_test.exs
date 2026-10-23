@@ -1,5 +1,5 @@
 defmodule RealtimeWeb.UserSocketCredentialTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias RealtimeWeb.UserSocket
 
@@ -9,7 +9,18 @@ defmodule RealtimeWeb.UserSocketCredentialTest do
     assert UserSocket.credential(%{"token" => @ticket}, %{}) == {:ok, @ticket}
   end
 
-  test "an API key or OAuth token in the query string is still accepted, deprecated" do
+  test "an API key or OAuth token in the query string is refused by default" do
+    assert UserSocket.credential(%{"token" => "wmbly_abc"}, %{}) ==
+             {:error, :credential_in_query}
+
+    assert UserSocket.credential(%{"token" => "wmat_abc"}, %{}) ==
+             {:error, :credential_in_query}
+  end
+
+  test "an API key in the query string is read when the operator allows it" do
+    Application.put_env(:realtime, :allow_query_credentials, true)
+    on_exit(fn -> Application.delete_env(:realtime, :allow_query_credentials) end)
+
     assert UserSocket.credential(%{"token" => "wmbly_abc"}, %{}) == {:ok, "wmbly_abc"}
     assert UserSocket.credential(%{"token" => "wmat_abc"}, %{}) == {:ok, "wmat_abc"}
   end
