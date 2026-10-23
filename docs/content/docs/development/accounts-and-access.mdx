@@ -237,11 +237,7 @@ Send the link over a channel you trust. It is a bearer credential: anyone holdin
 An invitation works for 48 hours by default. One that ran out stays on the list marked **Expired**, with **Resend** on its row. Resend invites the same address again: the row gets a new token and a reset expiry, and the previously copied link stops working. On a `log` transport the new email is not delivered either, so copy the new link from the row once it is pending again.
 </Callout>
 
-If you would rather read it out of the log instead:
-
-```bash
-docker compose -p warmbly logs backend | grep -A20 "invitation"
-```
+The log does not carry the link. Unless `APP_ENV` is `dev`, the `log` transport replaces the query string of every link it writes with `?[redacted]`, and the invitation token travels there, so the copy action is the way to hand one over.
 
 The cleanest fix is still to point `MAIL_TRANSPORT` at a real relay. See [platform mail](/development/configuration/#platform-mail).
 
