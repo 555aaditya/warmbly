@@ -1306,6 +1306,8 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
     const confirm = useConfirm();
     const off = !mailbox.warmup || mailbox.test_mode === "off";
     const paused = !off && !!mailbox.warmup && (!!mailbox.warmup_paused_at || !diagnosticSendingAllowed(mailbox));
+    // Warmup on with sending off is receive-only, which still receives; only a real pause stops both.
+    const receiveOnly = paused && !mailbox.warmup_paused_at;
     const active = diagnosticWarmupActive(mailbox);
     // When Warmbly Cloud warms this mailbox the local controls step aside.
     const pool = useCloudPool();
@@ -1355,8 +1357,8 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
                         <FlameIcon className="w-4 h-4" />
                     </div>
                     <div className="min-w-0">
-                        <div className="text-[12.5px] font-medium text-slate-900">{active ? "Warming up" : paused ? "Paused" : "Warmup off"}</div>
-                        <div className="text-[11px] text-slate-400 truncate">{active ? "Automated diagnostic traffic, not organic engagement" : paused && !off ? "Paused: no warmup mail is sent or received" : "Sending and receiving diagnostic tests disabled"}</div>
+                        <div className="text-[12.5px] font-medium text-slate-900">{active ? "Warming up" : receiveOnly ? "Receiving only" : paused ? "Paused" : "Warmup off"}</div>
+                        <div className="text-[11px] text-slate-400 truncate">{active ? "Automated diagnostic traffic, not organic engagement" : receiveOnly ? "Receives warmup mail; sending is off" : paused && !off ? "Paused: no warmup mail is sent or received" : "Sending and receiving diagnostic tests disabled"}</div>
                     </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">

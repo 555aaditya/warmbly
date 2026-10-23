@@ -1605,8 +1605,10 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 		}
 		direction := ""
 		diagnostic := currentMode != nil && *currentMode == "diagnostic"
-		sendingOff := currentPaused || diagnostic && !currentSend || udata.TestSendEnabled != nil && !*udata.TestSendEnabled
-		receivingOff := currentPaused || diagnostic && !currentReceive || udata.TestReceiveEnabled != nil && !*udata.TestReceiveEnabled
+		// Pausing warmup stops both directions whatever participation flags the same request sends.
+		pausing := currentPaused || udata.Warmup != nil && !*udata.Warmup
+		sendingOff := pausing || diagnostic && !currentSend || udata.TestSendEnabled != nil && !*udata.TestSendEnabled
+		receivingOff := pausing || diagnostic && !currentReceive || udata.TestReceiveEnabled != nil && !*udata.TestReceiveEnabled
 		if currentStatus != "active" || udata.Status != nil && *udata.Status != "active" || currentMode != nil && *currentMode == "off" || udata.TestMode != nil && *udata.TestMode == "off" || sendingOff && receivingOff {
 			direction = "both"
 		} else if sendingOff {

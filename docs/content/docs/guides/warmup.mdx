@@ -168,7 +168,7 @@ The drawer shows confirmed partners/domains/workspaces and verified arrivals ove
 
 The **Analytics** tab of the same drawer charts the exchange over time: sent, received and replies per day, with the total received against the total sent for the range. The same numbers are in the [warmup analytics](/api/reference/analytics/#get-warmup-analytics) endpoint.
 
-Pause and Stop both end receiving: no new warmup mail or reply is sent to the mailbox, and unstarted sends already queued for it are withdrawn. Mail a provider accepted before then can still arrive. The mailbox keeps its pool standing, and turning warmup back on resumes both directions. Lost authority, disconnection, quarantine or block also restrict participation. Health alone is not consent.
+Pause and Stop both end receiving: no new warmup mail or reply is sent to the mailbox, and unstarted sends already queued for it are withdrawn. Mail a provider accepted before then can still arrive. The mailbox keeps its pool standing. Turning warmup back on resumes sending, and resumes receiving only when the mailbox's participation setting allows it. Lost authority, disconnection, quarantine or block also restrict participation. Health alone is not consent.
 
 </Fold>
 
