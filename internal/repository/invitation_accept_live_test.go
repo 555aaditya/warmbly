@@ -71,6 +71,13 @@ func TestLiveInvitationAcceptConsumesOnce(t *testing.T) {
 		if inv, _ := repo.GetInvitationByID(ctx, id); inv == nil {
 			t.Fatal("an expired invitation was removed, so it cannot be sent again")
 		}
+		expired, err := repo.GetExpiredInvitations(ctx, org, 50)
+		if err != nil || len(expired) != 1 || expired[0].ID != id {
+			t.Fatalf("expired invitations = %v, %v; want the one just expired", expired, err)
+		}
+		if pending, _ := repo.GetPendingInvitations(ctx, org); len(pending) != 0 {
+			t.Fatal("an expired invitation is listed as pending")
+		}
 		exec(`DELETE FROM organization_invitations WHERE id = $1`, id)
 	})
 

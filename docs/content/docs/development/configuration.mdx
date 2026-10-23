@@ -984,7 +984,7 @@ These are the only settings a browser can change, and no environment variable ow
 
 | Setting | Type | Default | What it does |
 |---|---|---|---|
-| `invitations.ttl_hours` | integer, 1 to 720 | `168` | How long a new invitation stays valid. Read when the invitation row is written, so it applies to invitations created after the change, not to existing ones |
+| `invitations.ttl_hours` | integer, 1 to 48 | `48` | How long a new invitation stays valid. Read when the invitation row is written, so it applies to invitations created after the change, not to existing ones |
 | `invitations.links_enabled` | boolean | `true` | Whether the copyable invitation link is returned at all. Off makes `GET /organization/invitations/:id/link` return `404` with an explanation, so an invitation can only arrive by mail |
 | `access.allow_invited_signup` | boolean | `true` | Whether holding a live invitation lets someone create their own account under `invite_only`. Off means an administrator creates every account with `warmblyctl user create` |
 | `sync.backfill_days` | integer, 1 to 730 | `90` | How far back a newly connected mailbox's initial import reaches, newest first |

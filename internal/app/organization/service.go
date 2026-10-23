@@ -27,7 +27,7 @@ import (
 const (
 	// InvitationTTL is the invitation expiration used when no instance
 	// settings service is wired; the operator's value overrides it.
-	InvitationTTL = 7 * 24 * time.Hour // 7 days
+	InvitationTTL = 48 * time.Hour
 
 	// InvitationTokenLength is the length of invitation tokens
 	InvitationTokenLength = 32
@@ -109,6 +109,7 @@ type OrganizationService interface {
 
 	// Invitations
 	GetPendingInvitations(ctx context.Context, orgID uuid.UUID) ([]models.OrganizationInvitation, *errx.Error)
+	GetExpiredInvitations(ctx context.Context, orgID uuid.UUID) ([]models.OrganizationInvitation, *errx.Error)
 	GetUserPendingInvitations(ctx context.Context, email string) ([]models.OrganizationInvitation, *errx.Error)
 	CancelInvitation(ctx context.Context, orgID, invitationID uuid.UUID) *errx.Error
 
@@ -1113,6 +1114,25 @@ func (s *organizationService) GetPendingInvitations(ctx context.Context, orgID u
 	if err != nil {
 		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to get invitations")
+	}
+	if err := s.orgRepo.HydrateInvitationRoles(ctx, invitations); err != nil {
+		errs.CaptureException(err)
+	}
+	return invitations, nil
+}
+
+// expiredInvitationsListed bounds the expired invitations offered for sending again.
+const expiredInvitationsListed = 50
+
+// GetExpiredInvitations returns an organization's recently expired invitations, marked expired.
+func (s *organizationService) GetExpiredInvitations(ctx context.Context, orgID uuid.UUID) ([]models.OrganizationInvitation, *errx.Error) {
+	invitations, err := s.orgRepo.GetExpiredInvitations(ctx, orgID, expiredInvitationsListed)
+	if err != nil {
+		errs.CaptureException(err)
+		return nil, errx.New(errx.Internal, "failed to get invitations")
+	}
+	for i := range invitations {
+		invitations[i].Expired = true
 	}
 	if err := s.orgRepo.HydrateInvitationRoles(ctx, invitations); err != nil {
 		errs.CaptureException(err)

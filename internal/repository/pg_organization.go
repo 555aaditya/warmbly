@@ -82,6 +82,7 @@ type OrganizationRepository interface {
 	GetInvitationByID(ctx context.Context, id uuid.UUID) (*models.OrganizationInvitation, error)
 	GetInvitationByEmail(ctx context.Context, orgID uuid.UUID, email string) (*models.OrganizationInvitation, error)
 	GetPendingInvitations(ctx context.Context, orgID uuid.UUID) ([]models.OrganizationInvitation, error)
+	GetExpiredInvitations(ctx context.Context, orgID uuid.UUID, limit int) ([]models.OrganizationInvitation, error)
 	GetUserPendingInvitations(ctx context.Context, email string) ([]models.OrganizationInvitation, error)
 	DeleteInvitation(ctx context.Context, id uuid.UUID) error
 	DeleteExpiredInvitations(ctx context.Context) error
@@ -545,7 +546,24 @@ func (r *organizationRepository) GetPendingInvitations(ctx context.Context, orgI
 		WHERE organization_id = $1 AND expires_at > NOW()
 		ORDER BY created_at DESC
 	`
-	rows, err := r.db.Query(ctx, query, orgID)
+	return r.queryInvitations(ctx, query, orgID)
+}
+
+// GetExpiredInvitations returns an organization's most recently expired invitations, so they can be sent again.
+func (r *organizationRepository) GetExpiredInvitations(ctx context.Context, orgID uuid.UUID, limit int) ([]models.OrganizationInvitation, error) {
+	query := `
+		SELECT id, organization_id, email, role, role_id, permissions, invited_by, token, expires_at, created_at,
+			` + invitationAccessCols + `
+		FROM organization_invitations i
+		WHERE organization_id = $1 AND expires_at <= NOW()
+		ORDER BY expires_at DESC
+		LIMIT $2
+	`
+	return r.queryInvitations(ctx, query, orgID, limit)
+}
+
+func (r *organizationRepository) queryInvitations(ctx context.Context, query string, args ...any) ([]models.OrganizationInvitation, error) {
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -563,7 +581,7 @@ func (r *organizationRepository) GetPendingInvitations(ctx context.Context, orgI
 		inv.Access = acc.access()
 		invitations = append(invitations, inv)
 	}
-	return invitations, nil
+	return invitations, rows.Err()
 }
 
 // GetUserPendingInvitations retrieves all pending invitations for a user's email
