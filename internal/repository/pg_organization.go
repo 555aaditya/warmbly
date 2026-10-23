@@ -56,6 +56,7 @@ type OrganizationRepository interface {
 
 	// Multi-role assignment (pg_member_roles.go)
 	AddMemberWithRoles(ctx context.Context, member *models.OrganizationMember, roleIDs []uuid.UUID) error
+	AcceptInvitation(ctx context.Context, invitationID uuid.UUID, member *models.OrganizationMember, roleIDs []uuid.UUID) error
 	HydrateInvitationRoles(ctx context.Context, invitations []models.OrganizationInvitation) error
 	SetMemberRoles(ctx context.Context, orgID, userID uuid.UUID, roleIDs []uuid.UUID) error
 	GetMemberRoles(ctx context.Context, orgID, userID uuid.UUID) ([]models.MemberRole, error)

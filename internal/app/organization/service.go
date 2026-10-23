@@ -948,17 +948,18 @@ func (s *organizationService) acceptResolved(ctx context.Context, inv *models.Or
 		return nil, errx.New(errx.Forbidden, "this invitation is for "+inv.Email+", but you are signed in as "+email+"; sign out and use the invited address")
 	}
 
-	// Check if invitation is expired
+	// An expired invitation stays listed so the team page can send it again.
 	if inv.IsExpired() {
-		// Delete expired invitation
-		_ = s.orgRepo.DeleteInvitation(ctx, inv.ID)
 		return nil, errx.New(errx.BadRequest, "invitation has expired")
 	}
 
 	// Check if already a member
 	existing, _ := s.orgRepo.GetMember(ctx, inv.OrganizationID, userID)
 	if existing != nil {
-		_ = s.orgRepo.DeleteInvitation(ctx, inv.ID)
+		if err := s.orgRepo.DeleteInvitation(ctx, inv.ID); err != nil {
+			errs.CaptureException(err)
+			return nil, errx.InternalError()
+		}
 		return existing, nil
 	}
 
@@ -987,7 +988,9 @@ func (s *organizationService) acceptResolved(ctx context.Context, inv *models.Or
 		liveRoleIDs = append(liveRoleIDs, id)
 	}
 	if len(liveRoleIDs) == 0 {
-		_ = s.orgRepo.DeleteInvitation(ctx, inv.ID)
+		if err := s.orgRepo.DeleteInvitation(ctx, inv.ID); err != nil {
+			errs.CaptureException(err)
+		}
 		return nil, errx.New(errx.BadRequest, "the roles for this invitation no longer exist — ask for a new invite")
 	}
 
@@ -1007,13 +1010,13 @@ func (s *organizationService) acceptResolved(ctx context.Context, inv *models.Or
 		// Grants on resources deleted since the invite are dropped by the insert.
 		Access: inv.Access,
 	}
-	if err := s.orgRepo.AddMemberWithRoles(ctx, member, liveRoleIDs); err != nil {
+	if err := s.orgRepo.AcceptInvitation(ctx, inv.ID, member, liveRoleIDs); err != nil {
+		if errors.Is(err, repository.ErrInvitationInvalid) {
+			return nil, errx.New(errx.BadRequest, "this invitation has already been used or has expired")
+		}
 		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to add member")
 	}
-
-	// Delete the invitation
-	_ = s.orgRepo.DeleteInvitation(ctx, inv.ID)
 
 	if updated, _ := s.orgRepo.GetMember(ctx, inv.OrganizationID, userID); updated != nil {
 		member = updated
