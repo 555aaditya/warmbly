@@ -221,13 +221,15 @@ func automatedThreadSQL(threadExpr, rowAutomatedExpr, orgArg string) string {
 		) END)`, threadExpr, rowAutomatedExpr, orgArg)
 }
 
-// bareAddrSQL extracts the exact address out of a raw header entry: the
-// bracketed form every provider writes ("Name <a@b.com>"), the parenthesised
-// form older IMAP rows carry, else the trimmed value. Lowercased, and never a
-// substring contains, so a@b.com matches neither xa@b.com nor a@b.com.evil.
+// bareAddrSQL extracts the exact address out of a raw header entry: the last
+// bracketed address ("Name <a@b.com>", never one quoted inside the name), a
+// bare address before a comment ("a@b.com (note)"), the parenthesised form
+// older IMAP rows carry ("Name (a@b.com)"), else the trimmed value. Lowercased,
+// and never a substring contains, so a@b.com matches neither xa@b.com nor
+// a@b.com.evil.
 func bareAddrSQL(expr string) string {
 	return fmt.Sprintf(
-		`lower(coalesce(substring(%[1]s from '<([^>]*)>'), substring(%[1]s from '\(([^()]*)\)\s*$'), btrim(%[1]s)))`,
+		`lower(coalesce(substring(%[1]s from '<([^<>]*)>[^<>]*$'), substring(%[1]s from '^[[:space:]]*([^[:space:]()<>"]+@[^[:space:]()<>"]+)[[:space:]]*\('), substring(%[1]s from '\(([^()]*)\)\s*$'), btrim(%[1]s)))`,
 		expr,
 	)
 }
@@ -1543,7 +1545,7 @@ func (r *uniboxRepository) AddThreadLabels(ctx context.Context, orgID uuid.UUID,
 // "label email" action only makes sense once the contact has replied, so a
 // contact that never responded resolves to "" and the action is a clean no-op.
 // Addresses are raw header forms ("Name <a@b.com>" or a bare address); the EXACT
-// address is extracted (the text inside angle brackets, else the trimmed value)
+// address is extracted (bareAddrSQL)
 // and compared case-insensitively — never a substring contains, so a@b.com does
 // not match xa@b.com or a@b.com.evil.
 func (r *uniboxRepository) LatestThreadIDForContact(ctx context.Context, orgID uuid.UUID, email string) (string, error) {
@@ -1551,18 +1553,18 @@ func (r *uniboxRepository) LatestThreadIDForContact(ctx context.Context, orgID u
 	if email == "" {
 		return "", nil
 	}
-	rows, err := r.db.Query(ctx, `
+	rows, err := r.db.Query(ctx, fmt.Sprintf(`
 		SELECT thread_id
 		FROM unibox_emails
 		WHERE email_id IN (SELECT id FROM email_accounts WHERE organization_id = $1)
 		  AND thread_id <> ''
 		  AND EXISTS (
 			SELECT 1 FROM unnest(from_addr) a
-			WHERE lower(coalesce(substring(a from '<([^>]*)>'), substring(a from '\(([^()]*)\)\s*$'), btrim(a))) = lower($2)
+			WHERE %s = lower($2)
 		  )
 		ORDER BY internal_date DESC
 		LIMIT 1
-	`, orgID, email)
+	`, bareAddrSQL("a")), orgID, email)
 	if err != nil {
 		return "", err
 	}

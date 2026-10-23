@@ -28,6 +28,8 @@ func TestLiveUniboxGetBySenderMatchesBareAddress(t *testing.T) {
 	angle := from("Jane Doe <Jane@Example.com>")
 	paren := from("Centous Support (support@centous.com)")
 	comment := from("Sam Roe <sam@example.net> (work)")
+	quotedName := from(`"VIP <alice@example.com>" <mallory@example.net>`)
+	bareComment := from("eve@example.net (bob@example.com)")
 
 	cases := []struct {
 		sender string
@@ -39,6 +41,11 @@ func TestLiveUniboxGetBySenderMatchesBareAddress(t *testing.T) {
 		{"support@centous.com", paren},
 		{"sam@example.net", comment},
 		{"work", uuid.Nil},
+		// The address is the sender's, never one written into the name or a comment.
+		{"mallory@example.net", quotedName},
+		{"alice@example.com", uuid.Nil},
+		{"eve@example.net", bareComment},
+		{"bob@example.com", uuid.Nil},
 		{"jane@example.org", uuid.Nil},
 	}
 	for _, c := range cases {
