@@ -77,6 +77,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/instanceconfig"
 	"github.com/warmbly/warmbly/internal/app/instancesettings"
 	"github.com/warmbly/warmbly/internal/app/integration"
+	"github.com/warmbly/warmbly/internal/app/keystatus"
 	"github.com/warmbly/warmbly/internal/app/leadsync"
 	"github.com/warmbly/warmbly/internal/app/mailboxavatar"
 	"github.com/warmbly/warmbly/internal/app/mailboximport"
@@ -222,6 +223,7 @@ func main() {
 	var fleetNodeRepo repository.FleetNodeRepository
 	var fleetSettingsRepo repository.FleetSettingsRepository
 	var fleetNodeService *fleetnode.Service
+	var keyStatusDB keystatus.DB
 	var tasksService tasks.TasksService
 	var advancedService advanced.Service
 	var unsubSigner *unsublink.Signer
@@ -496,6 +498,9 @@ func main() {
 			log.Println("Database migrations completed")
 		}
 		primaryDB, err := db.NewWithDirect(ctx, primaryDBEndpoint, directDBEndpoint)
+		if err == nil {
+			keyStatusDB = primaryDB.Pool
+		}
 		if err != nil {
 			errs.CaptureFatal(err)
 			log.Fatal(err)
@@ -1196,6 +1201,8 @@ func main() {
 		fleetNodeRepo = repository.NewFleetNodeRepository(primaryDB)
 		fleetSettingsRepo = repository.NewFleetSettingsRepository(primaryDB)
 		fleetNodeService = fleetnode.New(fleetNodeRepo, workerRepository, fleetSettingsRepo)
+		// Idle unless a staged rollout was started; every replica may run it.
+		go fleetNodeService.RunRolloutLoop(ctx, 30*time.Second)
 		settingsRegistrar := settings.NewRegistrar(storageBackendRepo)
 		if err := settingsRegistrar.RegisterAll(ctx, []settings.Backend{
 			{Kind: "kms", Provider: kms.Name(), Display: kms.Name(), ReadOnly: true},
@@ -2572,6 +2579,7 @@ func main() {
 		FleetNodeRepo:          fleetNodeRepo,
 		FleetSettingsRepo:      fleetSettingsRepo,
 		FleetNodes:             fleetNodeService,
+		KeyStatusDB:            keyStatusDB,
 
 		// Danger zone
 		DangerZoneService:  dangerZoneService,

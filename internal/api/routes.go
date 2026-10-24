@@ -185,6 +185,9 @@ func Run(
 		// internal API moves.
 		broker.GET("/cloud-link/token/:id", h.InternalCloudLinkToken)
 
+		// The env an enrolled node should have, pulled by its host updater.
+		broker.GET("/fleet/node-env", h.InternalFleetNodeEnv)
+
 		node.GET("/dek/:orgID", h.InternalGetDEK)
 		node.PUT("/dek/:orgID", h.InternalPutDEK)
 		// No DELETE: a lost DEK is unrecoverable, so nothing holding this token may remove one.
@@ -1820,6 +1823,8 @@ func Run(
 		// Platform mail diagnostics. A broken relay locks everyone out, so the
 		// operator needs to see the SMTP dialogue from inside the panel rather
 		// than inferring it from a 500 on the login screen.
+		// Instance key rotation status. Read only; rotation itself runs where the keys are stored.
+		adminRoutes.GET("/keys/status", middleware.RequireAdminPermission(models.AdminPermManageSettings), h.AdminKeyStatus)
 		adminRoutes.GET("/mail/status", middleware.RequireAdminPermission(models.AdminPermManageSettings), h.AdminMailStatus)
 		adminRoutes.POST("/mail/test", middleware.RequireAdminPermission(models.AdminPermManageSettings), h.AdminSendTestEmail)
 

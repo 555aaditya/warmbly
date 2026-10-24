@@ -101,6 +101,7 @@ var remoteAdminRoutes = []remoteAdminRoute{
 	{"POST", "/admin/campaigns/:id/stop", []string{"StopCampaigns"}, false, ""},
 	{"GET", "/admin/system/status", []string{"ViewAnalytics"}, false, ""},
 	{"GET", "/admin/instance/config", []string{"ManageSettings"}, false, ""},
+	{"GET", "/admin/keys/status", []string{"ManageSettings"}, false, ""},
 	{"GET", "/admin/instance/health", []string{"ViewAnalytics"}, false, ""},
 	{"GET", "/admin/instance/monitoring", []string{"ViewAnalytics"}, false, ""},
 	{"DELETE", "/admin/instance/invitations/expired", []string{"ManageOrganizations"}, false, ""},
