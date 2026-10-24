@@ -77,8 +77,13 @@ data "aws_iam_policy_document" "github_deploy" {
     actions   = ["ecs:ListTagsForResource"]
     resources = ["${local.ecs_arn}:task-definition/${var.name}-*:*"]
   }
+  # Describe by prefix so a deploy can tell which services this install runs; only those can be updated.
   statement {
-    actions   = ["ecs:DescribeServices", "ecs:UpdateService"]
+    actions   = ["ecs:DescribeServices"]
+    resources = ["${local.ecs_arn}:service/${var.name}/${var.name}-*"]
+  }
+  statement {
+    actions   = ["ecs:UpdateService"]
     resources = [for service in keys(var.services) : "${local.ecs_arn}:service/${var.name}/${var.name}-${service}"]
   }
   statement {

@@ -56,7 +56,7 @@ async function rotateKeys(clients, config, sleep = (ms) => new Promise((r) => se
     const names = Object.keys(versions || {}).filter((s) => SERVICES.includes(s));
     if (!names.length) return;
     report(`Rolling ${names.join(", ")} onto the new secret versions`);
-    await deploy(clients, { ...config, run: step(), services: names, secretVersions: versions }, sleep, report);
+    await deploy(clients, { ...config, run: step(), services: names, allServices: false, secretVersions: versions }, sleep, report);
   };
   const nodesCurrent = async () => {
     const checks = Math.floor(config.nodeWaitMs / 120000) + 1;
@@ -133,13 +133,14 @@ async function rotateKeys(clients, config, sleep = (ms) => new Promise((r) => se
       report(`${config.key} is staged; run retire after ${status.until}`);
       return { phase };
     }
-    if (phase === "none") {
+    // introducing and staging are a stage that died part way; staging again finishes it with the saved values.
+    if (phase === "none" || phase === "introducing") {
       const result = await rotator("stage");
       await roll(result.versions);
       phase = result.phase;
     }
-    if (phase === "introduced") {
-      if (!(await nodesCurrent())) {
+    if (phase === "introduced" || phase === "staging") {
+      if (phase === "introduced" && !(await nodesCurrent())) {
         report("The new key is readable everywhere except nodes that have not refreshed; run rotate again to make it primary");
         return { phase };
       }

@@ -10,6 +10,7 @@ function memory(initial) {
   let n = 0;
   for (const [arn, value] of Object.entries(initial)) secrets[arn] = [{ id: `v${n++}`, value: structuredClone(value) }];
   const tokens = new Set();
+  const faults = { failWrite: null };
   const client = { async send(command) {
     const name = command.constructor.name;
     const versions = secrets[command.input.SecretId];
@@ -19,6 +20,7 @@ function memory(initial) {
       return { VersionId: v.id, SecretString: JSON.stringify(v.value) };
     }
     if (name === "PutSecretValueCommand") {
+      if (faults.failWrite?.(command.input.SecretId)) { faults.failWrite = null; throw Object.assign(new Error("throttled"), { name: "ThrottlingException" }); }
       assert.ok(!tokens.has(command.input.ClientRequestToken), "request tokens are unique per write");
       assert.match(command.input.ClientRequestToken, /^[0-9a-f-]{36}$/);
       tokens.add(command.input.ClientRequestToken);
@@ -30,7 +32,7 @@ function memory(initial) {
   } };
   class GetSecretValueCommand { constructor(input) { this.input = input; } }
   class PutSecretValueCommand { constructor(input) { this.input = input; } }
-  return { store: makeStore(client, { GetSecretValueCommand, PutSecretValueCommand }), current: (arn) => secrets[arn]?.at(-1).value };
+  return { store: makeStore(client, { GetSecretValueCommand, PutSecretValueCommand }), current: (arn) => secrets[arn]?.at(-1).value, faults };
 }
 
 function setup(extra = {}) {
@@ -136,4 +138,47 @@ test("no generated or stored value reaches the log or the result", async () => {
   const secrets = [OLD, t.current("arn:backend").CREDENTIALS_ENCRYPTION_KEY, "postgres://fixture"];
   const text = t.logs.join("\n") + JSON.stringify(results);
   for (const s of secrets) assert.ok(!text.includes(s));
+});
+
+test("a stage that dies part way is finished by the next with the same key", async () => {
+  const t = setup();
+  await t.call("stage", "CREDENTIALS_ENCRYPTION_KEY");
+  const [pending] = JSON.parse(t.current("arn:backend").CREDENTIALS_ENCRYPTION_READ_KEYS);
+  t.faults.failWrite = (arn) => arn === "arn:consumer";
+  await assert.rejects(t.call("stage", "CREDENTIALS_ENCRYPTION_KEY"), /throttled|ThrottlingException/);
+  assert.equal(t.current("arn:backend").CREDENTIALS_ENCRYPTION_KEY, pending);
+  assert.equal(t.current("arn:consumer").CREDENTIALS_ENCRYPTION_KEY, OLD);
+  assert.equal(t.current(STATE).phase, "staging");
+  const done = await t.call("stage", "CREDENTIALS_ENCRYPTION_KEY");
+  assert.equal(done.phase, "staged");
+  for (const arn of ["arn:backend", "arn:consumer"]) {
+    assert.equal(t.current(arn).CREDENTIALS_ENCRYPTION_KEY, pending);
+    assert.deepEqual(JSON.parse(t.current(arn).CREDENTIALS_ENCRYPTION_READ_KEYS), [OLD]);
+  }
+});
+
+test("aborting a stage that died part way puts every service back on one primary", async () => {
+  const t = setup();
+  await t.call("stage", "CREDENTIALS_ENCRYPTION_KEY");
+  const [pending] = JSON.parse(t.current("arn:backend").CREDENTIALS_ENCRYPTION_READ_KEYS);
+  t.faults.failWrite = (arn) => arn === "arn:consumer";
+  await assert.rejects(t.call("stage", "CREDENTIALS_ENCRYPTION_KEY"));
+  await t.call("abort", "CREDENTIALS_ENCRYPTION_KEY");
+  for (const arn of ["arn:backend", "arn:consumer"]) {
+    assert.equal(t.current(arn).CREDENTIALS_ENCRYPTION_KEY, OLD);
+    assert.deepEqual(JSON.parse(t.current(arn).CREDENTIALS_ENCRYPTION_READ_KEYS), [pending]);
+  }
+  assert.deepEqual(t.current(STATE), {});
+});
+
+test("a token stage that dies part way keeps the token it generated", async () => {
+  const t = setup();
+  t.faults.failWrite = (arn) => arn === "arn:tracking";
+  await assert.rejects(t.call("stage", "INTERNAL_API_TOKEN"));
+  const fresh = t.current("arn:backend").INTERNAL_API_TOKEN;
+  assert.notEqual(fresh, OLD);
+  assert.equal(t.current("arn:tracking").INTERNAL_API_TOKEN, OLD);
+  await t.call("stage", "INTERNAL_API_TOKEN");
+  assert.equal(t.current("arn:tracking").INTERNAL_API_TOKEN, fresh);
+  assert.deepEqual(JSON.parse(t.current("arn:backend").INTERNAL_API_PREVIOUS_TOKENS), [OLD]);
 });

@@ -228,7 +228,7 @@ func (s *Service) stageVerdict(r *models.FleetRollout, nodes []models.FleetNode,
 			return fmt.Sprintf("node %s was removed during the rollout", id), false
 		case n.PinnedVersion != "":
 			continue
-		case !n.Live():
+		case !n.LiveAt(now):
 			return fmt.Sprintf("node %s (%s) stopped heartbeating", n.Name, id), false
 		case n.UpdateFailed != "" && n.UpdateFailed == target:
 			return fmt.Sprintf("node %s (%s) rolled back from %s on the host", n.Name, id, target), false
@@ -254,9 +254,10 @@ func (s *Service) rolloutCandidates(ctx context.Context, target string) ([]model
 	if err != nil {
 		return nil, err
 	}
+	now := s.clock()
 	out := make([]models.FleetNode, 0, len(nodes))
 	for _, n := range nodes {
-		if n.Live() && n.PinnedVersion == "" {
+		if n.LiveAt(now) && n.PinnedVersion == "" {
 			out = append(out, n)
 		}
 	}

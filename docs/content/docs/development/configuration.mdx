@@ -514,7 +514,6 @@ Keep the copies private. GeoLite2 may not be redistributed, which is also why no
 | `WARMBLY_NODE_NAME` | Display name the node reports to the fleet list and admin panel. Written by the join script from `--name`, else the hostname | unset | yes |
 | `WARMBLY_TARGET_VERSION_PATH` | File the node writes the control plane's `desired_version` to, for the `warmbly-node-update` timer to apply. Unset, the node never writes one and does not update itself. Written by the join script | unset | yes |
 | `WARMBLY_ENV_REFRESH` | Read by the host updater, not the node. `true` lets it replace `node.env` with what the control plane renders now whenever the heartbeat names a different env revision, then restart the node. `node.local.env` is never touched. Written by the join script on a new join and by `--adopt --env-refresh`; a node without it keeps its env until it rejoins | unset | no (read by the updater) |
-| `WARMBLY_UPDATE_HEALTH_SECONDS` | Read by the host updater. How long a node restarted onto a new version or env has to stay up on one start before the change is kept. A container that stops or restarts in that time is put back on what it ran before | `120` | no (read by the updater) |
 | `APP_INTERNAL_URL` | Read by the backend: the address a joining node is told to call back on when `ENCRYPTED_KEYS_BACKEND_URL` is unset on the backend. Instance health checks whichever of the two is set | unset | no (read per join) |
 
 <Callout type="warn" title="An unset key URL is silent">

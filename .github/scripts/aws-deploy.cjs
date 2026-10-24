@@ -44,10 +44,10 @@ function configuration(env) {
     }
     if (mode !== "refresh-secrets") throw new Error("DEPLOY_SECRET_VERSIONS is only accepted with refresh-secrets");
   }
-  const bake = Number(env.DEPLOY_BAKE_SECONDS ?? 300);
+  const bake = Number(String(env.DEPLOY_BAKE_SECONDS ?? "").trim() || 300);
   if (!Number.isInteger(bake) || bake < 0 || bake > 3600) throw new Error("DEPLOY_BAKE_SECONDS must be 0 through 3600");
   return {
-    cluster, prefix, mode, tag, services, secretVersions, bake,
+    cluster, prefix, mode, tag, services, allServices: raw === "all", secretVersions, bake,
     fleet: env.DEPLOY_FLEET !== "false",
     allowDroppedSecrets: env.DEPLOY_ALLOW_DROPPED_SECRETS === "true",
     images: env.DEPLOY_IMAGES_JSON ? JSON.parse(readFileSync(env.DEPLOY_IMAGES_JSON, "utf8")) : null,
@@ -199,7 +199,7 @@ async function runTask(clients, config, network, arn, definition, label, sleep, 
     }
     await sleep(5000);
   }
-  throw new Error(`${label} is unresolved after 20 minutes; no services were updated. Inspect the task before retrying`);
+  throw new Error(`${label} is unresolved after 20 minutes. Inspect the task and the service state before retrying`);
 }
 
 async function waitForService(client, config, name, definition, sleep) {
@@ -239,11 +239,14 @@ function imageFor(config, key, fallback) {
 async function deploy(clients, config, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), report = console.log) {
   const ecs = clients.ecs;
   const names = SERVICES.map((s) => `${config.prefix}-${s}`);
-  const current = assertResponse(await ecs.send(new DescribeServicesCommand({ cluster: config.cluster, services: names })));
+  const current = await ecs.send(new DescribeServicesCommand({ cluster: config.cluster, services: names }));
+  if (current.failures?.some((f) => f.reason !== "MISSING")) throw new Error("ECS reported a resource or task-placement failure");
   const live = {};
-  for (const s of current.services || []) live[s.serviceName.slice(config.prefix.length + 1)] = s;
+  for (const s of current.services || []) if (s.status === "ACTIVE") live[s.serviceName.slice(config.prefix.length + 1)] = s;
+  // all is every service this install runs; a service named explicitly has to exist.
+  if (config.allServices) config = { ...config, services: SERVICES.filter((s) => live[s]) };
   for (const name of config.services) {
-    if (live[name]?.status !== "ACTIVE") throw new Error(`${name} must already exist as an ECS service`);
+    if (!live[name]) throw new Error(`${name} must already exist as an ECS service`);
   }
   const backend = live.backend;
   if (!backend?.networkConfiguration?.awsvpcConfiguration) throw new Error("Backend task networking is missing");

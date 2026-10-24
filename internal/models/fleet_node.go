@@ -106,10 +106,15 @@ type NodeUsage struct {
 // Live reports whether the node has beaten recently enough to be given work.
 // Computed rather than stored so it can never go stale in the row.
 func (n *FleetNode) Live() bool {
+	return n.LiveAt(time.Now())
+}
+
+// LiveAt is Live judged at t, for callers that carry their own clock.
+func (n *FleetNode) LiveAt(t time.Time) bool {
 	if n == nil || !n.Active || n.LastSeenAt == nil {
 		return false
 	}
-	return time.Since(*n.LastSeenAt) <= NodeLivenessWindow
+	return t.Sub(*n.LastSeenAt) <= NodeLivenessWindow
 }
 
 // NeedsUpdate reports whether the node is running something other than what

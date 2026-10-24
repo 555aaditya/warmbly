@@ -502,6 +502,20 @@ run_updater --check-env || fail "--check-env must accept a key kept in node.loca
 [ "$(count "$U/fix/systemctl")" = "0" ] || fail "--check-env restarted the node"
 ok "--check-env names dropped keys without values and changes nothing"
 
+# adopt reads a passed --check-env as consent, so a held update lock must fail it.
+upd_reset
+reply
+flock "$U/root/run/warmbly-node-update.lock" sleep 10 &
+holder=$!
+sleep 1
+export WARMBLY_UPDATE_LOCK_SECONDS=1
+if run_updater --check-env; then fail "--check-env passed while another update held the lock"; fi
+unset WARMBLY_UPDATE_LOCK_SECONDS
+kill "$holder" 2>/dev/null || true
+wait "$holder" 2>/dev/null || true
+run_updater --check-env || fail "--check-env must pass once the lock is free"
+ok "--check-env fails while another update holds the lock"
+
 # --adopt must refuse before writing anything when the control plane would move the node.
 cat > "$join_fixture/adopt.sh" <<'FIXTURE'
 #!/bin/sh
@@ -524,5 +538,15 @@ fi
 grep -q 'accept-target' "$U/fix/out" || fail "--adopt must explain how to accept the target"
 [ ! -e "$U/root/var/lib/warmbly/image" ] || fail "--adopt wrote state before refusing"
 ok "--adopt refuses a version mismatch before writing anything"
+
+upd_reset
+rm -f "$U/root/var/lib/warmbly/image" "$U/root/var/lib/warmbly/image-ref"
+if PATH="$join_fixture/bin:$PATH" JOIN_FUNCTIONS="$join_fixture/functions.sh" ADOPT_ROOT="$U/root" \
+  sh "$join_fixture/adopt.sh" > "$U/fix/out" 2>&1; then
+  fail "--adopt accepted a node with no image-ref"
+fi
+grep -q 'image-ref' "$U/fix/out" || fail "--adopt must name the missing image-ref"
+[ ! -e "$U/root/var/lib/warmbly/image" ] || fail "--adopt wrote state with no image-ref"
+ok "--adopt refuses a node with no image-ref before writing anything"
 
 printf 'check-join-script: all checks passed\n'

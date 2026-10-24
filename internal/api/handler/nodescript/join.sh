@@ -545,6 +545,7 @@ CONFIG_DIR="$ROOT/etc/warmbly"
 HEALTH_SECONDS="${WARMBLY_UPDATE_HEALTH_SECONDS:-120}"
 SETTLE_SECONDS="${WARMBLY_UPDATE_SETTLE_SECONDS:-15}"
 POLL_SECONDS="${WARMBLY_UPDATE_POLL_SECONDS:-10}"
+LOCK_SECONDS="${WARMBLY_UPDATE_LOCK_SECONDS:-300}"
 # Kept across an env refresh: written by join or by this updater, never rendered.
 PRESERVED_KEYS="WARMBLY_VERSION WARMBLY_TARGET_VERSION_PATH WARMBLY_NODE_NAME WARMBLY_ENV_REFRESH NODE_LOG_TOKEN"
 
@@ -754,11 +755,13 @@ main() {
   esac
   service="warmbly-$role"
   exec 8>"$ROOT/run/warmbly-node-update.lock"
-  flock -n 8 || exit 0
   if [ "${1:-}" = "--check-env" ]; then
+    # adopt reads success as a passed preflight, so a held lock has to wait or fail, never pass.
+    flock -w "$LOCK_SECONDS" 8 || { log "another update is running; retry --check-env"; exit 1; }
     check_env
     return
   fi
+  flock -n 8 || exit 0
   refresh_env
   update_version
   return 0
@@ -822,11 +825,31 @@ adopt() {
   if [ -n "$target" ] && [ "$target" != "$current" ] && [ "$ADOPT_ACCEPT_TARGET" != "true" ]; then
     die "the control plane asks for $target and this node runs ${current:-an unknown version}; the updater would move it within two minutes. Set the fleet version first, or pass --accept-target."
   fi
+  # The unit starts from image-ref and the updater pulls from image, so keep what the node already runs.
+  [ -f "$STATE_DIR/image-ref" ] || die "--adopt needs $STATE_DIR/image-ref, the image this node starts from; join this machine instead"
+  image=""
+  if [ -f "$STATE_DIR/image" ]; then image=$(head -n 1 "$STATE_DIR/image"); fi
+  if [ -z "$image" ]; then
+    image=$(sed -n 's/^WARMBLY_IMAGE_REF=//p' "$STATE_DIR/image-ref" | head -n 1)
+    image=${image%%@*}
+    case "${image##*/}" in *:*) image=${image%:*} ;; esac
+  fi
+  [ -n "$image" ] || die "$STATE_DIR/image-ref names no image; join this machine instead"
 
   mkdir -p "$STATE_DIR" "$AGENT_DIR"
   chown 1000:1000 "$AGENT_DIR" 2>/dev/null || true
   chmod 0700 "$AGENT_DIR"
-  printf '%s\n' "$WARMBLY_IMAGE_REPO/$WARMBLY_ROLE" > "$STATE_DIR/image"
+  chmod 0755 "$STATE_DIR"
+  chown root:root "$STATE_DIR" 2>/dev/null || true
+  printf '%s\n' "$image" > "$STATE_DIR/image"
+  for f in image image-ref; do
+    chown root:root "$STATE_DIR/$f" 2>/dev/null || true
+    chmod 0644 "$STATE_DIR/$f"
+  done
+  if ! grep -q '^WARMBLY_TARGET_VERSION_PATH=' "$CONFIG_DIR/node.env"; then
+    # Without it the node never writes the version the control plane asks for.
+    printf 'WARMBLY_TARGET_VERSION_PATH=%s/target-version\n' "$AGENT_DIR" >> "$CONFIG_DIR/node.env"
+  fi
   ensure_local_env
   keep_local
   render_unit > "/etc/systemd/system/warmbly-$WARMBLY_ROLE.service"

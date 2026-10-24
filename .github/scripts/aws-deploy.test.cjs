@@ -67,7 +67,7 @@ function fixture(options = {}) {
     }
   }
   const latest = (family) => Object.values(defs).filter((x) => x.family === `fixture-${family}`).sort((a, b) => b.revision - a.revision)[0];
-  const services = ["backend", "consumer", "forms", "tracking", "realtime"].map((name) => ({
+  const services = ["backend", "consumer", "forms", "tracking", "realtime"].filter((n) => !options.absent?.includes(n)).map((name) => ({
     serviceName: `fixture-${name}`, status: "ACTIVE", desiredCount: 2, runningCount: 2, pendingCount: 0,
     taskDefinition: `${root}task-definition/fixture-${name}:1`, deployments: [{ rolloutState: "COMPLETED" }],
     networkConfiguration: { awsvpcConfiguration: { subnets: ["subnet-fixture"], securityGroups: ["sg-fixture"], assignPublicIp: "DISABLED" } },
@@ -91,8 +91,11 @@ function fixture(options = {}) {
       tagsOf[arn] = command.input.tags;
       return { taskDefinition: { taskDefinitionArn: arn } };
     }
-    case "DescribeServicesCommand":
-      return { services: services.filter((s) => command.input.services.includes(s.serviceName)).map((s) => structuredClone(s)) };
+    case "DescribeServicesCommand": {
+      const found = services.filter((s) => command.input.services.includes(s.serviceName));
+      const failures = command.input.services.filter((n) => !found.some((s) => s.serviceName === n)).map((arn) => ({ arn, reason: "MISSING" }));
+      return { services: found.map((s) => structuredClone(s)), failures };
+    }
     case "UpdateServiceCommand": {
       const service = services.find((s) => s.serviceName === command.input.service);
       const svc = service.serviceName.replace("fixture-", "");
@@ -302,4 +305,17 @@ test("no secret value or version-free reference is ever read", async () => {
   const f = fixture();
   await run(f, config());
   assert.ok(!f.calls.some((c) => c.name === "GetSecretValueCommand"));
+});
+
+test("an empty bake setting means the default, not no bake", () => {
+  assert.equal(config({ DEPLOY_BAKE_SECONDS: "" }).bake, 300);
+  assert.equal(config({ DEPLOY_BAKE_SECONDS: "  " }).bake, 300);
+  assert.equal(config({ DEPLOY_BAKE_SECONDS: "0" }).bake, 0);
+});
+
+test("all deploys the services this install runs, and a named missing service is refused", async () => {
+  const f = fixture({ absent: ["forms", "tracking", "realtime"] });
+  await run(f, config());
+  assert.deepEqual(updates(f).map((u) => u.service).sort(), ["fixture-backend", "fixture-consumer"]);
+  await assert.rejects(run(fixture({ absent: ["forms"] }), config({ DEPLOY_SERVICES: "backend,forms" })), /forms must already exist/);
 });

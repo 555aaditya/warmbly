@@ -103,11 +103,10 @@ func newRolloutFixture(t *testing.T, workers, consumers int) *rolloutFixture {
 	return f
 }
 
-// advanceTime moves the clock and keeps every node beating, so liveness is
-// judged against the fixture clock rather than the wall clock.
+// advanceTime moves the fixture clock and keeps every active node beating on it.
 func (f *rolloutFixture) advanceTime(d time.Duration) {
 	f.now = f.now.Add(d)
-	seen := time.Now()
+	seen := f.now
 	for i := range f.nodes.nodes {
 		if f.nodes.nodes[i].Active {
 			f.nodes.nodes[i].LastSeenAt = &seen
@@ -237,7 +236,7 @@ func TestRolloutHaltsOnDeadlineAndSilentNode(t *testing.T) {
 	st, _ = g.svc.StartRollout(ctx, "v1.5.0", nil, models.FleetRolloutPolicy{})
 	for i := range g.nodes.nodes {
 		if g.nodes.nodes[i].ID == st.Rollout.Admitted[0] {
-			old := time.Now().Add(-time.Hour)
+			old := g.now.Add(-time.Hour)
 			g.nodes.nodes[i].LastSeenAt = &old
 		}
 	}

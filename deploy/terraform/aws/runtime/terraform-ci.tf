@@ -109,6 +109,16 @@ data "aws_iam_policy_document" "terraform_apply" {
       values   = ["arn:aws:iam::aws:policy/AdministratorAccess", "arn:aws:iam::aws:policy/IAMFullAccess"]
     }
   }
+  # The CI roles cannot change their own permissions or trust; an administrator applies those by hand.
+  statement {
+    effect = "Deny"
+    actions = [
+      "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:AttachRolePolicy", "iam:DetachRolePolicy",
+      "iam:UpdateAssumeRolePolicy", "iam:PutRolePermissionsBoundary", "iam:DeleteRolePermissionsBoundary",
+      "iam:DeleteRole", "iam:UpdateRole",
+    ]
+    resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.name}-terraform-*"]
+  }
 }
 resource "aws_iam_role_policy" "terraform_apply" {
   count  = local.terraform_ci ? 1 : 0

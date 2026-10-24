@@ -70,7 +70,7 @@ async function rotate({ store, action, key, secrets, stateArn, run = "local", no
     log(`${service}: wrote secret version ${versions[service]}`);
   };
   const saveState = async (next) => {
-    await store.write(stateArn, next, token("state"));
+    await store.write(stateArn, next, token(`state/${next.phase || "clear"}`));
     log(`rotation state: ${next.key ? `${next.key} ${next.phase}` : "clear"}`);
   };
   const busy = state.key && state.key !== key;
@@ -101,22 +101,27 @@ async function rotate({ store, action, key, secrets, stateArn, run = "local", no
       }
     }
     const before = state.before || Object.fromEntries(holders.map((s) => [s, loaded[s].versionId]));
-    if (!state.key && spec.introduce) {
+    const updatedAt = new Date(now).toISOString();
+    // The intent is saved before the first write, so a run that dies part way is finished by the next with the same values.
+    if (spec.introduce && (!state.key || state.phase === "introducing")) {
       // Every reader learns the new key before anything writes with it.
-      const pending = fresh();
+      const pending = state.pending || fresh();
+      const previous = state.previous || loaded[holders[0]].value[key];
+      if (!state.key) await saveState({ key, phase: "introducing", pending, previous, before, versions: {}, updatedAt });
       for (const service of holders) {
         const value = { ...loaded[service].value };
         value[spec.read] = withRead(list(value[spec.read]), [pending]);
         await save(service, value);
       }
-      await saveState({ key, phase: "introduced", pending, previous: loaded[holders[0]].value[key], before, versions, updatedAt: new Date(now).toISOString() });
+      await saveState({ key, phase: "introduced", pending, previous, before, versions, updatedAt });
       return { phase: "introduced", versions, holders };
     }
-    if (state.key && state.phase !== "introduced") throw new RotationError(`${key} is already ${state.phase}; retire or abort it`);
-    const next = state.pending || fresh();
+    if (state.key && state.phase !== "introduced" && state.phase !== "staging") throw new RotationError(`${key} is already ${state.phase}; retire or abort it`);
+    const next = state.next || state.pending || fresh();
     const previous = state.previous || loaded[holders[0]].value[key];
-    if (holders.some((s) => loaded[s].value[key] !== previous)) throw new RotationError(`services disagree on the current ${key}; align them before rotating`);
-    const until = spec.until ? new Date(now + spec.window).toISOString() : null;
+    if (holders.some((s) => ![previous, next].includes(loaded[s].value[key]))) throw new RotationError(`services disagree on the current ${key}; align them before rotating`);
+    const until = state.until || (spec.until ? new Date(now + spec.window).toISOString() : null);
+    if (state.phase !== "staging") await saveState({ key, phase: "staging", next, previous, before, until, versions: state.versions || {}, updatedAt });
     for (const service of holders) {
       const value = { ...loaded[service].value, [key]: next };
       if (readers(service)) {
@@ -125,7 +130,7 @@ async function rotate({ store, action, key, secrets, stateArn, run = "local", no
       }
       await save(service, value);
     }
-    await saveState({ key, phase: "staged", previous, before, until, versions, updatedAt: new Date(now).toISOString() });
+    await saveState({ key, phase: "staged", next, previous, before, until, versions, updatedAt });
     return { phase: "staged", versions, holders, until };
   }
 
@@ -150,11 +155,12 @@ async function rotate({ store, action, key, secrets, stateArn, run = "local", no
     if (state.key !== key) throw new RotationError(`no rotation of ${key} is in progress`);
     for (const service of holders) {
       const value = { ...loaded[service].value };
-      if (state.phase === "introduced") {
+      if (state.phase === "introducing" || state.phase === "introduced") {
         if (!readers(service)) continue;
         value[spec.read] = withRead(list(value[spec.read]), [], [state.pending]);
       } else {
-        const replacement = value[key];
+        // staging or staged: a service the stage never reached already holds the previous value.
+        const replacement = state.next;
         value[key] = state.previous;
         if (readers(service)) {
           // A token is forgotten; a key stays readable because something may already be sealed or signed with it.

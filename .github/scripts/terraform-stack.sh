@@ -40,7 +40,8 @@ main() {
     chmod 600 "$vars"
     # Mask every value before anything can echo one.
     jq -r '.. | strings | select(length >= 6)' "$vars" | while IFS= read -r line; do
-      [ -n "$line" ] && echo "::add-mask::$line"
+      # stderr: callers capture stdout for the class, and the runner reads commands on both.
+      if [ -n "$line" ]; then echo "::add-mask::$line" >&2; fi
     done
     terraform -chdir="$dir" init -input=false -no-color -backend-config="bucket=$STATE_BUCKET" >"$out" 2>&1 || { tail -n 20 "$out" >&2; return 1; }
     local code=0

@@ -83,7 +83,9 @@ Set `terraform_ci = true` to create the `<name>-terraform-plan` and
 `<name>-terraform-apply` roles `.github/workflows/terraform-aws.yml` uses. The
 plan role reads configuration and is denied secret values, decryption, logs and
 data reads; the apply role administers resources named for this deployment and
-is reachable only from `main` through protected environments. Var files stay in
+is reachable only from `main` through protected environments. The apply role
+cannot change the two CI roles themselves, so a change to their policies or
+trust is applied by an administrator by hand. Var files stay in
 the state bucket under `warmbly/production/vars/`; only resource addresses and
 actions are ever printed.
 

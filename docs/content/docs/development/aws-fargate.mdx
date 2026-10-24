@@ -325,7 +325,9 @@ plan reaches a log, a comment or an artifact.
 - When an apply changes a service's task definition, the running release is
   redeployed so the change reaches the services.
 
-The bootstrap stack stays manual.
+The bootstrap stack stays manual. So does any change to the CI roles themselves: the apply role cannot
+change its own permissions or trust, or the plan role's, so an administrator
+applies those by hand.
 
 ## One-time GitHub setup
 

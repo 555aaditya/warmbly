@@ -85,6 +85,7 @@ jobs:
             echo "**foundation**: planned on merge, before it applies."
             for stack in runtime workers; do
               class=$(.github/scripts/terraform-stack.sh plan "$stack")
+              case "$class" in none|safe|gated) ;; *) echo "::error::unexpected plan class for $stack" >&2; exit 1 ;; esac
               echo
               case "$class" in
                 none) echo "**$stack**: no changes" ;;
@@ -152,6 +153,7 @@ jobs:
           redeploy=false
           for stack in foundation runtime workers; do
             class=$(.github/scripts/terraform-stack.sh plan "$stack")
+            case "$class" in none|safe|gated) ;; *) echo "::error::unexpected plan class for $stack" >&2; exit 1 ;; esac
             echo "### $stack: $class" >> "$GITHUB_STEP_SUMMARY"
             if [ "$class" != none ]; then
               { echo '```'; cat "$WORK/$stack.summary"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
@@ -211,6 +213,7 @@ jobs:
             [ "$stack" = "$GATED" ] && started=true
             [ "$started" = true ] || continue
             class=$(.github/scripts/terraform-stack.sh plan "$stack")
+            case "$class" in none|safe|gated) ;; *) echo "::error::unexpected plan class for $stack" >&2; exit 1 ;; esac
             echo "### $stack: $class" >> "$GITHUB_STEP_SUMMARY"
             if [ "$stack" = "$GATED" ]; then
               # What was approved is what applies: a plan that moved since asks again.
