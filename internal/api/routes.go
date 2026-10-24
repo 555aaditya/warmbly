@@ -2025,6 +2025,9 @@ func Run(
 
 		// Send outcome loop and task queues.
 		adminRoutes.GET("/sends/in-flight", middleware.RequireAdminPermission(models.AdminPermViewCampaigns), h.AdminInFlightSends)
+		adminRoutes.GET("/sends/holds", middleware.RequireAdminPermission(models.AdminPermViewCampaigns), h.AdminSendHolds)
+		// Lifting a hold lets the mailbox send again, so it takes the same bit as a dead-letter replay.
+		adminRoutes.POST("/sends/holds/:id/resolve", middleware.RequireAdminPermission(models.AdminPermStopCampaigns), h.AdminResolveSendHold)
 		adminRoutes.GET("/tasks/dead-letters", middleware.RequireAdminPermission(models.AdminPermViewCampaigns), h.AdminListDeadLetters)
 		adminRoutes.POST("/tasks/dead-letters/:id/replay", middleware.RequireAdminPermission(models.AdminPermStopCampaigns), h.AdminReplayDeadLetter)
 		adminRoutes.GET("/tasks/failures", middleware.RequireAdminPermission(models.AdminPermViewCampaigns), h.AdminRecentTaskFailures)

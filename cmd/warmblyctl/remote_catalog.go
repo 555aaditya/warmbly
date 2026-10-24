@@ -122,6 +122,8 @@ var remoteAdminRoutes = []remoteAdminRoute{
 	{"POST", "/admin/sync/:id/clear-throttle", []string{"ManageWorkers"}, false, ""},
 	{"POST", "/admin/sync/:id/restart-backfill", []string{"ManageWorkers"}, false, ""},
 	{"GET", "/admin/sends/in-flight", []string{"ViewCampaigns"}, false, ""},
+	{"GET", "/admin/sends/holds", []string{"ViewCampaigns"}, false, ""},
+	{"POST", "/admin/sends/holds/:id/resolve", []string{"StopCampaigns"}, false, ""},
 	{"GET", "/admin/tasks/dead-letters", []string{"ViewCampaigns"}, false, ""},
 	{"POST", "/admin/tasks/dead-letters/:id/replay", []string{"StopCampaigns"}, false, ""},
 	{"GET", "/admin/tasks/failures", []string{"ViewCampaigns"}, false, ""},

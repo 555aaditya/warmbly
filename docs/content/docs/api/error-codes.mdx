@@ -1194,6 +1194,16 @@ dependency failures keep existing codes. Redis failures never authorize a
 single-factor or anonymous admin. [Node diagnostics](/api/endpoints/#platform-node-diagnostics)
 use generic errors and explicit unavailable/stale coverage, not outage inference.
 
+## Admin send hold errors
+
+[`POST /admin/sends/holds/:id/resolve`](/development/send-safety/#from-the-admin-panel) adds three codes:
+
+| `code` | Status | Meaning |
+|--------|--------|---------|
+| `send_hold_not_found` | 404 | The mailbox is not held from sending, or does not exist. Refresh the list |
+| `send_hold_changed` | 409 | The held send or reason differs from the one submitted, because the hold moved or lifted since the list loaded. Refresh and check the new held send |
+| `send_hold_not_resolvable` | 409 | The hold cannot take a verdict right now (the reason is in the message and on the row), or the evidence stopped applying while it was submitted. Nothing was recorded |
+
 ## See also
 
 - [Authentication](/api/authentication/)
