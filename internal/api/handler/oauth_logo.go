@@ -214,6 +214,7 @@ func (h *Handler) UploadOAuthApplicationLogo(c *gin.Context) {
 		return
 	}
 	h.deleteAppLogo(ctx, orgID, app.ID, app.LogoURL, key)
+	h.auditOrg(c, models.AuditActionUpdate, models.AuditEntityOAuthApplication, &app.ID, nil, map[string]string{"logo": "uploaded"})
 	c.JSON(http.StatusOK, updated)
 }
 
@@ -234,5 +235,6 @@ func (h *Handler) DeleteOAuthApplicationLogo(c *gin.Context) {
 		return
 	}
 	h.deleteAppLogo(ctx, orgID, app.ID, app.LogoURL, "")
+	h.auditOrg(c, models.AuditActionUpdate, models.AuditEntityOAuthApplication, &app.ID, nil, map[string]string{"logo": "removed"})
 	c.JSON(http.StatusOK, updated)
 }

@@ -44,6 +44,7 @@ Anything flagged on [Instance health](/development/instance-health/) links back 
 | `INSTANCE_NAME` | The name shown on the Warmbly Cloud approval page when linking this instance | the hostname | no |
 | `WARMBLY_VERSION` | Version string reported to Warmbly Cloud on link requests | `dev` | no |
 | `WARMBLY_ALLOW_UNSAFE_WEBHOOK_URLS` | `true` lets customer webhooks point at `http://` and private addresses. Honoured only on a self-hosted (`DEPLOYMENT_MODE=self_hosted`) or development (`APP_ENV=dev`) instance; a hosted production instance ignores it. It lets any workspace member make the backend reach into your internal network, so only set it where you control that network | `false` | yes |
+| `APP_VERSION` | Release name written into a workspace export archive's manifest (`source_app_version`). Informational only: an import never keys off it | unset | yes |
 
 In Gin release mode, access logs omit successful health probes and internal GET lookups, including an expected missing email-message mapping. Authentication failures, server errors, other missing resources and all mutations remain logged. Gin debug mode keeps every access log. Query strings and credential path parameters remain redacted in both modes; organization audit events are unaffected.
 
@@ -124,6 +125,8 @@ For encryption rotation, first deploy a compatible release everywhere with the e
 Retain old keys until stored ciphertext, retained events, pending jobs and the supported rollback window no longer need them. Keep the keys required by older backups for as long as those backups are retained. Organization DEKs and their KMS wrapping keys have a separate lifecycle; changing the instance credential key does not rotate them.
 
 To rotate sessions while preserving existing MFA enrollments, unsubscribe links and published DNS proofs, first pin `TWOFA_SECRET`, `UNSUBSCRIBE_SIGNING_SECRET` and `DOMAIN_PROOF_SECRET` to their existing resolved values. Then change `AUTH_SECRET` and realtime's matching `JWT_SECRET` together. Users sign in again. Rotate the independent purpose keys separately; issued unsubscribe links remain valid for one year, so their read cutoff must cover the last previously issued link's expiry.
+
+Nodes hold `CREDENTIALS_ENCRYPTION_KEY`, `CREDENTIALS_ENCRYPTION_READ_KEYS`, `INTERNAL_API_TOKEN` and `NODE_BROKER_TOKEN` in `node.env`. A node that [keeps its env current](#keeping-a-nodes-env-current) receives each step of a rotation on its own; wait for `warmblyctl fleet env-status` to report every node current before activating a new credential key, and again before retiring an old key or token. A node still on the old values keeps sealing and authenticating with them. The [Keys tab](/development/admin-panel/#instance) under Configuration in the admin panel shows the same three answers in one place: values still under a read key, open overlap windows and nodes that have not applied the current env. On AWS, the rotation workflow runs the whole procedure; see [Rotate keys](/development/aws-fargate/#rotate-keys).
 
 ### Seal mailbox credentials under workspace keys
 
@@ -508,6 +511,11 @@ Keep the copies private. GeoLite2 may not be redistributed, which is also why no
 | `ENCRYPTED_KEYS_WORKER_TOKEN` | The worker's copy of `INTERNAL_API_TOKEN` | unset | yes |
 | `MAIL_TLS_INSECURE` | Skips certificate verification on mailbox connections and lets SMTP continue on a server that offers no STARTTLS. A password is still only sent over TLS or to this machine. Honoured on a self-hosted or development instance and ignored on hosted production, where a server with a self-signed or private certificate is trusted through its mailbox's own [certificate choice](/guides/mailboxes/#servers-with-their-own-certificate) instead. A joining node receives the value its control plane resolved | `false` | yes |
 | `MAIL_ALLOW_PRIVATE_HOSTS` | Whether a mailbox's SMTP or IMAP server may resolve to a loopback, private, link-local, CGNAT, multicast or metadata address. Checked on every connection, against the address actually dialled. A hosted production instance always refuses them; a self-hosted or development instance allows them unless this is `false`. A joining node receives the value its control plane resolved | `true` on a self-host or in development, refused on hosted production | yes |
+| `WARMBLY_BACKEND_URL` | Backend base a joined node calls for its heartbeat, and the brokered key and blob providers, when `ENCRYPTED_KEYS_BACKEND_URL` is unset. Written by the join script | unset | yes |
+| `WARMBLY_NODE_NAME` | Display name the node reports to the fleet list and admin panel. Written by the join script from `--name`, else the hostname | unset | yes |
+| `WARMBLY_TARGET_VERSION_PATH` | File the node writes the control plane's `desired_version` to, for the `warmbly-node-update` timer to apply. Unset, the node never writes one and does not update itself. Written by the join script | unset | yes |
+| `WARMBLY_ENV_REFRESH` | Read by the host updater, not the node. `true` lets it replace `node.env` with what the control plane renders now whenever the heartbeat names a different env revision, then restart the node. `node.local.env` is never touched. Written by the join script on a new join and by `--adopt --env-refresh`; a node without it keeps its env until it rejoins | unset | no (read by the updater) |
+| `APP_INTERNAL_URL` | Read by the backend: the address a joining node is told to call back on when `ENCRYPTED_KEYS_BACKEND_URL` is unset on the backend. Instance health checks whichever of the two is set | unset | no (read per join) |
 
 <Callout type="warn" title="An unset key URL is silent">
 An empty `ENCRYPTED_KEYS_BACKEND_URL` or `ENCRYPTED_KEYS_WORKER_TOKEN` lets the worker start, subscribe and never register. There is no log line. The `no_worker_heartbeat` check on [Instance health](/development/instance-health/#no_worker_heartbeat) is what surfaces it.
@@ -534,6 +542,18 @@ That is where a per-machine value belongs: a DSN this instance does not hold, cr
 printf 'PRIMARY_DB=%s\n' "postgres://..." >> /etc/warmbly/node.local.env
 systemctl restart warmbly-consumer
 ```
+
+### Keeping a node's env current
+
+A node joined with `WARMBLY_ENV_REFRESH=true` picks up configuration changes without anyone signing in to it. Every heartbeat reply carries the revision of the env the control plane would render for that node now. When it differs from what the node applied, the updater fetches the new env from the backend with the node's own broker token, writes `node.env` in one step, restarts the node and reports the new revision. If the restarted node does not stay up, the previous `node.env` is put back and that revision is not tried again.
+
+`warmblyctl fleet env-status` lists every live node as `current`, `stale` or `manual` (a node that does not refresh) and exits non-zero until all of them are current. A key rotation that reaches nodes waits on it, so a `manual` node holds a rotation open until it is rejoined, or adopted with `--env-refresh`:
+
+```bash
+curl -fsSL https://<your-instance>/join.sh | sudo sh -s -- --adopt --env-refresh
+```
+
+`--adopt` installs the standard unit and updater for the node the existing `node.env` describes, without enrolling again. With `--env-refresh` it first checks that a refresh would keep every key in `node.env`, and refuses, listing the names, when one exists only on this machine. Name those with `--keep-local` to move them into `node.local.env`. It also refuses when the control plane asks for a different version than the node runs, because the updater would move it within two minutes; set the fleet version first, or pass `--accept-target`.
 
 ## Mailbox connections
 
@@ -881,6 +901,8 @@ Session replay masks what is typed into a password field in the browser, before 
 | `UPDATE_CHANNEL` | `stable` follows releases; `dev` also offers prereleases | `stable` | yes |
 | `RELEASES_GITHUB_REPO` | The `owner/repo` whose releases count as Warmbly versions. Point a fork's instance at the fork | `warmbly/warmbly` | yes |
 | `RELEASES_GITHUB_TOKEN` | Optional GitHub token; only raises the API rate limit | unset | yes |
+| `RELEASES_ENABLED` | Resolves the fleet's target release from `RELEASES_GITHUB_REPO` on boot and on each check, and hands it to nodes in their heartbeat so they update themselves. Off by default: no release lookup on boot, and nodes are never told to update | `false` | yes |
+| `RELEASES_WORKER_IMAGE_REPO` | Image repository a node's target version is pulled from, as `<repo>:<tag>`. Point it at your own registry to roll a fleet from your own builds | `ghcr.io/warmbly/warmbly/worker` | yes |
 | `UPDATER_URL` | The host-side updater that applies an update (pull, rebuild, restart). Unset, or `none`, leaves the panel report-only | `http://updater:8095` under compose | yes |
 | `UPDATER_TOKEN` | The bearer token the backend presents to the updater, which can pull and restart the instance. Give it its own value so the token the tracking and forms services hold cannot start an update; the installer generates one | `INTERNAL_API_TOKEN` | yes |
 
