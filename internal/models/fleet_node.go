@@ -76,6 +76,10 @@ type FleetNode struct {
 	MailboxCount *int `json:"mailbox_count,omitempty"`
 
 	LastError string `json:"last_error,omitempty"`
+	// UpdateFailed is the tag the host updater last rolled back from.
+	UpdateFailed string `json:"update_failed,omitempty"`
+	// EnvRevision is the rendered env revision the node last applied.
+	EnvRevision string `json:"env_revision,omitempty"`
 
 	Tags []string `json:"tags,omitempty"`
 
@@ -142,6 +146,12 @@ type NodeHeartbeat struct {
 	// Stopping is set on the farewell beat, so the row goes inactive at once
 	// rather than staying selectable until the beat ages out.
 	Stopping bool `json:"stopping,omitempty"`
+	// UpdateFailed is the tag the host updater rolled back from, "" when none.
+	UpdateFailed string `json:"update_failed,omitempty"`
+	// EnvRefresh says the host updater applies env revisions from the reply.
+	EnvRefresh bool `json:"env_refresh,omitempty"`
+	// EnvRevision is the env revision the host updater last applied.
+	EnvRevision string `json:"env_revision,omitempty"`
 }
 
 // NodeHeartbeatReply is the control plane's answer. It is the only channel by
@@ -154,4 +164,10 @@ type NodeHeartbeatReply struct {
 	// LivenessSeconds tells the node how long its beat is trusted for, so the
 	// beat interval and the server's window can never drift apart.
 	LivenessSeconds int `json:"liveness_seconds"`
+	// DesiredDigest pins DesiredVersion to an image digest ("sha256:..."),
+	// set only while a staged rollout moves this node.
+	DesiredDigest string `json:"desired_digest,omitempty"`
+	// EnvRevision is the revision of the env file this node should have, set
+	// only for a node that reported EnvRefresh.
+	EnvRevision string `json:"env_revision,omitempty"`
 }

@@ -4,10 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -17,7 +15,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/api/middleware"
 	"github.com/warmbly/warmbly/internal/app/fleetnode"
-	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/observability/errs"
@@ -30,6 +27,7 @@ import (
 //
 //	POST /api/v1/fleet/join                 join token   -> node id + env file
 //	POST /api/v1/internal/fleet/heartbeat   internal     -> desired version
+//	GET  /api/v1/internal/fleet/node-env    node broker  -> current env file
 //
 // Nothing here reaches into a machine, which is why onboarding needs no
 // keypair, no inbound port and no cloud account.
@@ -209,7 +207,49 @@ func (h *Handler) FleetHeartbeat(c *gin.Context) {
 		}(beat.NodeID)
 	}
 
+	if beat.EnvRefresh {
+		if _, rev, ok := h.nodeEnvFor(c.Request.Context(), beat.NodeID, beat.Role); ok {
+			reply.EnvRevision = rev
+		}
+	}
 	c.JSON(http.StatusOK, reply)
+}
+
+// nodeEnvFor renders the env an enrolled node of role should have, with its revision.
+func (h *Handler) nodeEnvFor(ctx context.Context, id uuid.UUID, role models.NodeRole) (string, string, bool) {
+	node, err := h.FleetNodes.Get(ctx, id)
+	if err != nil || node == nil || node.Role != role {
+		return "", "", false
+	}
+	env := renderNodeEnv(node.ID, node.Role, node.Region)
+	return env, fleetnode.EnvRevision(env), true
+}
+
+// InternalFleetNodeEnv hands an enrolled node the env file join would write
+// today, so a rotated value reaches it by pulling instead of rejoining.
+func (h *Handler) InternalFleetNodeEnv(c *gin.Context) {
+	if h.FleetNodes == nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	id, err := uuid.Parse(c.Query("node_id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "node_id must be a uuid"})
+		return
+	}
+	role := models.NodeRole(c.Query("role"))
+	if !role.Valid() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "role must be worker or consumer"})
+		return
+	}
+	env, rev, ok := h.nodeEnvFor(c.Request.Context(), id, role)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no enrolled node with that id and role"})
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.Header("X-Warmbly-Env-Revision", rev)
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(env))
 }
 
 // legacyTokenNodes remembers which nodes were already warned about, so the log says it once per process.
@@ -250,165 +290,9 @@ func nodeHeartbeatSeconds(livenessSeconds int) int {
 	return n
 }
 
-// nodeEnvKeys are the settings a node needs to do its job, in the order they
-// are written. Every one is read from the backend's own environment, so a node
-// is configured with exactly the infrastructure the control plane uses and
-// there is nothing to keep in sync by hand.
-//
-// Every name here must be one the node's own code reads. Two of them were not
-// (S3_BUCKET and KMS_KEY_ID, against a storage layer reading BLOB_BUCKET and a
-// KMS factory reading KMS_AWS_KEY_ID), which sent an AWS-backed node to the
-// default bucket and the default key alias with nothing logged.
-//
-// KMS_PROVIDER and BLOB_PROVIDER are absent because they are not copied but
-// translated; see nodeProviders. The AWS-shaped settings above stay, so an
-// operator who deliberately overrides a node back to a direct provider in
-// node.local.env only has to add the credential.
-//
-// Deliberately excluded: PRIMARY_DB for a worker, and anything else that would
-// give one direct database access. A worker reaches relational data through
-// the internal API and nothing else. renderNodeEnv sends the DSN to a consumer,
-// which is control plane and updates relational state itself.
-var nodeEnvKeys = []string{
-	"APP_ENV",
-	"EVENTBUS_PROVIDER",
-	"NATS_URL",
-	// Base64, not a path: a node has no file to point at, and the env file
-	// docker reads cannot hold a multi-line value.
-	"NATS_CREDS_B64",
-	"NATS_MAX_BYTES",
-	"KAFKA_BOOTSTRAP_SERVERS",
-	"KAFKA_SASL_USERNAME",
-	"KAFKA_SASL_PASSWORD",
-	"SCHEMA_REGISTRY_URL",
-	"SCHEMA_REGISTRY_KEY",
-	"SCHEMA_REGISTRY_SECRET",
-	"CODEC_PROVIDER",
-	"REDIS",
-	"KMS_LOCAL_MASTER_KEY",
-	"KMS_AWS_KEY_ID",
-	"CREDENTIALS_ENCRYPTION_KEY",
-	"BLOB_FS_ROOT",
-	"BLOB_BUCKET",
-	"AWS_REGION",
-	"AWS_ENDPOINT_URL_S3",
-	"BOX_GOOGLE_CLIENT_ID",
-	"BOX_GOOGLE_CLIENT_SECRET",
-	"BOX_OUTLOOK_CLIENT_ID",
-	"BOX_OUTLOOK_CLIENT_SECRET",
-	"MAIL_TLS_INSECURE",
-	"POSTHOG_KEY",
-	"POSTHOG_HOST",
-	"POSTHOG_ERROR_TRACKING",
-	"SENTRY_DSN",
-}
-
-// consumerEnvKeys reach a consumer and never a worker. A consumer runs the
-// integration actions, refreshes their OAuth tokens and drains the CRM outbox,
-// so it reads the integration client credentials (integration.NewOAuthManager),
-// APP_URL (the "Open in Warmbly" link written to the CRM) and the backend's
-// public URL (where it registers Pipedrive's webhooks).
-var consumerEnvKeys = []string{
-	"APP_URL",
-	"BACKEND_PUBLIC_URL",
-	"API_PUBLIC_URL",
-	"HUBSPOT_OAUTH_CLIENT_ID",
-	"HUBSPOT_OAUTH_CLIENT_SECRET",
-	"SLACK_OAUTH_CLIENT_ID",
-	"SLACK_OAUTH_CLIENT_SECRET",
-	"GOOGLE_SHEETS_OAUTH_CLIENT_ID",
-	"GOOGLE_SHEETS_OAUTH_CLIENT_SECRET",
-	"PIPEDRIVE_OAUTH_CLIENT_ID",
-	"PIPEDRIVE_OAUTH_CLIENT_SECRET",
-	"SALESFORCE_OAUTH_CLIENT_ID",
-	"SALESFORCE_OAUTH_CLIENT_SECRET",
-}
-
-// nodeProviders translates the control plane's own crypto and blob providers
-// into the ones a node should run.
-//
-// A node has no cloud credentials and no way to be handed any: node.env is
-// regenerated from this instance's environment on every join, and shipping an
-// IAM key to every machine in the fleet is exactly the thing worth avoiding. So
-// a provider that needs a credential becomes its brokered form, which
-// authenticates with the internal API token the node already holds and asks
-// this instance to do the one privileged operation. A provider that needs no
-// credential (local KMS, filesystem blobs) passes through unchanged.
-//
-// Brokering costs one HTTPS call to the control plane per DEK open (Redis
-// caches the result) and per blob operation. The bytes still go straight
-// between the node and the object store.
-func nodeProviders() (kmsProvider, blobProvider string) {
-	kmsProvider = config.KMSProvider()
-	if kmsProvider == "aws" || kmsProvider == "aws-kms" {
-		kmsProvider = "brokered"
-	}
-	blobProvider = config.BlobProvider()
-	if blobProvider == "s3" {
-		blobProvider = "brokered"
-	}
-	return kmsProvider, blobProvider
-}
-
 // renderNodeEnv builds the env file a node writes to disk on join.
 func renderNodeEnv(nodeID uuid.UUID, role models.NodeRole, region string) string {
-	var b strings.Builder
-	b.WriteString("# Written by `warmbly join`. Regenerate by joining again.\n")
-	fmt.Fprintf(&b, "WARMBLY_NODE_ID=%s\n", nodeID)
-	fmt.Fprintf(&b, "WARMBLY_NODE_ROLE=%s\n", role)
-	if region != "" {
-		fmt.Fprintf(&b, "WARMBLY_NODE_REGION=%s\n", region)
-	}
-	// A worker resolves its own identity from WORKER_ID; keeping the two equal
-	// means the placement row and the node row are the same machine.
-	if role == models.NodeRoleWorker {
-		fmt.Fprintf(&b, "WORKER_ID=%s\n", nodeID)
-	}
-
-	backend := strings.TrimRight(os.Getenv("ENCRYPTED_KEYS_BACKEND_URL"), "/")
-	if backend == "" {
-		backend = strings.TrimRight(os.Getenv("APP_INTERNAL_URL"), "/")
-	}
-	// A consumer is control plane: it opens Postgres itself, so it gets the DSN
-	// a worker is deliberately never given, and reads keys straight from the
-	// table rather than back through the API it sits behind. An instance whose
-	// DSN lives in SSM rather than the environment has nothing to send, so the
-	// node falls back to the worker's HTTP key path and join.sh tells the
-	// operator to supply PRIMARY_DB in node.local.env.
-	dsn := os.Getenv("PRIMARY_DB")
-	keysProvider := "http"
-	if role == models.NodeRoleConsumer && dsn != "" {
-		keysProvider = "postgres"
-		fmt.Fprintf(&b, "PRIMARY_DB=%s\n", dsn)
-	}
-
-	fmt.Fprintf(&b, "WARMBLY_BACKEND_URL=%s\n", backend)
-	fmt.Fprintf(&b, "ENCRYPTED_KEYS_PROVIDER=%s\n", keysProvider)
-	fmt.Fprintf(&b, "ENCRYPTED_KEYS_BACKEND_URL=%s\n", backend)
-	// A node calls only the node-only internal routes. With a separate
-	// NODE_BROKER_TOKEN it is sent that alone and never the edge services' token.
-	if v := os.Getenv("NODE_BROKER_TOKEN"); v != "" {
-		fmt.Fprintf(&b, "ENCRYPTED_KEYS_WORKER_TOKEN=%s\n", v)
-		fmt.Fprintf(&b, "NODE_BROKER_TOKEN=%s\n", v)
-	} else {
-		fmt.Fprintf(&b, "ENCRYPTED_KEYS_WORKER_TOKEN=%s\n", os.Getenv("INTERNAL_API_TOKEN"))
-		fmt.Fprintf(&b, "INTERNAL_API_TOKEN=%s\n", os.Getenv("INTERNAL_API_TOKEN"))
-	}
-
-	kmsProvider, blobProvider := nodeProviders()
-	fmt.Fprintf(&b, "KMS_PROVIDER=%s\n", kmsProvider)
-	fmt.Fprintf(&b, "BLOB_PROVIDER=%s\n", blobProvider)
-
-	keys := nodeEnvKeys
-	if role == models.NodeRoleConsumer {
-		keys = append(append([]string{}, nodeEnvKeys...), consumerEnvKeys...)
-	}
-	for _, k := range keys {
-		if v := os.Getenv(k); v != "" {
-			fmt.Fprintf(&b, "%s=%s\n", k, v)
-		}
-	}
-	return b.String()
+	return fleetnode.RenderEnv(nodeID, role, region)
 }
 
 // ---- admin ----
@@ -735,6 +619,8 @@ func (h *Handler) AdminFleetSetRelease(c *gin.Context) {
 			}
 		}
 		state.Tag = strings.TrimSpace(body.Tag)
+		// An explicit tag moves everyone at once, replacing any staged rollout.
+		state.Rollout = nil
 		state.Channel = models.FleetChannelPinned
 		state.ResolvedAt = time.Now()
 		state.Source = "admin"

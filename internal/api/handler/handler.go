@@ -42,6 +42,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/instanceconfig"
 	"github.com/warmbly/warmbly/internal/app/instancesettings"
 	"github.com/warmbly/warmbly/internal/app/integration"
+	"github.com/warmbly/warmbly/internal/app/keystatus"
 	"github.com/warmbly/warmbly/internal/app/leadsync"
 	"github.com/warmbly/warmbly/internal/app/mailboximport"
 	"github.com/warmbly/warmbly/internal/app/mcp"
@@ -195,7 +196,9 @@ type Handler struct {
 
 	// Fleet. Nodes enrol with the join token and pull everything else; the
 	// control plane never reaches into a machine.
-	FleetNodes        *fleetnode.Service
+	FleetNodes *fleetnode.Service
+	// KeyStatusDB is the pool the admin key status scans read through. Nil turns the page off.
+	KeyStatusDB       keystatus.DB
 	NodeLogs          nodelogs.Store
 	BrokerDiagnostics eventbus.EventBus
 	WorkerRepo        repository.WorkerRepository

@@ -126,6 +126,8 @@ Retain old keys until stored ciphertext, retained events, pending jobs and the s
 
 To rotate sessions while preserving existing MFA enrollments, unsubscribe links and published DNS proofs, first pin `TWOFA_SECRET`, `UNSUBSCRIBE_SIGNING_SECRET` and `DOMAIN_PROOF_SECRET` to their existing resolved values. Then change `AUTH_SECRET` and realtime's matching `JWT_SECRET` together. Users sign in again. Rotate the independent purpose keys separately; issued unsubscribe links remain valid for one year, so their read cutoff must cover the last previously issued link's expiry.
 
+Nodes hold `CREDENTIALS_ENCRYPTION_KEY`, `CREDENTIALS_ENCRYPTION_READ_KEYS`, `INTERNAL_API_TOKEN` and `NODE_BROKER_TOKEN` in `node.env`. A node that [keeps its env current](#keeping-a-nodes-env-current) receives each step of a rotation on its own; wait for `warmblyctl fleet env-status` to report every node current before activating a new credential key, and again before retiring an old key or token. A node still on the old values keeps sealing and authenticating with them. The [Keys tab](/development/admin-panel/#instance) under Configuration in the admin panel shows the same three answers in one place: values still under a read key, open overlap windows and nodes that have not applied the current env. On AWS, the rotation workflow runs the whole procedure; see [Rotate keys](/development/aws-fargate/#rotate-keys).
+
 ### Seal mailbox credentials under workspace keys
 
 `MAILBOX_CREDENTIALS_SEALING` chooses the key that seals newly stored mailbox credentials: SMTP and IMAP hosts, usernames and passwords, and OAuth access and refresh tokens.
@@ -511,6 +513,8 @@ Keep the copies private. GeoLite2 may not be redistributed, which is also why no
 | `WARMBLY_BACKEND_URL` | Backend base a joined node calls for its heartbeat, and the brokered key and blob providers, when `ENCRYPTED_KEYS_BACKEND_URL` is unset. Written by the join script | unset | yes |
 | `WARMBLY_NODE_NAME` | Display name the node reports to the fleet list and admin panel. Written by the join script from `--name`, else the hostname | unset | yes |
 | `WARMBLY_TARGET_VERSION_PATH` | File the node writes the control plane's `desired_version` to, for the `warmbly-node-update` timer to apply. Unset, the node never writes one and does not update itself. Written by the join script | unset | yes |
+| `WARMBLY_ENV_REFRESH` | Read by the host updater, not the node. `true` lets it replace `node.env` with what the control plane renders now whenever the heartbeat names a different env revision, then restart the node. `node.local.env` is never touched. Written by the join script on a new join and by `--adopt --env-refresh`; a node without it keeps its env until it rejoins | unset | no (read by the updater) |
+| `WARMBLY_UPDATE_HEALTH_SECONDS` | Read by the host updater. How long a node restarted onto a new version or env has to stay up on one start before the change is kept. A container that stops or restarts in that time is put back on what it ran before | `120` | no (read by the updater) |
 | `APP_INTERNAL_URL` | Read by the backend: the address a joining node is told to call back on when `ENCRYPTED_KEYS_BACKEND_URL` is unset on the backend. Instance health checks whichever of the two is set | unset | no (read per join) |
 
 <Callout type="warn" title="An unset key URL is silent">
@@ -537,6 +541,18 @@ That is where a per-machine value belongs: a DSN this instance does not hold, cr
 printf 'PRIMARY_DB=%s\n' "postgres://..." >> /etc/warmbly/node.local.env
 systemctl restart warmbly-consumer
 ```
+
+### Keeping a node's env current
+
+A node joined with `WARMBLY_ENV_REFRESH=true` picks up configuration changes without anyone signing in to it. Every heartbeat reply carries the revision of the env the control plane would render for that node now. When it differs from what the node applied, the updater fetches the new env from the backend with the node's own broker token, writes `node.env` in one step, restarts the node and reports the new revision. If the restarted node does not stay up, the previous `node.env` is put back and that revision is not tried again.
+
+`warmblyctl fleet env-status` lists every live node as `current`, `stale` or `manual` (a node that does not refresh) and exits non-zero until all of them are current. A key rotation that reaches nodes waits on it, so a `manual` node holds a rotation open until it is rejoined, or adopted with `--env-refresh`:
+
+```bash
+curl -fsSL https://<your-instance>/join.sh | sudo sh -s -- --adopt --env-refresh
+```
+
+`--adopt` installs the standard unit and updater for the node the existing `node.env` describes, without enrolling again. With `--env-refresh` it first checks that a refresh would keep every key in `node.env`, and refuses, listing the names, when one exists only on this machine. Name those with `--keep-local` to move them into `node.local.env`. It also refuses when the control plane asks for a different version than the node runs, because the updater would move it within two minutes; set the fleet version first, or pass `--accept-target`.
 
 ## Mailbox connections
 
