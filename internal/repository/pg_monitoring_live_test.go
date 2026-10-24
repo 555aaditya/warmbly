@@ -157,6 +157,24 @@ func TestLiveMonitoringProviderEvidenceHoldsAndDispatch(t *testing.T) {
 			t.Fatal(reason, source)
 		}
 	}
+	f.exec(`UPDATE email_accounts SET status='inactive' WHERE id=$1`, f.account)
+	if source := collectMonitoring(t, r, "send_safety", now); count(source, "holds_authentication") != count(baseSafety, "holds_authentication") || count(source, "holds_inactive") != count(baseSafety, "holds_inactive")+1 {
+		t.Fatal("a switched-off mailbox's hold was counted as blocking a switched-on one", source)
+	}
+	f.exec(`UPDATE email_accounts SET status='active',send_recovery_hold=false,send_recovery_reason=NULL WHERE id=$1`, f.account)
+	failedAt := now.Add(-2 * time.Hour)
+	f.exec(`INSERT INTO tasks(id,task_type,email_account_id,status,message_id,send_result_state,send_result_evidence,send_result_applied_at) VALUES($1,'campaign',$2,'failed','','failed','{"scope":"recipient","disposition":"permanent"}',$3)`, uuid.New(), f.account, failedAt)
+	if source := collectMonitoring(t, r, "sends", now); count(source, "failed_results_24h") != count(baseSends, "failed_results_24h") {
+		t.Fatal("a recipient rejection was counted as a mailbox failure", source)
+	}
+	f.exec(`INSERT INTO tasks(id,task_type,email_account_id,status,message_id,send_result_state,send_result_evidence,send_result_applied_at) VALUES($1,'campaign',$2,'failed','','failed','{"scope":"mailbox","disposition":"retry"}',$3)`, uuid.New(), f.account, failedAt)
+	if source := collectMonitoring(t, r, "sends", now); count(source, "failed_results_24h") != count(baseSends, "failed_results_24h")+1 {
+		t.Fatal("a mailbox failure without a later send was hidden", source)
+	}
+	f.exec(`INSERT INTO tasks(id,task_type,email_account_id,status,message_id,send_result_state,send_result_applied_at) VALUES($1,'campaign',$2,'completed','','sent',$3)`, uuid.New(), f.account, now.Add(-time.Hour))
+	if source := collectMonitoring(t, r, "sends", now); count(source, "failed_results_24h") != count(baseSends, "failed_results_24h") {
+		t.Fatal("a mailbox that sent again still reads as recovery unverified", source)
+	}
 	f.exec(`UPDATE email_accounts SET send_cooldown_until=$2 WHERE id=$1`, f.account, now)
 	if source := collectMonitoring(t, r, "send_safety", now); count(source, "send_cooldowns") != count(baseSafety, "send_cooldowns") {
 		t.Fatal("expired cooldown counted")

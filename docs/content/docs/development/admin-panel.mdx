@@ -69,7 +69,7 @@ Relative ages use your browser's current clock when a snapshot arrives, with per
 | **Warmup content** | The generated and reviewed [diagnostic conversation bank](/development/warmup-generation/), effective generation controls, library and generation jobs. Changing effective controls requires `manage_settings`; existing library reads still require `view_warmup_pool` |
 | **Seed panel** | The instance's placement seed inboxes by provider, adding and removing them, every workspace's recent [placement tests](/guides/placement-tests/) with their results, and an operator test that counts against no allowance |
 | **Campaigns** | Every campaign on the instance with its state and owner |
-| **Sends** | In-flight reservations no worker has answered, and the reclaimer that resolves them after 30 minutes; dead letters with replay limited to non-sending campaign wakeups; task failures; customer webhook delivery health, with reclaim |
+| **Sends** | In-flight reservations no worker has answered, and the reclaimer that resolves them after 30 minutes; mailboxes held from sending, with a [resolve action](/development/send-safety/#from-the-admin-panel); dead letters with replay limited to non-sending campaign wakeups; task failures; customer webhook delivery health, with reclaim |
 
 The Sync page's **Stalled** filter, row indicator and summary count only active mailboxes with a running backfill unchanged for over an hour and no active fair-use hold. Inactive and revoked backfill states remain in the **Backfilling** history count, without a current stalled warning. Reactivating a mailbox does not reset its backfill state.
 
@@ -153,7 +153,7 @@ Reading the tabs needs `view_organizations`; every action needs `manage_organiza
 | Jobs, Setup and health | `view_analytics` |
 | Configuration | `manage_settings` |
 
-Detail pages need the same bit as the list they open from. Actions inside a page can need more than the page itself: reading an organization's abuse posture or the Outreach list needs `view_organizations`, while changing a posture or sending outreach needs `manage_organizations`, as [accounts and access](/development/accounts-and-access/#workspace-abuse-posture) lists.
+Detail pages need the same bit as the list they open from. Actions inside a page can need more than the page itself: replaying a dead letter or resolving a send hold on **Sends** needs `stop_campaigns`; reading an organization's abuse posture or the Outreach list needs `view_organizations`, while changing a posture or sending outreach needs `manage_organizations`, as [accounts and access](/development/accounts-and-access/#workspace-abuse-posture) lists.
 
 On a user's detail page, `manage_testers` also allows turning **Skip emailed sign-in code** on or off for that account, for an App Store or OAuth reviewer; see [excusing one account](/development/accounts-and-access/#excusing-one-account).
 
