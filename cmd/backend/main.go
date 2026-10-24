@@ -93,6 +93,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/organization"
 	orgrisk "github.com/warmbly/warmbly/internal/app/orgrisk"
 	"github.com/warmbly/warmbly/internal/app/orgtransfer"
+	"github.com/warmbly/warmbly/internal/app/owndomain"
 	"github.com/warmbly/warmbly/internal/app/passkey"
 	"github.com/warmbly/warmbly/internal/app/pipedrive"
 	"github.com/warmbly/warmbly/internal/app/placement"
@@ -586,12 +587,12 @@ func main() {
 		// when they cannot log in.
 		if perr := mailTransport.Preflight(ctx); perr != nil {
 			log.Printf("Warning: platform mail preflight FAILED (%s): %v", mailTransport.Description, perr)
-			log.Printf("Warning: login codes, password resets and invitations will not be delivered. Set MAIL_TRANSPORT=log to read them from these logs instead.")
+			log.Printf("Warning: login codes, password resets and invitations will not be delivered. Set MAIL_TRANSPORT=log to read login codes from these logs instead. Reset and invitation links are not logged outside APP_ENV=dev: copy an invitation link from its row under Settings > Members > Pending invitations, and reset a password with `warmblyctl user reset-password --email <address>`.")
 		} else {
 			log.Printf("Platform mail transport: %s", mailTransport.Description)
 		}
 		if !mailTransport.Delivers {
-			log.Printf("Warning: MAIL_TRANSPORT=log — every platform email, including login codes, is printed here and never delivered. Do not use this on a deployment other people can reach.")
+			log.Printf("Warning: MAIL_TRANSPORT=log: every platform email is printed here and never delivered. Login codes appear in full. Outside APP_ENV=dev every link's query string, where reset and invitation tokens travel, is replaced with ?[redacted]: copy an invitation link from its row under Settings > Members > Pending invitations, and reset a password with `warmblyctl user reset-password --email <address>`. Do not use this on a deployment other people can reach.")
 		}
 
 		authCfg, err := cfg.LoadAuthConfig(ctx)
@@ -1416,6 +1417,9 @@ func main() {
 		formService.SetLinks(repository.NewFormLinkRepository(primaryDB))
 		formService.SetEvents(formEventRepository)
 		formService.SetDomains(organizationRepoForHandler)
+		// One definition of the workspace's own domains, the only destinations a form or domain redirect may send a visitor to.
+		ownDomains := owndomain.New(emailRepostory, organizationRepoForHandler)
+		formService.SetOwnDomains(ownDomains)
 		go jobs.NewFormEventsRetentionJob(formEventRepository).WireRetention(instanceSettings).Start(ctx, 12*time.Hour)
 		go jobs.NewFormsDomainSweep(organizationRepoForHandler).Start(ctx, time.Hour)
 		go jobs.NewContactMailHostSweep(contactRepoForHandler, cache, streamingPublisher).Start(ctx)
@@ -1432,6 +1436,8 @@ func main() {
 		leadSyncServiceForHandler = leadsync.NewService(leadSyncRepository, integrationServiceForHandler, contactService)
 
 		apiKeyService = apikey.NewService(cache, apiKeyRepository)
+		// A password change or reset can also end the user's app grants and the API keys they created.
+		authService.WireCredentialRevokers(oauthService, apiKeyService)
 		// `warmbly auth login`: the browser approval mints an ordinary API key
 		// through the service above, so it has to be built after it.
 		cliAuthService = cliauth.NewService(repository.NewCLIAuthRepository(primaryDB.Pool), apiKeyService, organizationService, userService, organizationRepository)
@@ -1931,6 +1937,7 @@ func main() {
 		// Sending domains: tracking host per domain and the bare-domain redirect.
 		sendingDomainService = sendingdomain.NewService(repository.NewDomainRedirectRepository(primaryDB), emailRepostory, nil, domainProver)
 		sendingDomainService.WireAuditor(auditService)
+		sendingDomainService.WireOwnDomains(ownDomains)
 		// A linked self-hosted instance can have Warmbly Cloud serve a redirect instead.
 		sendingDomainService.WireCloud(cloudLinkService)
 		cloudLinkService.OnDisconnect(sendingDomainService.MarkCloudUnlinked)

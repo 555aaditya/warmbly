@@ -140,7 +140,7 @@ New reply from {{.contact_email}} on campaign {{.campaign_id}} ({{.intent}})
 | Warmup health changed | `email`, `new_state`, `previous_state`, `reason` |
 | Campaign action | `contact_email`, `contact_id`, `campaign_id`, `campaign_name`, `first_name`, `last_name`, `company`, `phone` |
 
-Action text is a **full template, not token substitution**: conditionals, pipelines, helpers, `{{range}}`, and nested fields (`{{.lead.company}}`) all work, and values keep their type. Because numbers stay numbers, `{{if gt .confidence 0.8}}` works directly in a message body. A malformed template never blocks the action; it falls back to plain `{{.key}}` substitution. Unknown keys render empty. `{{range}}` loops over a field of the data (`{{range .lead.tags}}`), never a number or a function's result, and nests at most two deep; `{{template}}` and `{{block}}` are not supported, and output is capped at 1 MB. A template past any of these limits falls back the same way.
+Action text is a **full template, not token substitution**: conditionals, pipelines, helpers, `{{range}}`, and nested fields (`{{.lead.company}}`) all work, and values keep their type. Because numbers stay numbers, `{{if gt .confidence 0.8}}` works directly in a message body. A malformed template never blocks the action; it falls back to plain `{{.key}}` substitution. Unknown keys render empty. `{{range}}` loops over a field of the data (`{{range .lead.tags}}`), never a number or a function's result, and nests at most two deep; `{{template}}`, `{{block}}` and `call` are not supported, a template declares at most 64 variables and a function takes at most 32 arguments, and output (fallback included) is capped at 1 MB. A template past any of these limits falls back the same way.
 
 </Fold>
 

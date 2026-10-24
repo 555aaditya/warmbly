@@ -151,7 +151,21 @@ The same holds for a server that answers but refuses what Warmbly asked. The dra
 
 With two-factor authentication on, generate an app password in your provider's security settings and use that.
 
-Warmbly signs in with whichever method your server offers, preferring CRAM-MD5, then LOGIN, then PLAIN. Servers that accept only one of these, which includes Microsoft 365 relays and most appliance relays, work without any setting to change.
+Warmbly signs in with whichever method your server offers, preferring LOGIN, then PLAIN, and using CRAM-MD5 only when the server offers neither. Every one of them is sent over the established TLS connection, never before it: a server that offers to sign in without encryption is refused with an error that says so and asks for the server's SSL/TLS port (usually 465) or a port that offers STARTTLS (usually 587), except a relay on the worker's own machine with the **None** mode. A server that offers none of the three methods is refused with the methods it does offer, so you can tell whether another host or port is needed. Servers that accept only one of these, which includes Microsoft 365 relays and most appliance relays, work without any setting to change.
+
+### Servers with their own certificate
+
+Warmbly checks every server's certificate against a recognised certificate authority, for the host name you entered, on every connection. A server with a self-signed or company certificate fails that check, and the connection test says so and names the certificate it saw: who it is for, who issued it, and its SHA-256 fingerprint.
+
+When that happens the form offers **Trust this server's own certificate**. It is off until you tick it, and it is only offered after a test failed on the certificate. With it ticked, the next test records the fingerprint of each server's public key and from then on Warmbly connects to that server only while it presents the same key. Sending and receiving are pinned separately, and the choice is stored on the mailbox, so a teammate sees it too. Ask the server's owner for the fingerprint and compare it before you trust it.
+
+- A server whose certificate does verify keeps normal checking even when you ticked the box: the choice only applies to a server that needs it, and it switches itself off if the server later gets a certificate from an authority
+- Changing the password or username of the same server keeps the choice; moving to another host name asks again
+- A connected mailbox whose server stops presenting a verifiable certificate (expired, or for another host name) shows **Server certificate not verified** in the drawer. Correct the host name with **Update credentials**, or trust the server's own certificate when the test offers it
+- When the certificate changes, for example when it is renewed with a new key, the mailbox stops connecting and shows **Server certificate changed** in the drawer. It is not deactivated and its password is not marked wrong. Open **Settings > Server certificates** on the mailbox and choose **Re-confirm**: Warmbly tests the servers, shows what they present now, and pins the new fingerprints once you confirm
+- **Settings > Server certificates** always shows, per server, whether it is verified by a certificate authority or which fingerprint it is trusted on
+
+The choice and the fingerprints are part of the mailbox and travel with a [workspace export](/guides/workspace-export-import/), since they describe the same server wherever the workspace is imported.
 
 ### Gmail and Google Workspace
 
@@ -212,6 +226,8 @@ Warmbly connects to one of these with the **None** security mode, under two cond
 Both are about the same thing: the credentials never leave the machine, so there is no wire to intercept them on. On hosted Warmbly the worker is in our infrastructure, never on your computer, so a local relay is not reachable from it and the mode is not offered. Run a [self-hosted instance](/development/install/) on the machine the Bridge is on if you need it.
 
 Set the Bridge's own username and password, which it shows in its interface, not your Proton account password. The same applies to any relay on the machine: a Dovecot sharing a host with its worker, or a local sink used for testing.
+
+More generally, hosted Warmbly connects only to mail servers at public addresses, checked against the address each connection actually reaches. A self-hosted instance can reach servers on its own network, and an operator can refuse those too with [`MAIL_ALLOW_PRIVATE_HOSTS=false`](/development/configuration/#workers). A refused server fails the connection test, and a connected mailbox shows **Server address is not public** in the drawer, both saying the host name points to a private network address. Use the host name your provider gives for connecting from outside your network; on a self-hosted instance the message also says the operator can allow private addresses.
 
 </Fold>
 

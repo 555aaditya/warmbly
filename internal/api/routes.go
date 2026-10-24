@@ -61,6 +61,7 @@ func Run(
 	r.Use(middleware.SecurityHeaders())
 
 	r.Use(middleware.RequestIDMiddleware())
+	r.Use(middleware.RequestHeaders(), middleware.SingleValuedQuery())
 	r.Use(middleware.APIVersionMiddleware(middleware.APIVersion))
 
 	r.GET("/health", func(c *gin.Context) {
@@ -131,6 +132,7 @@ func Run(
 	r.GET("/addresses/outlook/callback", h.EmailOAuthCallbackOutlook)
 	// A linked instance's brokered sign-in opens here first: the page names who is asking and binds the browser.
 	r.GET("/addresses/connect", m.PublicIPRateLimitMiddleware(), h.PoolLinkOAuthConsentPage)
+	r.POST("/addresses/connect/continue", m.PublicIPRateLimitMiddleware(), h.PoolLinkOAuthContinue)
 	r.GET("/addresses/connect/continue", m.PublicIPRateLimitMiddleware(), h.PoolLinkOAuthContinue)
 
 	// Public OAuth callback bouncer for third-party integrations (HubSpot,
@@ -404,6 +406,7 @@ func Run(
 		auth.POST("/register/confirm", h.RegistrationConfirm)
 		auth.POST("/refresh", h.RefreshToken)
 		auth.POST("/reset-password", h.ResetPasswordStart)
+		auth.POST("/reset-password/session", h.ResetPasswordSession)
 		auth.POST("/reset-password/confirm", h.ResetPasswordConfirm)
 
 		// Passkey (WebAuthn) sign-in is discoverable/usernameless: a passkey
@@ -591,6 +594,7 @@ func Run(
 				emails.POST("/:id/auth-check", m.RequireAccess(models.PermManageEmails, models.APIPermWriteEmails), middleware.RequireEmailAccountParam("id"), h.RefreshEmailAuthCheck)
 				emails.GET("/:id/sync", m.RequireAccess(models.PermViewCampaigns, models.APIPermReadEmails), middleware.RequireEmailAccountParam("id"), h.GetEmailSync)
 				emails.PUT("/:id/sync", m.RequireAccess(models.PermManageEmails, models.APIPermWriteEmails), middleware.RequireEmailAccountParam("id"), h.UpdateEmailSync)
+				emails.GET("/:id/certificates", m.RequireAccess(models.PermViewCampaigns, models.APIPermReadEmails), middleware.RequireEmailAccountParam("id"), h.GetEmailCertificates)
 				// Which addresses the provider will let this mailbox send as,
 				// and where its signature came from. The refresh is the only
 				// half that calls the provider, and storing its answer is what
@@ -627,6 +631,9 @@ func Run(
 				// manage-emails bar as PATCH /emails/:id.
 				onboardingEmails.POST("/oauth/reauth/:id", m.RequireOrganization(), m.RequirePermission(models.PermManageEmails), h.ReauthEmailOAuth)
 				onboardingEmails.PUT("/smtp-imap/:id", m.RequireOrganization(), m.RequirePermission(models.PermManageEmails), h.UpdateEmailSMTPIMAP)
+				// Both sign in with the stored password, so they sit with the reconnect flows.
+				onboardingEmails.POST("/smtp-imap/:id/certificates/check", m.RequireOrganization(), m.RequirePermission(models.PermManageEmails), h.CheckEmailCertificates)
+				onboardingEmails.POST("/smtp-imap/:id/certificates/confirm", m.RequireOrganization(), m.RequirePermission(models.PermManageEmails), h.ConfirmEmailCertificates)
 				onboardingEmails.POST("/app-password/:id", m.RequireOrganization(), m.RequirePermission(models.PermManageEmails), h.SwitchEmailToAppPassword)
 			}
 
@@ -1682,9 +1689,9 @@ func Run(
 			poolLink := jwtOnly.Group("/pool-link")
 			poolLink.Use(m.RateLimitMiddleware(models.RateLimitWrite))
 			{
-				poolLink.GET("/codes/:code", h.PoolLinkDescribeCode)
-				poolLink.POST("/codes/:code/approve", middleware.RequireFreshAuth(), h.PoolLinkApproveCode)
-				poolLink.POST("/codes/:code/deny", h.PoolLinkDenyCode)
+				poolLink.GET("/codes/:code", m.CodeLookupBudget("pool_link"), h.PoolLinkDescribeCode)
+				poolLink.POST("/codes/:code/approve", middleware.RequireFreshAuth(), m.CodeLookupBudget("pool_link"), h.PoolLinkApproveCode)
+				poolLink.POST("/codes/:code/deny", m.CodeLookupBudget("pool_link"), h.PoolLinkDenyCode)
 				// The pool plan is not in the public plan list, so the
 				// dashboard has no other way to learn its price or reach a
 				// checkout for it.
@@ -1701,9 +1708,9 @@ func Run(
 			cliAuth := jwtOnly.Group("/auth/cli")
 			cliAuth.Use(m.RateLimitMiddleware(models.RateLimitWrite))
 			{
-				cliAuth.GET("/codes/:code", h.CLIAuthDescribeCode)
-				cliAuth.POST("/codes/:code/approve", middleware.RequireFreshAuth(), h.CLIAuthApproveCode)
-				cliAuth.POST("/codes/:code/deny", h.CLIAuthDenyCode)
+				cliAuth.GET("/codes/:code", m.CodeLookupBudget("cli_auth"), h.CLIAuthDescribeCode)
+				cliAuth.POST("/codes/:code/approve", middleware.RequireFreshAuth(), m.CodeLookupBudget("cli_auth"), h.CLIAuthApproveCode)
+				cliAuth.POST("/codes/:code/deny", m.CodeLookupBudget("cli_auth"), h.CLIAuthDenyCode)
 			}
 			// The linked instance's own surface, authenticated by its token.
 			poolLinkInstance := base.Group("/pool-link/instance")

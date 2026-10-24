@@ -19,6 +19,7 @@ import (
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/pubsub"
+	"github.com/warmbly/warmbly/internal/infrastructure/storage"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/mailhtml"
@@ -383,7 +384,7 @@ func (s *campaignService) copyAttachments(ctx context.Context, orgID, src, dst u
 			continue
 		}
 		key := models.AttachmentObjectKey(dst, att.Filename)
-		err = s.storage.Put(ctx, key, body, att.MimeType)
+		err = s.storage.Put(ctx, key, body, storage.DownloadType(att.MimeType))
 		body.Close()
 		if err != nil {
 			errs.CaptureException(fmt.Errorf("campaign %s duplicate: write %s: %w", src, key, err))

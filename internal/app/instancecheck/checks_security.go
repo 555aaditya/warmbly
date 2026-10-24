@@ -157,32 +157,44 @@ func checkDevModePublic(ctx context.Context, d Deps, in Input) *Finding {
 }
 
 func checkUnsafeWebhookURLs(ctx context.Context, d Deps, in Input) *Finding {
-	if !truthy("WARMBLY_ALLOW_UNSAFE_WEBHOOK_URLS") {
+	if !config.UnsafeWebhookURLsAllowed() {
 		return nil
 	}
 	return result(CategorySecurity, SeverityWarning, "Unsafe webhook URLs are allowed",
-		"Customer webhooks may point at http:// and private addresses. This is intended for development only, "+
-			"because it lets any workspace member make the backend reach into your internal network.",
+		"WARMBLY_ALLOW_UNSAFE_WEBHOOK_URLS=true is in effect, so customer webhooks and notification channels may point at http:// "+
+			"and private addresses. That lets any workspace member make the backend reach into your internal network. "+
+			"Unless you need a target on your own network, remove the variable from the backend's environment and restart it.",
 		docsWebhooks)
 }
 
 func checkTLSVerificationOff(ctx context.Context, d Deps, in Input) *Finding {
 	platform := truthy("SMTP_TLS_INSECURE_SKIP_VERIFY")
-	mailbox := truthy("MAIL_TLS_INSECURE")
+	mailboxSet := truthy("MAIL_TLS_INSECURE")
+	// Hosted production ignores the mailbox knob; each mailbox records its own pinned opt-out.
+	mailbox := config.MailTLSInsecureAllowed()
+	if mailboxSet && !mailbox && !platform {
+		return result(CategorySecurity, SeverityInfo, "MAIL_TLS_INSECURE is ignored",
+			"MAIL_TLS_INSECURE=true is set but hosted production ignores it, so mailbox certificates are verified. "+
+				"A mailbox on a server with a self-signed or private certificate can trust that server in its own settings, "+
+				"which pins the server's certificate. Remove the variable from the backend and worker environments to avoid confusion.",
+			docsWorkers)
+	}
 	if !platform && !mailbox {
 		return nil
 	}
 
-	subject := "mailbox connections"
+	subject, vars := "mailbox connections", "MAIL_TLS_INSECURE=true"
 	switch {
 	case platform && mailbox:
-		subject = "platform mail and mailbox connections"
+		subject, vars = "platform mail and mailbox connections", "SMTP_TLS_INSECURE_SKIP_VERIFY=true and MAIL_TLS_INSECURE=true"
 	case platform:
-		subject = "platform mail"
+		subject, vars = "platform mail", "SMTP_TLS_INSECURE_SKIP_VERIFY=true"
 	}
 
 	return result(CategorySecurity, SeverityWarning, "TLS verification is disabled",
-		fmt.Sprintf("TLS certificate verification is disabled for %s. "+
-			"Only do this for a relay using a private certificate authority.", subject),
+		fmt.Sprintf("With %s, TLS certificate verification is disabled for %s. "+
+			"That is only right for a relay using a private certificate authority or the local sandbox. "+
+			"Unset the setting and restart to verify certificates again; a mailbox on a server with its own certificate "+
+			"can trust that server in its own settings instead, which pins the certificate.", vars, subject),
 		docsMail)
 }

@@ -734,8 +734,11 @@ fn client_ip(
     if !peer_is_trusted(peer, trusted) {
         return peer_ip.to_string();
     }
+    // A repeated header is read from its last line, the one the nearest proxy wrote.
     let raw = headers
-        .get(header)
+        .get_all(header)
+        .iter()
+        .next_back()
         .and_then(|h| h.to_str().ok())
         .map(str::trim)
         .filter(|v| !v.is_empty());
@@ -987,6 +990,13 @@ mod tests {
             "198.51.100.7"
         );
         assert_eq!(client_ip(peer, &h, &trusted, "cf-connecting-ip"), "8.8.8.8");
+        // A repeated header line is read from the one the proxy added last.
+        let mut h = hdr(&[("x-forwarded-for", "1.1.1.1")]);
+        h.append("x-forwarded-for", "198.51.100.7".parse().unwrap());
+        assert_eq!(
+            client_ip(peer, &h, &trusted, "x-forwarded-for"),
+            "198.51.100.7"
+        );
         // Garbage or a missing header falls back to the proxy itself.
         let h = hdr(&[("x-forwarded-for", "not an ip")]);
         assert_eq!(client_ip(peer, &h, &trusted, "x-forwarded-for"), "10.1.2.3");

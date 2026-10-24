@@ -99,6 +99,14 @@ type EmailService interface {
 	// UpdateSMTPIMAPCredentials validates replacement credentials against a
 	// live worker, stores them, and puts the mailbox back to work.
 	UpdateSMTPIMAPCredentials(ctx context.Context, orgID *uuid.UUID, accountID uuid.UUID, creds *models.SmtpImap) (*models.Email, *errx.Error)
+	// MailboxCertificates reads an SMTP/IMAP mailbox's certificate policy per server.
+	MailboxCertificates(ctx context.Context, orgID *uuid.UUID, accountID uuid.UUID) (*models.MailboxCertificates, *errx.Error)
+	// CheckMailboxCertificates runs a connection test and reports the
+	// certificate each server presents now, changing nothing.
+	CheckMailboxCertificates(ctx context.Context, orgID *uuid.UUID, accountID uuid.UUID) (*models.MailboxCertificates, *errx.Error)
+	// ConfirmMailboxCertificates pins the fingerprints the owner confirmed
+	// after a connection test against exactly those certificates.
+	ConfirmMailboxCertificates(ctx context.Context, orgID *uuid.UUID, accountID uuid.UUID, req models.ConfirmMailboxCertificates) (*models.MailboxCertificates, *models.Email, *errx.Error)
 
 	// Optional: wire in the webhook dispatcher after construction. Once
 	// set, account-lifecycle events fan out to customer webhook endpoints.

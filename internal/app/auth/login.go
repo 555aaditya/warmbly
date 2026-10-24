@@ -36,7 +36,9 @@ func (s *authService) LoginStart(ctx context.Context, data *AuthData, ipaddr, us
 	// The attempt is charged before the hash comparison, so parallel guesses
 	// cannot share one slot and a guesser past the limit cannot even measure
 	// argon2's timing.
-	if !s.reserveLoginAttempt(ctx, data.Email) {
+	if ok, xerr := s.reserveLoginAttempt(ctx, data.Email); xerr != nil {
+		return nil, xerr
+	} else if !ok {
 		return nil, errx.ErrAuthLimit
 	}
 
@@ -178,7 +180,9 @@ func (s *authService) LoginConfirm(ctx context.Context, data *ConfirmData, sessi
 	}
 
 	sessKey := getLoginSessionKey(atoken.SessionID)
-	if !s.reserveCodeAttempt(ctx, sessKey, time.Until(atoken.ExpiresAt.Time)) {
+	if ok, xerr := s.reserveCodeAttempt(ctx, sessKey, time.Until(atoken.ExpiresAt.Time)); xerr != nil {
+		return nil, xerr
+	} else if !ok {
 		return nil, errx.ErrCodeLimit
 	}
 
@@ -238,12 +242,16 @@ func (s *authService) finishLoginAs(ctx context.Context, userID uuid.UUID, ipadd
 }
 
 // refuseSuspended is the ban-scope check (migration 000045): BanScopeLogin
-// means the account cannot authenticate, whatever it presents.
+// means the account cannot authenticate, whatever it presents. A ban state
+// that cannot be read refuses the sign-in.
 func (s *authService) refuseSuspended(ctx context.Context, userID uuid.UUID) *errx.Error {
-	if scope, scopeErr := s.userRepository.GetBanState(ctx, userID); scopeErr == nil {
-		if models.BanScope(scope).Has(models.BanScopeLogin) {
-			return errx.New(errx.Forbidden, "this account has been suspended")
-		}
+	scope, err := s.userRepository.GetBanState(ctx, userID)
+	if err != nil {
+		errs.CaptureException(err)
+		return errx.InternalError()
+	}
+	if models.BanScope(scope).Has(models.BanScopeLogin) {
+		return errx.ErrAccountSuspended
 	}
 	return nil
 }
@@ -267,7 +275,12 @@ func (s *authService) completeLogin(ctx context.Context, userID uuid.UUID, ipadd
 	// challenge instead of a full session. The FE distinguishes on
 	// two_fa_required and POSTs /auth/2fa/verify next.
 	if s.twofa != nil {
-		if enabled, _ := s.twofa.IsEnabled(ctx, userID); enabled {
+		enabled, err := s.twofa.IsEnabled(ctx, userID)
+		if err != nil {
+			errs.CaptureException(err)
+			return nil, errx.InternalError()
+		}
+		if enabled {
 			pendTok, expiresIn, perr := s.twofa.CreatePendingChallenge(ctx, userID, provider, link)
 			if perr != nil {
 				return nil, perr

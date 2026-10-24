@@ -212,7 +212,7 @@ enrol() {
     [ -n "$detail" ] || detail=$(cat "$tmp")
     rm -f "$tmp"
     case "$code" in
-      401) die "the join token was rejected. Issue a fresh one and try again." ;;
+      401) die "the join token was rejected: $detail" ;;
       *)   die "enrolment failed (HTTP $code): $detail" ;;
     esac
   fi

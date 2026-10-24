@@ -85,9 +85,9 @@ func (h *Handler) FleetJoin(c *gin.Context) {
 			// and telling the operator so saves a long hunt.
 			errx.JSON(c, errx.New(errx.BadRequest, "this instance has no join token yet; issue one from Fleet settings or with `warmblyctl fleet join-token`"))
 		case fleetnode.ErrJoinTokenExpired:
-			errx.JSON(c, errx.New(errx.Unauthorized, "join token has expired; issue a fresh one"))
+			errx.JSON(c, errx.New(errx.Unauthorized, "join token has expired; issue a new one from Fleet settings or with `warmblyctl fleet join-token`, then run the join command again"))
 		default:
-			errx.JSON(c, errx.New(errx.Unauthorized, "join token is not valid"))
+			errx.JSON(c, errx.New(errx.Unauthorized, "join token is not valid; it may have been replaced by a newer one. Issue a new one from Fleet settings or with `warmblyctl fleet join-token`, then run the join command again"))
 		}
 		return
 	}

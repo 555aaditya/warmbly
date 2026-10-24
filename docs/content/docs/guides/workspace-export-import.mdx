@@ -136,6 +136,8 @@ Warmbly does not keep it on either instance. If you lose it, the credentials ins
 
 Leave the option off and the credential fields travel empty. Everything else imports normally, and each mailbox arrives marked for reconnection: open it on the destination and sign in again, exactly like connecting it the first time.
 
+Either way, an SMTP/IMAP mailbox keeps its [server certificate](/guides/mailboxes/#servers-with-their-own-certificate) choice and the fingerprints it trusts, because they are not secret and describe the same server on any instance.
+
 Webhook signing secrets follow the same rule, including the one an [OAuth app](/api/oauth/#receiving-events-as-an-app-webhooks) signs its deliveries with. Without the option, rotate the app's webhook secret on the destination before relying on its deliveries.
 
 </Fold>
@@ -202,7 +204,7 @@ Some things belong to an instance rather than to a workspace, so they are not ap
 | Failure and delivery counters | A webhook endpoint's failure streak and auto-disable state, and whether a notification's email already went out, describe what happened on the source. They start fresh, so an endpoint is not pre-disabled on the new instance and a notification is not re-sent |
 | Sends still in flight | A campaign step handed to a worker on the source has no worker on the destination to report back, so it arrives queued and is sent there instead of waiting forever. Steps already sent keep their history |
 | An invalid workspace name | An archive's workspace name is applied only when it passes the same [naming rules](/api/error-codes/#name-refusals) as a rename. Otherwise the destination keeps its own |
-| Invalid form settings | Each form passes the same checks as an edit. A redirect address that is not an `http` or `https` URL is cleared, a design the editor would refuse resets to the default, and an embed domain that is not a domain is dropped. A published form that lost an embed domain arrives as a draft, so review its domains and publish it again |
+| Invalid form settings | Each form passes the same checks as an edit. A redirect address that is not an `http` or `https` URL is cleared, one that is not on the destination workspace's own domains is kept but not used until it is (visitors see the success message), a design the editor would refuse resets to the default, and an embed domain that is not a domain is dropped. A published form that lost an embed domain arrives as a draft, so review its domains and publish it again |
 | Webhook endpoints the destination refuses | An endpoint whose address the destination would not accept as a new one (not `https`, or not a public host) arrives disabled. Fix its address and enable it again |
 | Personal list layouts | Which columns each member shows on the contacts list and how they sort it, and how they arrange the unibox scope rail (Favorites, row order, hidden rows), belongs to the person, not the workspace. Everyone starts from the default view on the new instance and sets it up again |
 | Salesforce links and activity | Which Salesforce record each contact is, the activity waiting to be logged and its recent results, and how far the pull loop read. The destination links contacts again by address on its first sync, and activity already logged is in Salesforce. Saved list view and Campaign imports do travel, with the records each one already brought in |

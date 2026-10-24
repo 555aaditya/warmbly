@@ -274,6 +274,30 @@ func TestRenderNodeEnvBrokersCredentialProviders(t *testing.T) {
 	}
 }
 
+// A node cannot tell a hosted instance from a self-host, so it is handed the
+// mail-host policy the control plane resolved for itself.
+func TestRenderNodeEnvResolvesPrivateMailHostPolicy(t *testing.T) {
+	setInstanceEnv(t)
+	for _, tc := range []struct {
+		name, mode, appEnv, flag, want string
+	}{
+		{"hosted production refuses", "cloud", "prod", "true", "false"},
+		{"self-host allows", "self_hosted", "prod", "", "true"},
+		{"self-host opted out", "self_hosted", "prod", "false", "false"},
+		{"development allows", "cloud", "dev", "", "true"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("DEPLOYMENT_MODE", tc.mode)
+			t.Setenv("APP_ENV", tc.appEnv)
+			t.Setenv("MAIL_ALLOW_PRIVATE_HOSTS", tc.flag)
+			env := envLines(t, renderNodeEnv(uuid.New(), models.NodeRoleWorker, ""))
+			if env["MAIL_ALLOW_PRIVATE_HOSTS"] != tc.want {
+				t.Errorf("MAIL_ALLOW_PRIVATE_HOSTS = %q, want %q", env["MAIL_ALLOW_PRIVATE_HOSTS"], tc.want)
+			}
+		})
+	}
+}
+
 // A provider that needs no credential works on a node as it stands, and
 // translating it would break a local install for nothing.
 func TestRenderNodeEnvPassesThroughLocalProviders(t *testing.T) {
