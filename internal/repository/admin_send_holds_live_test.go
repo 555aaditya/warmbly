@@ -46,7 +46,15 @@ func TestLiveMonitoringSendHoldsList(t *testing.T) {
 	if h := listed(); h == nil || h.Resolvable || h.Blocker != models.SendHoldBlockerMailboxInactive {
 		t.Fatal("a switched-off mailbox was offered for resolution", h)
 	}
-	f.exec(`UPDATE email_accounts SET status='active',send_recovery_hold=false,send_recovery_reason=NULL,send_recovery_task_id=NULL WHERE id=$1`, f.account)
+	// A hold with no recorded send must still list, as task_missing, rather than fail the scan.
+	f.exec(`UPDATE email_accounts SET status='active',send_recovery_reason='permanent',send_recovery_task_id=NULL WHERE id=$1`, f.account)
+	if h := listed(); h == nil || h.Resolvable || h.HeldTaskID != nil || h.Blocker != models.SendHoldBlockerTaskMissing {
+		t.Fatal("a hold without a recorded send was not listed as task_missing", h)
+	}
+	if h, err := r.GetSendHold(ctx, f.account); err != nil || h == nil || h.Blocker != models.SendHoldBlockerTaskMissing {
+		t.Fatal("a hold without a recorded send failed the lookup", h, err)
+	}
+	f.exec(`UPDATE email_accounts SET send_recovery_hold=false,send_recovery_reason=NULL WHERE id=$1`, f.account)
 	if h, err := r.GetSendHold(ctx, f.account); err != nil || h != nil {
 		t.Fatal("a released mailbox still reads as held", h, err)
 	}

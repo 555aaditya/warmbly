@@ -345,7 +345,7 @@ const sendHoldColumns = `
 		          AND u.send_result_applied_at IS NULL AND u.warmup_send_retired_at IS NULL AND u.id IS DISTINCT FROM t.id),
 		       EXISTS(SELECT 1 FROM send_recovery_resolutions r WHERE r.recovery_task_id = t.id
 		          AND r.previous_reason = 'unknown' AND r.recorded_locally_at IS NOT NULL),
-		       COALESCE(t.send_executor_started_at, w.dispatch_started_at, t.send_reserved_at, t.completed_at, t.created_at) < NOW() - INTERVAL '2 minutes',
+		       COALESCE(COALESCE(t.send_executor_started_at, w.dispatch_started_at, t.send_reserved_at, t.completed_at, t.created_at) < NOW() - INTERVAL '2 minutes', false),
 		       ea.send_cooldown_provider IS NULL OR ea.send_cooldown_provider = ea.provider::text
 		FROM email_accounts ea
 		LEFT JOIN organizations o ON o.id = ea.organization_id
