@@ -101,3 +101,22 @@ func TestNextScheduleSlotSweepsTimeZones(t *testing.T) {
 		}
 	}
 }
+
+// A schedule with days but no usable window defers past the search horizon; only an empty one means "any time".
+func TestNextScheduleSlotFailsClosed(t *testing.T) {
+	tz, err := time.LoadLocation("Europe/Madrid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	from := time.Date(2026, 10, 23, 17, 30, 0, 0, time.UTC)
+	var unusable models.ScheduleWindows
+	for wd := range unusable {
+		unusable[wd] = []models.TimeInterval{{Start: 10 * 60, End: 10 * 60}}
+	}
+	if got, want := nextScheduleSlot(from, unusable, tz), from.AddDate(0, 0, 8); !got.Equal(want) {
+		t.Errorf("no usable window: got %s, want %s", got, want)
+	}
+	if got := nextScheduleSlot(from, models.ScheduleWindows{}, tz); !got.Equal(from) {
+		t.Errorf("empty schedule: got %s, want %s", got, from)
+	}
+}
