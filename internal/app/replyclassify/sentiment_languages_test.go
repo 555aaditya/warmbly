@@ -32,6 +32,42 @@ func TestDeclinedAndNegativeRepliesByLanguage(t *testing.T) {
 			"Je ne suis pas le bon interlocuteur.",
 			"Nous avons déjà une solution en place.",
 		},
+		"nl": {
+			"Bedankt, maar we hebben geen interesse.",
+			"Geen interesse.",
+			"Wij zijn niet geïnteresseerd.",
+			"We zijn niet meer geinteresseerd.",
+			"Dat interesseert ons niet.",
+			"Nee, dank je wel.",
+			"Nee bedankt.",
+			"Op dit moment geen behoefte.",
+			"Ik ben niet de juiste persoon hiervoor.",
+			"Wij hebben al een oplossing.",
+		},
+		"it": {
+			"Grazie, ma non sono interessato.",
+			"Non siamo interessati al momento.",
+			"Non sono più interessata.",
+			"Non mi interessa, grazie.",
+			"Nessun interesse.",
+			"No, grazie.",
+			"No grazie",
+			"Non fa per noi.",
+			"Credo abbia scritto alla persona sbagliata.",
+			"Abbiamo già una soluzione.",
+		},
+		"pt": {
+			"Obrigado, mas não tenho interesse.",
+			"Não temos interesse no momento.",
+			"Não estou interessada.",
+			"Nao estamos interessados.",
+			"Não me interessa.",
+			"Não, obrigado.",
+			"Nao obrigada",
+			"Não sou a pessoa certa para isso.",
+			"Acho que falou com a pessoa errada.",
+			"Já temos uma solução.",
+		},
 		"es": {
 			"Gracias, pero no estoy interesado.",
 			"No estamos interesados en este momento.",
@@ -74,6 +110,21 @@ func TestInterestedRepliesAreNotReadAsNegative(t *testing.T) {
 			"Merci, c'est intéressant. Pouvez-vous m'envoyer une offre ?",
 			"Je suis intéressée, quel est le tarif ?",
 		},
+		"nl": {
+			"Interessant, kunnen we volgende week bellen?",
+			"Ja graag, stuur me meer informatie.",
+			"Bedankt, ik ben geïnteresseerd.",
+		},
+		"it": {
+			"Buono, grazie mille, sono interessato a una demo.",
+			"Molto interessante, possiamo sentirci giovedì?",
+			"Grazie, sono interessata a saperne di più.",
+		},
+		"pt": {
+			"Tenho interesse, podemos falar amanhã?",
+			"Obrigado, estou interessado em saber mais.",
+			"Sim, obrigada, envie a proposta.",
+		},
 		"es": {
 			"Bueno gracias, estoy interesado en una demo.",
 			"Me interesa mucho, ¿hablamos el jueves?",
@@ -81,7 +132,7 @@ func TestInterestedRepliesAreNotReadAsNegative(t *testing.T) {
 			"Sí, gracias, envíeme la propuesta.",
 		},
 	}
-	all := []string{"de", "fr", "es"}
+	all := []string{"de", "fr", "es", "nl", "it", "pt"}
 	for lang, replies := range neutral {
 		for _, body := range replies {
 			if got := ClassifyOffline(Input{Subject: "Re: Hallo", BodyText: body, Languages: all}); got.Class == ClassNegative {
@@ -95,7 +146,7 @@ func TestInterestedRepliesAreNotReadAsNegative(t *testing.T) {
 func TestChosenLanguagesKeepTheEnglishPhrases(t *testing.T) {
 	for _, body := range []string{"Not interested, thanks.", "No thanks.", "Sounds good, let's talk.", "Not réally interested? I am, tell me more."} {
 		base := ClassifyOffline(Input{BodyText: body})
-		withLanguages := ClassifyOffline(Input{BodyText: body, Languages: []string{"de", "fr", "es"}})
+		withLanguages := ClassifyOffline(Input{BodyText: body, Languages: []string{"de", "fr", "es", "nl", "it", "pt"}})
 		if base.Class != withLanguages.Class {
 			t.Errorf("%q = %q without languages, %q with them", body, base.Class, withLanguages.Class)
 		}
