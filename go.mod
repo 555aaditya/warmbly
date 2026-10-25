@@ -3,7 +3,7 @@ module github.com/warmbly/warmbly
 go 1.26.0
 
 // Keep the pinned toolchain and 1.26 builder images on patched security releases.
-toolchain go1.26.9
+toolchain go1.26.10
 
 require (
 	cloud.google.com/go/cloudtasks v1.13.7
@@ -53,6 +53,7 @@ require (
 	github.com/xuri/excelize/v2 v2.11.1-0.20261003002531-6258dcebc4e2
 	go.uber.org/zap v1.27.0
 	golang.org/x/crypto v0.57.0
+	golang.org/x/image v0.45.0
 	golang.org/x/mod v0.41.0
 	golang.org/x/net v0.60.0
 	golang.org/x/oauth2 v0.36.0
@@ -166,7 +167,6 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/arch v0.19.0 // indirect
 	golang.org/x/exp v0.0.0-20240909161429-701f63a606c0 // indirect
-	golang.org/x/image v0.44.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto v0.0.0-20260128011058-8636f8732409 // indirect
