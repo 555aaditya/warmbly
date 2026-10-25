@@ -60,6 +60,9 @@ func (c *Client) handleError(err error) *errx.MailError {
 	}
 	var imapErr *imap.Error
 	if errors.As(err, &imapErr) {
+		if throttle := c.loginThrottle(imapErr); throttle != nil {
+			return throttle
+		}
 		switch imapErr.Code {
 		case imap.ResponseCodeAuthenticationFailed, imap.ResponseCodeExpired:
 			// RFC 5530 EXPIRED: the owner has to supply a new passphrase.

@@ -88,6 +88,7 @@ type Client struct {
 	transport    net.Conn
 	lifetimeStop func() bool
 	closed       atomic.Bool
+	loginRetryAt atomic.Int64
 
 	// IdleTimeout bounds how long a command waits for the server to say
 	// anything before the session is declared dead. Zero means
@@ -195,6 +196,9 @@ func (c *Client) Connect() *errx.MailError {
 func (c *Client) connectLocked() *errx.MailError {
 	if c.closed.Load() || c.Context != nil && c.Context.Err() != nil {
 		return errx.ErrMailServerUnreachable
+	}
+	if err := c.loginCooldown(time.Now()); err != nil {
+		return err
 	}
 	c.setupMu.Lock()
 	if c.lifetimeStop != nil {
