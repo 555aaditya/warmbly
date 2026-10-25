@@ -175,18 +175,44 @@ var languageRules = map[string]langRules{
 		},
 		separators: []string{`mensagem original`, `mensagem encaminhada`},
 		bounce:     []string{"não é possível entregar"},
+		declined: []string{
+			"não tenho interesse", "não temos interesse", "não estou interessado", "não estou interessada",
+			"não estamos interessados", "não estamos interessadas", "não me interessa", "não nos interessa",
+		},
+		negative: []string{
+			"não obrigado", "não, obrigado", "não obrigada", "não, obrigada", "pessoa errada",
+			"não sou a pessoa certa", "já temos uma solução", "já temos fornecedor",
+		},
 	},
 	"it": {
 		quote:      []quoteMarker{{re: headerBlock(`da`, `inviato|data`)}},
 		separators: []string{`messaggio originale`, `messaggio inoltrato`},
 		ooo:        []string{"fuori ufficio"},
 		bounce:     []string{"non recapitabile"},
+		declined: []string{
+			"non sono interessato", "non sono interessata", "non siamo interessati", "non siamo interessate",
+			"non sono più interessato", "non sono più interessata", "non siamo più interessati",
+			"non mi interessa", "non ci interessa", "nessun interesse",
+		},
+		negative: []string{
+			"no grazie", "no, grazie", "non fa per noi", "persona sbagliata", "non sono la persona giusta",
+			"abbiamo già una soluzione", "abbiamo già un fornitore",
+		},
 	},
 	"nl": {
 		quote:      []quoteMarker{{re: headerBlock(`van`, `verzonden|datum`)}},
 		separators: []string{`oorspronkelijk bericht`, `doorgestuurd bericht`},
 		ooo:        []string{"buiten kantoor"},
 		bounce:     []string{"onbestelbaar"},
+		declined: []string{
+			"geen interesse", "niet geïnteresseerd", "niet meer geïnteresseerd",
+			"interesseert ons niet", "interesseert me niet", "interesseert mij niet",
+		},
+		negative: []string{
+			"nee dank je", "nee, dank je", "nee dank u", "nee, dank u", "nee bedankt", "nee, bedankt",
+			"geen behoefte", "verkeerde persoon", "niet de juiste persoon", "niet de juiste contactpersoon",
+			"we hebben al een oplossing", "wij hebben al een oplossing",
+		},
 	},
 	"sv": {
 		quote:      []quoteMarker{nordicAttribution, {re: headerBlock(`från`, `skickat|datum`)}},
