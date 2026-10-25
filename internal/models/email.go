@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/config"
+	"github.com/warmbly/warmbly/internal/pkg/mailhost"
 	"golang.org/x/oauth2"
 )
 
@@ -175,6 +176,27 @@ func (e *Email) ClockTimezone() string {
 
 func (e *Email) IsWarmingActive() bool {
 	return e.Warmup != nil && e.WarmupPausedAt == nil
+}
+
+// ConsumerMailbox reports a free Gmail or Outlook.com account, which starts with
+// far less sender trust than a Google Workspace or Microsoft 365 mailbox.
+func (e *Email) ConsumerMailbox() bool {
+	return e != nil && ConsumerMailboxHost(e.MailHost, e.Provider, e.Email)
+}
+
+// ConsumerMailboxHost is ConsumerMailbox for a mailbox not yet stored.
+func ConsumerMailboxHost(mailHost, provider, address string) bool {
+	h := mailhost.ForMailbox(mailHost, provider, address)
+	return h == mailhost.Gmail || h == mailhost.Outlook
+}
+
+// NewMailboxVolume is a new mailbox's starting cold cap, minimum gap and warmup
+// ceiling. A free Gmail or Outlook.com account starts lower.
+func NewMailboxVolume(mailHost, provider, address string) (campaignLimit, minWait, warmupMax int) {
+	if ConsumerMailboxHost(mailHost, provider, address) {
+		return config.ConsumerCampaignLimitDefault, config.ConsumerMinWaitTimeDefault, config.ConsumerWarmupMaxDefault
+	}
+	return config.CampaignLimitDefault, config.MinWaitTimeDefault, config.WarmupMaxDefault
 }
 
 // DomainAuthBlocked reports whether this mailbox's sending domain has been
