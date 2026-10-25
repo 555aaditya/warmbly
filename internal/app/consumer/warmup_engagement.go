@@ -46,7 +46,7 @@ func (s *JobsService) getGenerationSettings(ctx context.Context) models.WarmupGe
 	return *set
 }
 
-// Floors for mail from a sender in watch or throttled: the pool replies to and rescues more of it so placement recovers.
+// Floors for mail from a sender in watch or throttled, or on a consumer host: the pool replies to and rescues more of it.
 const (
 	recoveryReplyRate     = 60
 	recoveryImportantRate = 60
@@ -54,13 +54,20 @@ const (
 	recoveryRescueRate = 95
 )
 
-// senderRecovering reports whether the sender's warmup standing is watch or throttled.
-func (s *JobsService) senderRecovering(ctx context.Context, senderID uuid.UUID) bool {
-	if s.WarmupRepo == nil {
+// senderGetsRecoveryEngagement reports whether the sender's mail gets recovery engagement:
+// its standing is watch or throttled, or it is a consumer Gmail or Outlook.com mailbox.
+func (s *JobsService) senderGetsRecoveryEngagement(ctx context.Context, senderID uuid.UUID) bool {
+	if s.WarmupRepo != nil {
+		state, _, err := s.WarmupRepo.GetHealthState(ctx, senderID)
+		if err == nil && (state == models.WarmupHealthWatch || state == models.WarmupHealthThrottled) {
+			return true
+		}
+	}
+	if s.EmailRepository == nil {
 		return false
 	}
-	state, _, err := s.WarmupRepo.GetHealthState(ctx, senderID)
-	return err == nil && (state == models.WarmupHealthWatch || state == models.WarmupHealthThrottled)
+	sender, xerr := s.EmailRepository.GetByID(ctx, senderID)
+	return xerr == nil && sender.ConsumerMailbox()
 }
 
 // recoveryEngagement raises the positive signals for a recovering sender's mail and never lowers them.

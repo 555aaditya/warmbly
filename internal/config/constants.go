@@ -33,6 +33,12 @@ const (
 	WarmupMaxDefault      = 40
 	WarmupIncreaseDefault = 1
 
+	// A free Gmail or Outlook.com mailbox starts here instead: personal
+	// accounts carry little sender trust and Outlook.com locks them quickly.
+	ConsumerCampaignLimitDefault = 20
+	ConsumerMinWaitTimeDefault   = 900
+	ConsumerWarmupMaxDefault     = 25
+
 	// Net-new campaign send controls. The ramp mirrors the warmup ramp shape
 	// (start, +increment/day, ceiling) but is applied only via min() against
 	// the per-mailbox cold cap, so it can only lower effective volume.

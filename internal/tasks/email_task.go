@@ -659,6 +659,7 @@ func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (
 		starvation:      starvation,
 		filterJunk:      filterJunk,
 		arrival:         arrival,
+		warmWhereJunked: account.ConsumerMailbox(),
 	}
 
 	// A pick that fails the gate is dropped and the draw repeats; an emptied
@@ -728,6 +729,10 @@ const (
 	// weight *= 1/(1 + k*rate). Never an exclusion: a sender that stops mailing
 	// a host cannot discover it recovered there.
 	hostPlacementPenaltyK = 4.0
+	// weight *= 1 + k*rate at Google, Microsoft and Yahoo for a free Gmail or
+	// Outlook.com sender: its mail is rescued at the recovery rate, so warming
+	// where it is junked is what repairs its standing there.
+	junkedHostBoostK = 1.0
 	// Below this many verified deliveries a host's rate is noise, not a pattern.
 	hostPlacementMinDelivered = 5
 	hostPlacementWindow       = 7 * 24 * time.Hour
@@ -760,6 +765,8 @@ type partnerSignals struct {
 	// arrival is the share of the pool's mail to a candidate that verifiably
 	// arrived; absent below the sample or when nothing was lost.
 	arrival map[uuid.UUID]float64
+	// warmWhereJunked turns the major-provider host penalty into a boost.
+	warmWhereJunked bool
 }
 
 // arrivalWeight draws a recipient in proportion to the chance the mail
@@ -800,6 +807,9 @@ func (sig partnerSignals) hostPenalty(partnerID uuid.UUID) float64 {
 	stat, ok := sig.placementByHost[host]
 	if !ok || stat.Delivered < hostPlacementMinDelivered {
 		return 1.0
+	}
+	if sig.warmWhereJunked && models.WarmupRecipientGroup(host, "") != models.WarmupRecipientOther {
+		return 1.0 + junkedHostBoostK*stat.Rate()
 	}
 	return 1.0 / (1.0 + hostPlacementPenaltyK*stat.Rate())
 }

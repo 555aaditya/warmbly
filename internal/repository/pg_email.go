@@ -897,6 +897,20 @@ func ensureMailboxAbsentTx(ctx context.Context, tx pgx.Tx, orgID *uuid.UUID, ema
 	return nil
 }
 
+// setNewMailboxVolumeTx starts a free Gmail or Outlook.com mailbox at the consumer volume; any other keeps the column defaults.
+func setNewMailboxVolumeTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, mailHost, provider, address string) *errx.Error {
+	if !models.ConsumerMailboxHost(mailHost, provider, address) {
+		return nil
+	}
+	limit, gap, warmupMax := models.NewMailboxVolume(mailHost, provider, address)
+	query := `UPDATE email_accounts SET campaign_limit = $2, min_wait_time = $3, warmup_max = $4 WHERE id = $1`
+	if _, err := tx.Exec(ctx, query, id, limit, gap, warmupMax); err != nil {
+		db.CaptureError(err, query, nil, "exec")
+		return errx.InternalError()
+	}
+	return nil
+}
+
 func (r *emailRepository) NewOauthAccount(ctx context.Context, userID string, data models.NewOauthAccount) (*models.Email, *errx.Error) {
 	if data.Provider == models.InboxProviderSMTPIMAP {
 		errs.CaptureException(errors.New("invalid inbox provider"))
@@ -969,6 +983,9 @@ func (r *emailRepository) NewOauthAccount(ctx context.Context, userID string, da
 		db.CaptureError(err, query, nil, "queryrow")
 		return nil, errx.InternalError()
 	}
+	if xerr := setNewMailboxVolumeTx(ctx, tx, id, data.MailHost, string(data.Provider), data.Email); xerr != nil {
+		return nil, xerr
+	}
 
 	query = `
 		INSERT INTO email_accounts_oauth (email_account_id, access_token, refresh_token, expires_at)
@@ -998,6 +1015,7 @@ func (r *emailRepository) NewOauthAccount(ctx context.Context, userID string, da
 		return nil, errx.InternalError()
 	}
 
+	limit, gap, warmupMax := models.NewMailboxVolume(data.MailHost, string(data.Provider), data.Email)
 	return &models.Email{
 		ID:             id,
 		UserID:         userID,
@@ -1018,11 +1036,11 @@ func (r *emailRepository) NewOauthAccount(ctx context.Context, userID string, da
 
 		LastSyncedAt: t,
 
-		CampaignLimit: config.CampaignLimitDefault,
-		MinWaitTime:   config.MinWaitTimeDefault,
+		CampaignLimit: limit,
+		MinWaitTime:   gap,
 
 		WarmupBase:      config.WarmupBaseDefault,
-		WarmupMax:       config.WarmupMaxDefault,
+		WarmupMax:       warmupMax,
 		WarmupIncrease:  config.WarmupIncreaseDefault,
 		WarmupStartTime: "08:00",
 		WarmupEndTime:   "20:00",
@@ -1060,6 +1078,9 @@ func (r *emailRepository) NewManagedAccount(ctx context.Context, userID string, 
 	if _, err := tx.Exec(ctx, query, id, userID, data.OrganizationID, data.Email, data.Name, data.Provider, sigplain, sightml, "", t, "", data.MailHost, models.MailAuthOAuth); err != nil {
 		db.CaptureError(err, query, nil, "exec")
 		return nil, errx.InternalError()
+	}
+	if xerr := setNewMailboxVolumeTx(ctx, tx, id, data.MailHost, string(data.Provider), data.Email); xerr != nil {
+		return nil, xerr
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, errx.InternalError()
@@ -1124,6 +1145,9 @@ func (r *emailRepository) NewSMTPIMAPAccount(ctx context.Context, userID string,
 		db.CaptureError(err, query, nil, "exec")
 		return nil, errx.InternalError()
 	}
+	if xerr := setNewMailboxVolumeTx(ctx, tx, id, data.MailHost, string(models.InboxProviderSMTPIMAP), data.Email); xerr != nil {
+		return nil, xerr
+	}
 
 	query = `
 		INSERT INTO email_accounts_smtp_imap (
@@ -1160,6 +1184,7 @@ func (r *emailRepository) NewSMTPIMAPAccount(ctx context.Context, userID string,
 		return nil, errx.InternalError()
 	}
 
+	limit, gap, warmupMax := models.NewMailboxVolume(data.MailHost, string(models.InboxProviderSMTPIMAP), data.Email)
 	return &models.Email{
 		ID:             id,
 		UserID:         userID,
@@ -1180,11 +1205,11 @@ func (r *emailRepository) NewSMTPIMAPAccount(ctx context.Context, userID string,
 
 		LastSyncedAt: t,
 
-		CampaignLimit: config.CampaignLimitDefault,
-		MinWaitTime:   config.MinWaitTimeDefault,
+		CampaignLimit: limit,
+		MinWaitTime:   gap,
 
 		WarmupBase:      config.WarmupBaseDefault,
-		WarmupMax:       config.WarmupMaxDefault,
+		WarmupMax:       warmupMax,
 		WarmupIncrease:  config.WarmupIncreaseDefault,
 		WarmupStartTime: "08:00",
 		WarmupEndTime:   "20:00",
