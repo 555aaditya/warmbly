@@ -23,14 +23,14 @@ export function WarmupNote({ e, className }: { e: CampaignEstimateResult; classN
     const w = e.warmup;
     if (w.mailboxes === 0) return null;
     const now = mean(w.per_day, w.mailboxes);
-    const without = mean(w.per_day_without, w.mailboxes);
+    const without = mean(w.per_day_without ?? w.per_day, w.mailboxes);
     return (
         <p className={cn("flex items-start gap-2 text-[11.5px] text-slate-600 leading-relaxed", className)}>
             <FlameIcon className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
             <span>
                 Warmup keeps running on {plural(w.mailboxes, "mailbox", "mailboxes")}
                 {without > now ? `, down from about ${without} to ${now} a day each` : `, about ${now} a day each`} while this runs.
-                Pool partners reply to at least {w.reply_rate}% of it.
+                {w.reply_rate ? ` Pool partners reply to at least ${w.reply_rate}% of it.` : ""}
             </span>
         </p>
     );
@@ -48,7 +48,7 @@ export function MailboxMix({ e, limit, className }: { e: CampaignEstimateResult;
     const poolCampaign = Math.round((firstDay * e.mailboxes) / e.senders.length);
     const warming = w.mailboxes > 0;
     const now = mean(w.per_day, w.mailboxes);
-    const without = mean(w.per_day_without, w.mailboxes);
+    const without = mean(w.per_day_without ?? w.per_day, w.mailboxes);
     const ramping = e.bottleneck === "warmup_graduation" || e.ramping > 0;
 
     return (
@@ -97,11 +97,13 @@ export function MailboxMix({ e, limit, className }: { e: CampaignEstimateResult;
                             ? `Warmup drops from about ${without} to ${now} a day per mailbox while this runs, so your outreach is most of what each mailbox sends.`
                             : `Warmup stays at about ${now} a day per mailbox while this runs.`}
                     </Point>
-                    <Point>
-                        Pool partners reply to at least {w.reply_rate}% of that warmup (where the partner allows replies) and read, rescue from spam and mark
-                        more of it important, so each mailbox keeps getting replies while most cold leads do not answer. Those replies use the partner's own
-                        warmup sends, so they add no volume.
-                    </Point>
+                    {!!w.reply_rate && (
+                        <Point>
+                            Pool partners reply to at least {w.reply_rate}% of that warmup (where the partner allows replies) and read, rescue from spam
+                            and mark more of it important, so each mailbox keeps getting replies while most cold leads do not answer. Those replies use
+                            the partner's own warmup sends, so they add no volume.
+                        </Point>
+                    )}
                     <Point>
                         {now} a day keeps inbox placement measured: a placement reading needs 20 delivered warmup emails in 7 days at Google,
                         Microsoft and Yahoo.

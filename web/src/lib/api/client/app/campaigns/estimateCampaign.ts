@@ -63,8 +63,8 @@ export interface CampaignEstimateSender {
     first_day_cap: number;
     steady_cap: number;
     warmup_per_day: number;
-    // The mailbox's warmup volume with no live campaign.
-    warmup_without: number;
+    // The mailbox's warmup volume with no live campaign. Absent from an older backend.
+    warmup_without?: number;
     full_cap_at: Date | null;
 }
 
@@ -100,8 +100,9 @@ export interface CampaignEstimateResult {
     held: number;
     // Warmup mail the pool keeps sending alongside the campaign, what the same
     // mailboxes warm at with no live campaign, and the least share of it pool
-    // partners answer while the campaign runs.
-    warmup: { mailboxes: number; per_day: number; per_day_without: number; reply_rate: number };
+    // partners answer while the campaign runs. The last two are absent from an
+    // older backend.
+    warmup: { mailboxes: number; per_day: number; per_day_without?: number; reply_rate?: number };
     other_campaigns_per_day: number;
     bottleneck: EstimateBottleneck;
     timeline: CampaignEstimateDay[];
