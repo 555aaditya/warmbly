@@ -440,11 +440,14 @@ Verification resolves the record live and reports what it finds:
 | **Verified** | The subdomain resolves to the tracking host. New sends use it. |
 | No DNS record yet | The name does not exist. The record has not been added, or has not propagated; usually minutes, up to an hour. |
 | Points at something else | The record exists but its value is another host. The message names what it found so you can compare it with what you typed. |
+| Ownership record missing | The `CNAME` is right, but the `TXT` record proving the domain is your workspace's is not there yet. |
 | Nothing to point at | This install has no tracking host configured. Nothing can verify until an operator sets `TRACKING_DOMAIN`. |
 
 A provider that flattens `CNAME` records (ALIAS records, apex flattening, proxied records) still verifies: Warmbly compares the addresses when there is no `CNAME` to read.
 
-A tracking domain belongs to one workspace on an instance. Once a workspace has verified it, on a mailbox or as a campaign's override, no other workspace on the same instance can save or verify it (`409 tracking_domain_taken`). The workspace's own mailboxes and campaigns can all share it.
+A new tracking domain also needs an ownership record: a `TXT` record at `_warmbly.<tracking domain>` holding the `warmbly-verify=...` value Warmbly shows once the domain is saved (`txt_name` and `txt_value` in the API). The value is unique to your workspace on this instance. The same record on a parent domain counts too, so the `_warmbly.<domain>` record a [root redirect](/guides/sending-domains/) already uses covers `link.<domain>`. A host the workspace already verified, on any of its mailboxes or campaigns, or as its forms domain or a redirect, verifies on the `CNAME` alone, and so does saving a mailbox's current verified host again. When an inbox vendor writes the `CNAME` for you, Warmbly asks it to write the ownership record as well.
+
+A tracking domain belongs to one workspace on an instance. Once a workspace has verified it, on a mailbox, as a campaign's override, or as its forms domain, no other workspace on the same instance can save or verify it (`409 tracking_domain_taken`). The workspace's own mailboxes and campaigns can all share it. On the domain, only that workspace's tracked links resolve; another workspace's link opened there answers 404, like an unknown one. The shared tracking host resolves every workspace's links as before.
 
 Press **Check again** any time to re-resolve without changing the value. Warmbly also re-checks every custom tracking domain on its own, hourly, so a record that finishes propagating after you saved starts being used without you doing anything, and one that later stops pointing at the tracking host stops being used instead of quietly breaking every link.
 

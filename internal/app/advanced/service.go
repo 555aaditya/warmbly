@@ -20,6 +20,7 @@ import (
 	"github.com/warmbly/warmbly/internal/utils/validate"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/warmbly/warmbly/internal/app/bounceclass"
 	"github.com/warmbly/warmbly/internal/app/inboxtag"
 	"github.com/warmbly/warmbly/internal/app/listgate"
@@ -278,6 +279,10 @@ func toErrx(err error) *errx.Error {
 	}
 	if xerr, ok := err.(*errx.Error); ok {
 		return xerr
+	}
+	// A row the scoped query did not find is the same 404 whether it is missing or another campaign's.
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errx.ErrNotFound
 	}
 	return errx.InternalError()
 }

@@ -160,8 +160,8 @@ defmodule Realtime.Auth do
         {:error, :ticket_used}
 
       {:error, reason} ->
-        Logger.warning("Socket ticket claim unavailable, accepting: #{inspect(reason)}")
-        :ok
+        Logger.warning("Socket ticket claim unavailable, refusing: #{inspect(reason)}")
+        {:error, :verification_error}
     end
   end
 

@@ -55,6 +55,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/creditwatch"
 	"github.com/warmbly/warmbly/internal/app/crm"
 	"github.com/warmbly/warmbly/internal/app/crmmode"
+	"github.com/warmbly/warmbly/internal/app/customhost"
 	"github.com/warmbly/warmbly/internal/app/dailythrottle"
 	"github.com/warmbly/warmbly/internal/app/dangerzone"
 	"github.com/warmbly/warmbly/internal/app/delegation"
@@ -345,6 +346,7 @@ func main() {
 	var typeSafeClient *typesafe.Client
 	var unsubscribeLinkRepository repository.UnsubscribeLinkRepository
 	var customDomainRepository repository.CustomDomainRepository
+	var customHosts *customhost.Checker
 	// instanceSettings and the health registry are built after the handler
 	// dependencies, so the pool is hoisted out of the connection block.
 	var instanceSettings instancesettings.Service
@@ -587,12 +589,12 @@ func main() {
 		// when they cannot log in.
 		if perr := mailTransport.Preflight(ctx); perr != nil {
 			log.Printf("Warning: platform mail preflight FAILED (%s): %v", mailTransport.Description, perr)
-			log.Printf("Warning: login codes, password resets and invitations will not be delivered. Set MAIL_TRANSPORT=log to read login codes from these logs instead. Reset and invitation links are not logged outside APP_ENV=dev: copy an invitation link from its row under Settings > Members > Pending invitations, and reset a password with `warmblyctl user reset-password --email <address>`.")
+			log.Printf("Warning: login codes, password resets and invitations will not be delivered. Under MAIL_TRANSPORT=log no sign-in or signup waits on an emailed code. Reset and invitation links are not logged outside APP_ENV=dev: copy an invitation link from its row under Settings > Members > Pending invitations, and reset a password with `warmblyctl user reset-password --email <address>`.")
 		} else {
 			log.Printf("Platform mail transport: %s", mailTransport.Description)
 		}
 		if !mailTransport.Delivers {
-			log.Printf("Warning: MAIL_TRANSPORT=log: every platform email is printed here and never delivered. Login codes appear in full. Outside APP_ENV=dev every link's query string, where reset and invitation tokens travel, is replaced with ?[redacted]: copy an invitation link from its row under Settings > Members > Pending invitations, and reset a password with `warmblyctl user reset-password --email <address>`. Do not use this on a deployment other people can reach.")
+			log.Printf("Warning: MAIL_TRANSPORT=log: every platform email is printed here and never delivered, so no sign-in or signup waits on an emailed code. Outside APP_ENV=dev every link's query string and fragment, where reset and invitation tokens travel, is replaced with ?[redacted]: copy an invitation link from its row under Settings > Members > Pending invitations, and reset a password with `warmblyctl user reset-password --email <address>`. Do not use this on a deployment other people can reach.")
 		}
 
 		authCfg, err := cfg.LoadAuthConfig(ctx)
@@ -708,6 +710,8 @@ func main() {
 		}
 		unsubscribeLinkRepository = repository.NewUnsubscribeLinkRepository(primaryDB.Pool)
 		customDomainRepository = repository.NewCustomDomainRepository(primaryDB.Pool)
+		// One definition of who owns a custom domain: who may verify it and what it serves.
+		customHosts = customhost.New(customDomainRepository, domainproof.New(authCfg.DomainProofSecret), nil)
 		instanceChecksDB = primaryDB.Pool
 		instanceSettings = instancesettings.NewService(instancesettings.NewStore(primaryDB.Pool))
 		bootstrapInstanceSettings(ctx, instanceSettings)
@@ -1317,6 +1321,9 @@ func main() {
 		if aware, ok := emailService.(email.LifecycleAware); ok {
 			aware.WireLifecycle(repository.NewSendLifecycleRepository(primaryDB))
 		}
+		if aware, ok := emailService.(email.CustomHostsAware); ok {
+			aware.WireCustomHosts(customHosts)
+		}
 		analyticsRepository := repository.NewAnalyticsRepository(primaryDB)
 		emailAccountErrorRepository := repository.NewEmailAccountErrorRepository(primaryDB)
 		// A successful mailbox reconnect resolves the credential errors it fixed.
@@ -1421,7 +1428,8 @@ func main() {
 		ownDomains := owndomain.New(emailRepostory, organizationRepoForHandler)
 		formService.SetOwnDomains(ownDomains)
 		go jobs.NewFormEventsRetentionJob(formEventRepository).WireRetention(instanceSettings).Start(ctx, 12*time.Hour)
-		go jobs.NewFormsDomainSweep(organizationRepoForHandler).Start(ctx, time.Hour)
+		formService.SetCustomHosts(customHosts)
+		go jobs.NewFormsDomainSweep(organizationRepoForHandler, customHosts).Start(ctx, time.Hour)
 		go jobs.NewContactMailHostSweep(contactRepoForHandler, cache, streamingPublisher).Start(ctx)
 		// A visibly bad import is filed on the workspace's posture. On its own
 		// it can only reach `watch`, which changes nothing.
@@ -1527,6 +1535,9 @@ func main() {
 		// The wizard's audience-versus-pool estimate counts segment members.
 		if aware, ok := campaignService.(campaign.SegmentAware); ok {
 			aware.WireSegments(segmentService)
+		}
+		if aware, ok := campaignService.(campaign.CustomHostsAware); ok {
+			aware.WireCustomHosts(customHosts)
 		}
 		// Delete drops attachment objects and duplicate copies them, so the
 		// campaign service needs the store the attachment handler writes to.
@@ -1938,6 +1949,7 @@ func main() {
 		sendingDomainService = sendingdomain.NewService(repository.NewDomainRedirectRepository(primaryDB), emailRepostory, nil, domainProver)
 		sendingDomainService.WireAuditor(auditService)
 		sendingDomainService.WireOwnDomains(ownDomains)
+		sendingDomainService.WireCustomHosts(customHosts)
 		// A linked self-hosted instance can have Warmbly Cloud serve a redirect instead.
 		sendingDomainService.WireCloud(cloudLinkService)
 		cloudLinkService.OnDisconnect(sendingDomainService.MarkCloudUnlinked)
@@ -2577,6 +2589,7 @@ func main() {
 		InboxTagRepo:           inboxTagRepository,
 		UnsubscribeTickets:     unsubscribeLinkRepository,
 		CustomDomains:          customDomainRepository,
+		CustomHosts:            customHosts,
 		WebsiteTrackingService: websiteTrackingService,
 		UserRepo:               userRepoForHandler,
 		OrgRepo:                organizationRepoForHandler,

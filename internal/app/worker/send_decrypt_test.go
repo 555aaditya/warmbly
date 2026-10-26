@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -42,6 +43,12 @@ func TestSendThatCannotBeDecryptedFailsWithoutSending(t *testing.T) {
 	}
 	goodSubject, goodBody := seal("Hello Ann"), seal("Body for Ann")
 	const garbage = "c2VjcmV0LWJ1dC1ub3QtY2lwaGVydGV4dA=="
+	rawBody, err := base64.StdEncoding.DecodeString(goodBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawBody[len(rawBody)-1] ^= 1
+	tamperedBody := base64.StdEncoding.EncodeToString(rawBody)
 
 	cases := map[string]struct {
 		keys          cipher.CipherService
@@ -53,6 +60,8 @@ func TestSendThatCannotBeDecryptedFailsWithoutSending(t *testing.T) {
 		"plain undecryptable":   {keys, goodSubject, garbage, "", sendReasonUndecryptable},
 		"html undecryptable":    {keys, goodSubject, goodBody, garbage, sendReasonUndecryptable},
 		"short ciphertext":      {keys, goodSubject, "AAAA", "", sendReasonUndecryptable},
+		"tampered body":         {keys, goodSubject, tamperedBody, "", sendReasonUndecryptable},
+		"other workspace key":   {cipher.NewStatic(bytes.Repeat([]byte{6}, 32)), goodSubject, goodBody, "", sendReasonUndecryptable},
 		"key unavailable":       {failingCipherService{}, goodSubject, goodBody, "", sendReasonKeyUnavailable},
 	}
 	for name, tc := range cases {

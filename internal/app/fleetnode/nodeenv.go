@@ -3,7 +3,10 @@ package fleetnode
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strings"
 
@@ -47,11 +50,7 @@ var NodeEnvKeys = []string{
 	"SCHEMA_REGISTRY_SECRET",
 	"CODEC_PROVIDER",
 	"REDIS",
-	"KMS_LOCAL_MASTER_KEY",
 	"KMS_AWS_KEY_ID",
-	"CREDENTIALS_ENCRYPTION_KEY",
-	// Earlier keys stay readable on nodes while a rotation reseals.
-	"CREDENTIALS_ENCRYPTION_READ_KEYS",
 	"BLOB_FS_ROOT",
 	"BLOB_BUCKET",
 	"AWS_REGION",
@@ -71,7 +70,16 @@ var NodeEnvKeys = []string{
 // so it reads the integration client credentials (integration.NewOAuthManager),
 // APP_URL (the "Open in Warmbly" link written to the CRM) and the backend's
 // public URL (where it registers Pipedrive's webhooks).
+//
+// The instance credential key and the local KMS master key are consumer-only
+// too: a consumer seals and opens stored credentials and may mint a
+// workspace's first data key, while a worker opens only what reaches it sealed
+// under a workspace key, through the decrypt broker.
 var consumerEnvKeys = []string{
+	"KMS_LOCAL_MASTER_KEY",
+	"CREDENTIALS_ENCRYPTION_KEY",
+	// Earlier keys stay readable on consumers while a rotation reseals.
+	"CREDENTIALS_ENCRYPTION_READ_KEYS",
 	"APP_URL",
 	"BACKEND_PUBLIC_URL",
 	"API_PUBLIC_URL",
@@ -95,15 +103,22 @@ var consumerEnvKeys = []string{
 // IAM key to every machine in the fleet is exactly the thing worth avoiding. So
 // a provider that needs a credential becomes its brokered form, which
 // authenticates with the internal API token the node already holds and asks
-// this instance to do the one privileged operation. A provider that needs no
-// credential (local KMS, filesystem blobs) passes through unchanged.
+// this instance to do the one privileged operation. Filesystem blobs need no
+// credential and pass through unchanged.
+//
+// Local KMS is brokered for a worker too, so the master key that wraps every
+// workspace key stays on the control plane. A consumer keeps it: a consumer
+// may mint a workspace's first data key, which the broker never does.
 //
 // Brokering costs one HTTPS call to the control plane per DEK open (Redis
 // caches the result) and per blob operation. The bytes still go straight
 // between the node and the object store.
-func nodeProviders() (kmsProvider, blobProvider string) {
+func nodeProviders(role models.NodeRole) (kmsProvider, blobProvider string) {
 	kmsProvider = config.KMSProvider()
-	if kmsProvider == "aws" || kmsProvider == "aws-kms" {
+	switch {
+	case kmsProvider == "aws" || kmsProvider == "aws-kms":
+		kmsProvider = "brokered"
+	case kmsProvider == "local" && role == models.NodeRoleWorker:
 		kmsProvider = "brokered"
 	}
 	blobProvider = config.BlobProvider()
@@ -111,6 +126,42 @@ func nodeProviders() (kmsProvider, blobProvider string) {
 		blobProvider = "brokered"
 	}
 	return kmsProvider, blobProvider
+}
+
+// BackendURL is the control-plane address a node is told to call back on.
+func BackendURL() string {
+	backend := strings.TrimRight(os.Getenv("ENCRYPTED_KEYS_BACKEND_URL"), "/")
+	if backend == "" {
+		backend = strings.TrimRight(os.Getenv("APP_INTERNAL_URL"), "/")
+	}
+	return backend
+}
+
+// ErrBackendNotHTTPS names a cleartext control-plane address handed to nodes on hosted production.
+var ErrBackendNotHTTPS = errors.New("hosted production hands nodes a cleartext control-plane address; keep ENCRYPTED_KEYS_BACKEND_URL on a private network or set it to an https:// URL")
+
+// CheckBackendURL reports a non-https, non-loopback control-plane address on hosted production.
+func CheckBackendURL() error {
+	backend := BackendURL()
+	if backend == "" || !config.HostedProduction() {
+		return nil
+	}
+	u, err := url.Parse(backend)
+	if err != nil {
+		return ErrBackendNotHTTPS
+	}
+	if strings.EqualFold(u.Scheme, "https") || loopbackHost(u.Hostname()) {
+		return nil
+	}
+	return ErrBackendNotHTTPS
+}
+
+func loopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // RenderEnv builds the env file a node writes to disk on join.
@@ -128,10 +179,7 @@ func RenderEnv(nodeID uuid.UUID, role models.NodeRole, region string) string {
 		fmt.Fprintf(&b, "WORKER_ID=%s\n", nodeID)
 	}
 
-	backend := strings.TrimRight(os.Getenv("ENCRYPTED_KEYS_BACKEND_URL"), "/")
-	if backend == "" {
-		backend = strings.TrimRight(os.Getenv("APP_INTERNAL_URL"), "/")
-	}
+	backend := BackendURL()
 	// A consumer is control plane: it opens Postgres itself, so it gets the DSN
 	// a worker is deliberately never given, and reads keys straight from the
 	// table rather than back through the API it sits behind. An instance whose
@@ -158,10 +206,15 @@ func RenderEnv(nodeID uuid.UUID, role models.NodeRole, region string) string {
 		fmt.Fprintf(&b, "INTERNAL_API_TOKEN=%s\n", os.Getenv("INTERNAL_API_TOKEN"))
 	}
 
-	kmsProvider, blobProvider := nodeProviders()
+	kmsProvider, blobProvider := nodeProviders(role)
 	fmt.Fprintf(&b, "KMS_PROVIDER=%s\n", kmsProvider)
 	fmt.Fprintf(&b, "BLOB_PROVIDER=%s\n", blobProvider)
 	// Resolved here: a node cannot tell a hosted instance from a self-host on its own.
+	mode := "cloud"
+	if config.SelfHosted() {
+		mode = "self_hosted"
+	}
+	fmt.Fprintf(&b, "DEPLOYMENT_MODE=%s\n", mode)
 	fmt.Fprintf(&b, "MAIL_ALLOW_PRIVATE_HOSTS=%t\n", config.PrivateMailHostsAllowed())
 	fmt.Fprintf(&b, "MAIL_TLS_INSECURE=%t\n", config.MailTLSInsecureAllowed())
 

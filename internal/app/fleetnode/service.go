@@ -154,6 +154,40 @@ func (s *Service) VerifyJoinToken(ctx context.Context, token string) error {
 	return nil
 }
 
+// ErrNoNodeCredential is a node that holds no credential of its own yet; joining again issues one.
+var ErrNoNodeCredential = errors.New("this node holds no node credential; join it again to receive one")
+
+// ErrBadNodeCredential is a credential that was not issued to the node it names.
+var ErrBadNodeCredential = errors.New("node credential does not match the node")
+
+// IssueNodeCredential mints the node's own credential and stores only its hash, replacing any earlier one.
+func (s *Service) IssueNodeCredential(ctx context.Context, id uuid.UUID) (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	secret := base64.RawURLEncoding.EncodeToString(raw)
+	if err := s.nodes.SetCredentialHash(ctx, id, crypt.SHA256(secret)); err != nil {
+		return "", err
+	}
+	return secret, nil
+}
+
+// VerifyNodeCredential checks, in constant time, that secret is the credential issued to node id.
+func (s *Service) VerifyNodeCredential(ctx context.Context, id uuid.UUID, secret string) error {
+	want, err := s.nodes.CredentialHash(ctx, id)
+	if err != nil {
+		return err
+	}
+	if want == "" {
+		return ErrNoNodeCredential
+	}
+	if subtle.ConstantTimeCompare([]byte(crypt.SHA256(strings.TrimSpace(secret))), []byte(want)) != 1 {
+		return ErrBadNodeCredential
+	}
+	return nil
+}
+
 // Heartbeat records a beat and answers with what the node should be running.
 //
 // Registration is the first heartbeat: there is no separate create step, so a

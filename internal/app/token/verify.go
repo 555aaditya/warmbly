@@ -28,7 +28,7 @@ func (s *tokenService) GetSession(ctx context.Context, sessionID uuid.UUID) (*mo
 	// only costs the next request a database read. Returning the error here
 	// meant a Redis write that was refused, on quota or anything else, failed
 	// every authenticated request with a 500.
-	_ = s.saveSession(ctx, sess, SessionTTL)
+	s.fillSession(ctx, sess)
 	return sess, nil
 }
 

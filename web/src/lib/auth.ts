@@ -65,10 +65,16 @@ export const saveTokens = (data: Record<string, unknown>) => {
 // banners are deliberately not here; they are not the user's data.
 const SESSION_SCOPED_KEY_PREFIXES = [
   "warmbly-reply-draft:",
+  "remie.tips.",
+  "warmbly:view:",
+  "warmbly:signin-migration-later:",
 ];
 
 const SESSION_SCOPED_KEYS = [
   "sso_binding",
+  "warmbly.sendingDomains.redirectRescue",
+  "warmbly.sendingDomains.setupNudge",
+  "warmbly.compose.seedPick",
 ];
 
 // clearTokens ends the client's half of the session: the tokens, and the

@@ -33,6 +33,7 @@ defmodule RealtimeWeb.Endpoint do
 
   # Health check endpoint for Docker/load balancer probes
   plug(:health_check)
+  plug(:not_found)
 
   defp health_check(%Plug.Conn{request_path: "/health"} = conn, _opts) do
     conn
@@ -41,4 +42,11 @@ defmodule RealtimeWeb.Endpoint do
   end
 
   defp health_check(conn, _opts), do: conn
+
+  # Every other HTTP path is a plain 404; the socket upgrade is handled before the plugs run.
+  defp not_found(conn, _opts) do
+    conn
+    |> Plug.Conn.send_resp(404, "")
+    |> Plug.Conn.halt()
+  end
 end

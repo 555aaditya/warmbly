@@ -27,6 +27,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/credits"
 	"github.com/warmbly/warmbly/internal/app/crm"
 	"github.com/warmbly/warmbly/internal/app/crmmode"
+	"github.com/warmbly/warmbly/internal/app/customhost"
 	"github.com/warmbly/warmbly/internal/app/dangerzone"
 	"github.com/warmbly/warmbly/internal/app/delegation"
 	"github.com/warmbly/warmbly/internal/app/discount"
@@ -375,6 +376,8 @@ type Handler struct {
 	// gate at /tls/authorize so a reverse proxy can obtain a certificate for a
 	// hostname that was not known when the instance was installed.
 	CustomDomains repository.CustomDomainRepository
+	// CustomHosts confines a workspace's custom host to that workspace's forms and tracked links.
+	CustomHosts *customhost.Checker
 
 	// Direct repositories used by handlers that don't yet have a
 	// service layer (avatars, etc.). Keep narrow and add a service

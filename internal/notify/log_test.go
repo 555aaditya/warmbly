@@ -29,3 +29,14 @@ func TestLogTransportKeepsLinkTokensOutOfTheLogOutsideDevelopment(t *testing.T) 
 		}
 	}
 }
+
+func TestLogTransportWithholdsFragmentTokensOutsideDevelopment(t *testing.T) {
+	t.Setenv("APP_ENV", "prod")
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	_ = NewLogEmailNotificationService("Warmbly", "noreply@example.com").Send(context.Background(), []string{"user@example.com"}, nil, nil, "Reset", `<a href="https://app.example.com/auth/reset-password/confirm#session=fragtok">reset</a>`)
+	log.SetOutput(os.Stderr)
+	if out := buf.String(); strings.Contains(out, "fragtok") {
+		t.Fatalf("fragment token logged:\n%s", out)
+	}
+}

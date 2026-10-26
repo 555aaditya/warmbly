@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/app/customhost"
 	"github.com/warmbly/warmbly/internal/app/owndomain"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
@@ -77,6 +78,8 @@ type Service interface {
 	SetGeo(g *geo.Client)
 	SetLinks(r repository.FormLinkRepository)
 	SetEvents(r repository.FormEventRepository)
+	// SetCustomHosts gates a new forms domain on the workspace TXT proof.
+	SetCustomHosts(c *customhost.Checker)
 	SetDomains(d OrgStore)
 	SetCampaigns(k CampaignKeeper)
 	// SetOwnDomains wires the workspace's own domains, the only ones a redirect after submit may go to.
@@ -150,6 +153,7 @@ type service struct {
 	realtime      RealtimePublisher
 	webhooks      WebhookDispatcher
 	geo           *geo.Client
+	customHosts   *customhost.Checker
 }
 
 func NewService(repo repository.FormRepository) Service {
@@ -168,6 +172,7 @@ func (s *service) SetEvents(r repository.FormEventRepository) { s.events = r }
 func (s *service) SetDomains(d OrgStore)                      { s.domains = d }
 func (s *service) SetCampaigns(k CampaignKeeper)              { s.campaigns = k }
 func (s *service) SetOwnDomains(r *owndomain.Resolver)        { s.own = r }
+func (s *service) SetCustomHosts(c *customhost.Checker)       { s.customHosts = c }
 
 // ownDomains are the workspace's own domains; none when the resolver is not wired, so no redirect is followed.
 func (s *service) ownDomains(ctx context.Context, orgID uuid.UUID) ([]string, *errx.Error) {

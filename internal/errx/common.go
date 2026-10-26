@@ -294,6 +294,9 @@ var (
 
 	// Tracking domains
 	ErrTrackingDomainTaken = NewWithIdentifier(Conflict, "tracking_domain_taken", "Another workspace on this instance already uses this tracking domain. Choose a host on a domain your workspace sends from.")
+
+	// Forms domains
+	ErrFormsDomainTaken = NewWithIdentifier(Conflict, "forms_domain_taken", "Another workspace on this instance already uses this domain. Choose a host on a domain your workspace owns.")
 )
 
 // MailboxAllowanceReached is the refusal every connect path returns when the

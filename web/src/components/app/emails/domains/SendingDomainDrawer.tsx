@@ -675,6 +675,9 @@ function TrackingTab({
                                 </span>
                             </p>
                         )}
+                        {result && !result.tracking_domain_verified && result.txt_name && result.txt_value && (
+                            <DnsRecordsTable records={[{ key: "txt", type: "TXT", name: result.txt_name, value: result.txt_value }]} />
+                        )}
                     </>
                 )}
             </div>

@@ -8,16 +8,16 @@ import toast from "react-hot-toast/headless";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
 import resetPasswordSession from "@/lib/api/client/auth/resetPasswordSession";
+import { resetLinkToken } from "@/lib/resetLinkToken";
 
 export function useResetPasswordConfirmForm() {
-    // The emailed link is /auth/reset-password/confirm?session=<jwt>. It is
-    // exchanged for a reset session held in memory and dropped from the URL.
+    // The link token is exchanged for a reset session held in memory, and cleared from the address bar.
     const [params, setParams] = useSearchParams();
     const navigate = useNavigate();
     const resetConfirm = useResetPasswordConfirm();
     const { evaluate } = usePasswordStrength();
 
-    const [linkToken] = useState(() => params.get("session") ?? "");
+    const [linkToken] = useState(() => resetLinkToken(window.location.hash, params));
     const [session, setSession] = useState("");
     const [linkState, setLinkState] = useState<"checking" | "ready" | "invalid">(linkToken ? "checking" : "invalid");
     const isValidToken = linkState !== "invalid";
