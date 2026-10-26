@@ -197,7 +197,7 @@ Including the keys makes the bundle as sensitive as the instance itself. Leaving
 
 ### Who gets in
 
-The first owner, either as a printed claim link or unattended from `WARMBLY_BOOTSTRAP_EMAIL` plus a hash from `warmblyctl hash-password`. Then the registration posture, and platform mail: an SMTP relay, or skip it and have password resets and login codes printed to the backend log.
+The first owner, either as a printed claim link or unattended from `WARMBLY_BOOTSTRAP_EMAIL` plus a hash from `warmblyctl hash-password`. Then the registration posture, and platform mail: an SMTP relay, or skip it and have platform mail printed to the backend log. Without a relay no sign-in or signup waits on an emailed code, and outside `APP_ENV=dev` reset and invitation links are withheld from that log.
 
 </Step>
 
