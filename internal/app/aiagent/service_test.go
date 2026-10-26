@@ -100,3 +100,29 @@ func TestForReaderWithholdsResultsOfToolsTheReaderCannotRun(t *testing.T) {
 		t.Error("the stored messages were modified")
 	}
 }
+
+func TestOrderTiedMessagesAnswersEveryToolCallInPlace(t *testing.T) {
+	call := func(id string) generation.AgentMessage {
+		return generation.AgentMessage{Role: "assistant", ToolCalls: []generation.ToolCall{{ID: id, Name: "list_contacts"}}}
+	}
+	result := func(id string) generation.AgentMessage {
+		return generation.AgentMessage{Role: "tool", ToolCallID: id, Content: id}
+	}
+	reply := generation.AgentMessage{Role: "assistant", Content: "done"}
+	// A resumed run saved in one transaction: the approved call's result, two tool rounds, the reply.
+	got := orderTiedMessages([]generation.AgentMessage{reply, result("b"), call("c"), result("c"), result("a"), call("b")})
+	if len(got) != 6 {
+		t.Fatalf("got %d messages, want 6", len(got))
+	}
+	if got[0].ToolCallID != "a" {
+		t.Fatalf("result for the earlier call is not first: %v", got)
+	}
+	if got[5].Content != "done" {
+		t.Fatalf("reply is not last: %v", got)
+	}
+	for i := 1; i < 5; i += 2 {
+		if len(got[i].ToolCalls) != 1 || got[i+1].ToolCallID != got[i].ToolCalls[0].ID {
+			t.Fatalf("tool call at %d is not followed by its result: %v", i, got)
+		}
+	}
+}

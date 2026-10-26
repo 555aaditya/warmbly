@@ -251,9 +251,12 @@ func (r *agentRepository) AppendMessages(ctx context.Context, orgID, userID, ses
 		return errors.New("session not found for this member")
 	}
 	for _, m := range msgs {
+		// Strictly after the session's last row: now() is one value for the whole transaction.
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO agent_messages (session_id, role, content, tokens)
-			VALUES ($1, $2, $3, $4)`, sessionID, m.Role, []byte(m.Content), m.Tokens); err != nil {
+			INSERT INTO agent_messages (session_id, role, content, tokens, created_at)
+			VALUES ($1, $2, $3, $4, GREATEST(clock_timestamp(),
+				(SELECT max(created_at) FROM agent_messages WHERE session_id = $1) + interval '1 microsecond'))`,
+			sessionID, m.Role, []byte(m.Content), m.Tokens); err != nil {
 			return err
 		}
 	}
