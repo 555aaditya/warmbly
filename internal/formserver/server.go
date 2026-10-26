@@ -220,7 +220,7 @@ func (s *Server) fetchForm(c *gin.Context) (*formwire.PublicForm, error) {
 	if publicID == "" || len(publicID) > 64 {
 		return nil, errFormNotFound
 	}
-	return s.client.Form(c.Request.Context(), publicID)
+	return s.client.Form(c.Request.Context(), publicID, requestHost(c.Request.Host))
 }
 
 // wfTokenPlaceholder is the meta tag forms/index.html ships; the shell serve
@@ -285,7 +285,7 @@ func (s *Server) GetPublicForm(c *gin.Context) {
 	var f *formwire.PublicForm
 	var err error
 	if token := c.Query("t"); token != "" && len(token) <= 64 {
-		f, err = s.client.FormWithToken(c.Request.Context(), c.Param("publicID"), token)
+		f, err = s.client.FormWithToken(c.Request.Context(), c.Param("publicID"), token, requestHost(c.Request.Host))
 	} else {
 		f, err = s.fetchForm(c)
 	}
@@ -362,6 +362,7 @@ func (s *Server) RecordFormEvent(c *gin.Context) {
 		LinkToken:  truncateStr(body.LinkToken, 64),
 		RemoteIP:   ip,
 		UserAgent:  truncateStr(c.GetHeader("User-Agent"), 512),
+		Host:       requestHost(c.Request.Host),
 	})
 	c.Status(http.StatusNoContent)
 }
@@ -432,6 +433,7 @@ func (s *Server) SubmitForm(c *gin.Context) {
 		RenderedAt:     body.WT,
 		LinkToken:      truncateStr(body.LinkToken, 64),
 		VisitorKey:     truncateStr(body.VisitorKey, 64),
+		Host:           requestHost(c.Request.Host),
 	}
 
 	out, err := s.client.Submit(c.Request.Context(), c.Param("publicID"), req)

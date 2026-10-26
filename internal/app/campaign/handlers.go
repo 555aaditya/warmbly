@@ -1056,7 +1056,7 @@ func (s *campaignService) VerifyCampaignTrackingDomain(ctx context.Context, orgI
 	}
 
 	target := config.TrackingHostname()
-	res := trackdns.Verify(ctx, campaign.TrackingDomain, target)
+	res := s.customHosts.Gate(ctx, trackdns.Verify(ctx, campaign.TrackingDomain, target), orgID, campaign.TrackingDomainVerified)
 
 	status := &models.TrackingDomainStatus{
 		TrackingDomain:           res.Domain,
@@ -1067,6 +1067,7 @@ func (s *campaignService) VerifyCampaignTrackingDomain(ctx context.Context, orgI
 		Observed:                 res.Observed,
 		TrackingHostUnresolvable: res.TargetUnresolvable,
 	}
+	status.TXTName, status.TXTValue = s.customHosts.Record(orgID, res.Domain)
 	if res.Verified {
 		now := time.Now().UTC()
 		status.TrackingDomainVerifiedAt = &now

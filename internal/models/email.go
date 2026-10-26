@@ -413,9 +413,10 @@ type EmailAuthTarget struct {
 // re-checked keeps routing links long after its record changed, and a domain
 // that failed to verify has no other way back once it propagates.
 type TrackingDomainTarget struct {
-	ID       uuid.UUID
-	Domain   string
-	Verified bool
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Domain         string
+	Verified       bool
 }
 
 // EmailAuthTransition is a mailbox that just entered the failing state, so the
@@ -770,9 +771,12 @@ type TrackingDomainStatus struct {
 	// host (TRACKING_DOMAIN). Empty means the install has no tracking host, so
 	// there is nothing to point at and nothing can verify.
 	CNAMETarget string `json:"cname_target"`
+	// TXTName and TXTValue are the ownership record a new verification needs beside the CNAME.
+	TXTName  string `json:"txt_name,omitempty"`
+	TXTValue string `json:"txt_value,omitempty"`
 
 	// Status is stable and machine-readable: verified, unset, no_target,
-	// not_found, wrong_target, lookup_error, or pending when the value is
+	// not_found, wrong_target, proof_missing, lookup_error, or pending when the value is
 	// stored state rather than a fresh lookup.
 	Status string `json:"status"`
 

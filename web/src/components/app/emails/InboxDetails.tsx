@@ -1823,17 +1823,25 @@ function TrackingDomainCard({ mailbox }: { mailbox: Inbox }) {
     const busy = mutation.isPending || verify.isPending;
     // Show the diagnostic while something is wrong, not once it is fixed.
     const message = !verified && status.data?.message && !dirty ? status.data.message : "";
+    // The ownership record is bound to the saved host, so it shows once that host is saved and until it verifies.
+    const proof =
+        !verified && !dirty && status.data?.txt_name && status.data.txt_value
+            ? { name: status.data.txt_name, value: status.data.txt_value }
+            : null;
+    const [copiedProof, setCopiedProof] = useState(false);
 
-    const copyTarget = async () => {
-        if (!target) return;
+    const copyText = async (text: string, mark: (v: boolean) => void) => {
+        if (!text) return;
         try {
-            await navigator.clipboard.writeText(target);
-            setCopied(true);
-            window.setTimeout(() => setCopied(false), 1500);
+            await navigator.clipboard.writeText(text);
+            mark(true);
+            window.setTimeout(() => mark(false), 1500);
         } catch {
             // clipboard may be unavailable (insecure context); ignore
         }
     };
+
+    const copyTarget = () => copyText(target, setCopied);
 
     const save = async () => {
         if (problem) return;
@@ -1918,7 +1926,7 @@ function TrackingDomainCard({ mailbox }: { mailbox: Inbox }) {
             {!problem && normalized && target && (
                 <div className="rounded-md border border-slate-200 bg-slate-50/70 p-3 space-y-2">
                     <div className="text-[11px] text-slate-500 leading-relaxed">
-                        Add this CNAME record at your DNS provider, then save to verify:
+                        {proof ? "Add these records at your DNS provider, then check again:" : "Add this CNAME record at your DNS provider, then save to verify:"}
                     </div>
                     <div className="grid grid-cols-[56px_1fr] gap-x-3 gap-y-1.5 text-[11.5px] items-center">
                         <span className="text-slate-400">Type</span>
@@ -1937,6 +1945,26 @@ function TrackingDomainCard({ mailbox }: { mailbox: Inbox }) {
                                 {copied ? <CheckIcon className="w-3 h-3 text-emerald-600" /> : <CopyIcon className="w-3 h-3" />}
                             </button>
                         </span>
+                        {proof && (
+                            <>
+                                <span className="text-slate-400">Type</span>
+                                <span className="font-mono text-slate-700">TXT</span>
+                                <span className="text-slate-400">Name</span>
+                                <span className="font-mono text-slate-700 truncate">{proof.name}</span>
+                                <span className="text-slate-400">Value</span>
+                                <span className="font-mono text-slate-700 inline-flex items-center gap-1.5 min-w-0">
+                                    <span className="truncate">{proof.value}</span>
+                                    <button
+                                        type="button"
+                                        onClick={() => void copyText(proof.value, setCopiedProof)}
+                                        className="shrink-0 text-slate-400 hover:text-slate-700 transition-colors"
+                                        aria-label="Copy TXT value"
+                                    >
+                                        {copiedProof ? <CheckIcon className="w-3 h-3 text-emerald-600" /> : <CopyIcon className="w-3 h-3" />}
+                                    </button>
+                                </span>
+                            </>
+                        )}
                     </div>
                 </div>
             )}

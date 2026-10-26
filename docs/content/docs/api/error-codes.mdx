@@ -421,7 +421,8 @@ The [inbox vendor](/guides/mailbox-import/#import-from-an-inbox-vendor) routes (
 | `pool_link_oauth_unknown` | 409 | The provider exchange has no confirmed committed mailbox. Do not retry the authorization code or infer success; remove the pending connection before starting new explicit consent |
 | `cli_auth_scopes_role` | 403 | Approving a [CLI sign-in](/api/cli/#scopes): your role in the chosen workspace allows none of the scopes the CLI asked for. Pick another workspace, or ask for narrower scopes with `--scopes` |
 | `sending_domain_bulk_invalid` | 400 | A bulk setup named no domain, more than 100, neither a `tracking_label` nor a `redirect_url`, a `tracking_label` that is not one DNS label, or a `served_by` other than `instance` or `cloud` |
-| `tracking_domain_taken` | 409 | Another workspace on this instance has already verified this tracking domain, on a mailbox or as a campaign's override. Returned when saving or verifying a mailbox's tracking domain, applying one to a sending domain (including bulk setup), and verifying a campaign's override. Nothing changes |
+| `forms_domain_taken` | 409 | Another workspace on this instance has already verified this domain, as its forms domain, a tracking domain or a redirect. Returned when saving or verifying the workspace's custom forms domain. Nothing changes |
+| `tracking_domain_taken` | 409 | Another workspace on this instance has already verified this tracking domain, on a mailbox, as a campaign's override, or as its forms domain. Returned when saving or verifying a mailbox's tracking domain, applying one to a sending domain (including bulk setup), and verifying a campaign's override. Nothing changes |
 | `tracking_host_not_configured` | 400 | This instance has no tracking host (`TRACKING_DOMAIN`), so it cannot serve a tracking domain or a redirect |
 
 ```json

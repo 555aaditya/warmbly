@@ -42,6 +42,7 @@ type OrganizationRepository interface {
 	GetFormsDomain(ctx context.Context, orgID uuid.UUID) (domain string, verified bool, err error)
 	SetFormsDomain(ctx context.Context, orgID uuid.UUID, domain string) error
 	SetFormsDomainVerified(ctx context.Context, orgID uuid.UUID, verified bool, at *time.Time) error
+	FormsDomainHeldElsewhere(ctx context.Context, orgID uuid.UUID, domain string) (bool, error)
 	// ListFormsDomains returns every org with a custom forms domain set, for
 	// the periodic re-verification sweep.
 	ListFormsDomains(ctx context.Context) ([]OrgFormsDomain, error)
