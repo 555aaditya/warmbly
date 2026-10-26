@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"log"
+	"github.com/rs/zerolog/log"
 	"net/http"
 	"sort"
 	"strings"
@@ -109,9 +109,9 @@ func (h *Handler) FleetJoin(c *gin.Context) {
 	}
 
 	address := heartbeatAddress(req.Address)
+	// A cleartext address inside a private network is common, so this warns rather than refusing a join.
 	if err := fleetnode.CheckBackendURL(); err != nil {
-		errx.JSON(c, errx.NewPublic(errx.Internal, err.Error()))
-		return
+		log.Warn().Str("node_id", nodeID.String()).Msg(err.Error())
 	}
 	joinVersion := h.FleetNodes.JoinVersion(ctx, nodeID)
 	if joinVersion == "" {
@@ -264,9 +264,7 @@ func (h *Handler) InternalFleetNodeEnv(c *gin.Context) {
 		return
 	}
 	if err := fleetnode.CheckBackendURL(); err != nil {
-		logBrokerAccess(c, op, id.String(), false, "control-plane address is not https")
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
-		return
+		log.Warn().Str("node_id", id.String()).Msg(err.Error())
 	}
 	ctx := c.Request.Context()
 	reason := "node credential"
@@ -310,7 +308,7 @@ func (h *Handler) fleetUpdateOnlyHeartbeat(c *gin.Context, beat models.NodeHeart
 		return
 	}
 	if _, seen := legacyTokenNodes.LoadOrStore(beat.NodeID, struct{}{}); !seen {
-		log.Printf("fleet: node %s heartbeats with INTERNAL_API_TOKEN; it is told its version (%q) but not recorded as live. A node that stays on this token after updating needs to join again to receive NODE_BROKER_TOKEN", beat.NodeID, reply.DesiredVersion)
+		log.Warn().Str("node_id", beat.NodeID.String()).Str("desired_version", reply.DesiredVersion).Msg("fleet: node heartbeats with INTERNAL_API_TOKEN; it is told its version but not recorded as live. A node that stays on this token after updating needs to join again to receive NODE_BROKER_TOKEN")
 	}
 	c.JSON(http.StatusOK, reply)
 }

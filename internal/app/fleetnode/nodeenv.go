@@ -137,10 +137,10 @@ func BackendURL() string {
 	return backend
 }
 
-// ErrBackendNotHTTPS refuses to hand a node a cleartext control-plane address on hosted production.
-var ErrBackendNotHTTPS = errors.New("hosted production hands nodes only an https control-plane address; set ENCRYPTED_KEYS_BACKEND_URL to an https:// URL every node can reach")
+// ErrBackendNotHTTPS names a cleartext control-plane address handed to nodes on hosted production.
+var ErrBackendNotHTTPS = errors.New("hosted production hands nodes a cleartext control-plane address; keep ENCRYPTED_KEYS_BACKEND_URL on a private network or set it to an https:// URL")
 
-// CheckBackendURL requires https on hosted production unless the address is this machine.
+// CheckBackendURL reports a non-https, non-loopback control-plane address on hosted production.
 func CheckBackendURL() error {
 	backend := BackendURL()
 	if backend == "" || !config.HostedProduction() {

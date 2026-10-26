@@ -674,8 +674,8 @@ func TestFleetNodeEnvIsHandedOnlyToItsOwnNode(t *testing.T) {
 	}
 }
 
-// Hosted production hands a node only an https control-plane address; a self-host on a LAN keeps http.
-func TestNodeBackendURLMustBeHTTPSOnHostedProduction(t *testing.T) {
+// A cleartext control-plane address is reported on hosted production; a self-host on a LAN is not.
+func TestNodeBackendURLIsReportedWhenCleartextOnHostedProduction(t *testing.T) {
 	for _, tc := range []struct {
 		mode, appEnv, url string
 		ok                bool
@@ -695,16 +695,4 @@ func TestNodeBackendURLMustBeHTTPSOnHostedProduction(t *testing.T) {
 		}
 	}
 
-	t.Setenv("DEPLOYMENT_MODE", "cloud")
-	t.Setenv("APP_ENV", "prod")
-	t.Setenv("ENCRYPTED_KEYS_BACKEND_URL", "http://api.example.com")
-	id := uuid.New()
-	h := &Handler{FleetNodes: fleetnode.New(&joinNodes{nodeID: id, role: models.NodeRoleWorker}, nil, joinSettings{})}
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/internal/fleet/node-env?node_id="+id.String()+"&role=worker", nil)
-	h.InternalFleetNodeEnv(c)
-	if w.Code != http.StatusServiceUnavailable || strings.Contains(w.Body.String(), "WARMBLY_NODE_ID") {
-		t.Fatalf("a cleartext control-plane address was handed out on hosted production: %d", w.Code)
-	}
 }
