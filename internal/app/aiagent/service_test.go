@@ -125,9 +125,10 @@ func TestLoadTranscriptAnswersEveryToolCallInPlace(t *testing.T) {
 	result := func(id string) generation.AgentMessage {
 		return generation.AgentMessage{Role: "tool", ToolCallID: id, Content: id}
 	}
-	// A resumed run that older releases saved under one timestamp, read back shuffled.
+	// A call paused for approval, then the resumed run older releases saved under one timestamp, read back shuffled.
 	s := &service{repo: transcriptRepo{rows: []models.AgentMessageRow{
 		row(asked, generation.AgentMessage{Role: "user", Content: "find leads"}),
+		row(asked.Add(30*time.Second), call("a")),
 		row(ran, generation.AgentMessage{Role: "assistant", Content: "done"}),
 		row(ran, result("b")),
 		row(ran, call("c")),
@@ -139,16 +140,16 @@ func TestLoadTranscriptAnswersEveryToolCallInPlace(t *testing.T) {
 	if xerr != nil {
 		t.Fatal(xerr)
 	}
-	if len(got) != 7 || got[0].Content != "find leads" {
+	if len(got) != 8 || got[0].Content != "find leads" || got[1].ToolCalls[0].ID != "a" {
 		t.Fatalf("earlier rows moved: %v", got)
 	}
-	if got[1].ToolCallID != "a" {
+	if got[2].ToolCallID != "a" {
 		t.Fatalf("result for the approved call is not first: %v", got)
 	}
-	if got[6].Content != "done" {
+	if got[7].Content != "done" {
 		t.Fatalf("reply is not last: %v", got)
 	}
-	for i := 2; i < 6; i += 2 {
+	for i := 3; i < 7; i += 2 {
 		if len(got[i].ToolCalls) != 1 || got[i+1].ToolCallID != got[i].ToolCalls[0].ID {
 			t.Fatalf("tool call at %d is not followed by its result: %v", i, got)
 		}
