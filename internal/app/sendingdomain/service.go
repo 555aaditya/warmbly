@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
+	"github.com/warmbly/warmbly/internal/app/customhost"
 	"github.com/warmbly/warmbly/internal/app/owndomain"
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
@@ -82,9 +83,14 @@ type Service struct {
 	own       *owndomain.Resolver
 	resolver  Resolver
 	proof     *domainproof.Prover
+	// customHosts gates a new tracking host on the workspace's TXT proof.
+	customHosts *customhost.Checker
 	// target is this instance's tracking host; "" when tracking is not set up.
 	target func() string
 }
+
+// WireCustomHosts attaches the custom-domain ownership checks.
+func (s *Service) WireCustomHosts(c *customhost.Checker) { s.customHosts = c }
 
 func NewService(redirects repository.DomainRedirectRepository, mailboxes Mailboxes, resolver Resolver, proof *domainproof.Prover) *Service {
 	if resolver == nil {
@@ -215,9 +221,10 @@ func (s *Service) ApplyTracking(ctx context.Context, orgID uuid.UUID, domain, ho
 	}
 	status := &models.TrackingDomainStatus{TrackingDomain: host, CNAMETarget: s.target()}
 	if host != "" {
-		res := trackdns.VerifyWith(ctx, s.resolver, host, s.target())
+		res := s.customHosts.Gate(ctx, trackdns.VerifyWith(ctx, s.resolver, host, s.target()), orgID, false)
 		status.TrackingDomainVerified, status.Status, status.Message, status.Observed = res.Verified, res.Code, res.Reason, res.Observed
 		status.TrackingHostUnresolvable = res.TargetUnresolvable
+		status.TXTName, status.TXTValue = s.customHosts.Record(orgID, host)
 		if res.Verified {
 			now := time.Now().UTC()
 			status.TrackingDomainVerifiedAt = &now
@@ -709,7 +716,14 @@ func (s *Service) writeTrackingCNAME(ctx context.Context, orgID uuid.UUID, domai
 	if s.vendors == nil {
 		return errx.ErrNotFound
 	}
-	return s.vendors.UpsertDNS(ctx, orgID, domain, "CNAME", host, target)
+	if xerr := s.vendors.UpsertDNS(ctx, orgID, domain, "CNAME", host, target); xerr != nil {
+		return xerr
+	}
+	// Best effort: a vendor that cannot write TXT leaves the ownership record to the customer.
+	if name, value := s.customHosts.Record(orgID, host); name != "" && !s.customHosts.Holds(ctx, orgID, host) {
+		_ = s.vendors.UpsertDNS(ctx, orgID, domain, "TXT", name, value)
+	}
+	return nil
 }
 
 // AutoRedirect sets a domain's root redirect the easiest way available: the

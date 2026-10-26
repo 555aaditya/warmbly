@@ -364,7 +364,13 @@ pub async fn track_click(
         return (StatusCode::TOO_MANY_REQUESTS, "Slow down").into_response();
     }
 
-    let link = match state.links.resolve(&link_id, &source).await {
+    // The backend answers a custom host only for its own workspace's tickets.
+    let host = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .and_then(normalize_host)
+        .unwrap_or_default();
+    let link = match state.links.resolve_on(&link_id, &source, &host).await {
         Resolution::Found(link) => link,
         Resolution::NotFound => {
             return (StatusCode::NOT_FOUND, "Unknown link").into_response();

@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/app/cipher"
+	"github.com/warmbly/warmbly/internal/app/customhost"
 	"github.com/warmbly/warmbly/internal/app/feature"
 	"github.com/warmbly/warmbly/internal/app/mailcred"
 	warmupapp "github.com/warmbly/warmbly/internal/app/warmup"
@@ -234,6 +235,8 @@ type emailService struct {
 	importSignin ImportSigninResolver
 	// avatars keeps the photo a connect handshake returns. Optional.
 	avatars AvatarSaver
+	// customHosts gates a new tracking domain on the workspace's TXT proof.
+	customHosts *customhost.Checker
 }
 
 // WireUnibox attaches the unified inbox store, for the purge that follows a

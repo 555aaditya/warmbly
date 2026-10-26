@@ -206,7 +206,12 @@ func (s *emailService) UpdateTrackingDomain(ctx context.Context, orgID, emailAcc
 		}
 	}
 
-	status := s.resolveTrackingDomain(ctx, domain)
+	account, xerr := s.Get(ctx, orgID, emailAccountID)
+	if xerr != nil {
+		return nil, xerr
+	}
+	// Saving the host the mailbox already verified keeps it verified on the CNAME alone.
+	status := s.resolveTrackingDomain(ctx, orgID, domain, account.TrackingDomainVerified && account.TrackingDomain == domain)
 
 	if err := s.emailRepository.UpdateTrackingDomain(ctx, orgID, emailAccountID, domain, status.TrackingDomainVerified, status.TrackingDomainVerifiedAt); err != nil {
 		return nil, err
@@ -249,7 +254,7 @@ func (s *emailService) GetTrackingDomain(ctx context.Context, orgID, emailAccoun
 		status.Message = fmt.Sprintf("%s has not verified yet. Check it again to see what DNS returns for it right now.", account.TrackingDomain)
 	}
 
-	return status, nil
+	return s.withProofRecord(status, orgID), nil
 }
 
 // VerifyTrackingDomain re-resolves the stored domain and persists the verdict.
@@ -261,7 +266,7 @@ func (s *emailService) VerifyTrackingDomain(ctx context.Context, orgID, emailAcc
 		return nil, xerr
 	}
 
-	status := s.resolveTrackingDomain(ctx, account.TrackingDomain)
+	status := s.resolveTrackingDomain(ctx, orgID, account.TrackingDomain, account.TrackingDomainVerified)
 	// Re-verifying re-resolves; it never rewrites the stored value.
 	status.TrackingDomain = account.TrackingDomain
 
@@ -269,17 +274,17 @@ func (s *emailService) VerifyTrackingDomain(ctx context.Context, orgID, emailAcc
 		return nil, err
 	}
 
-	return status, nil
+	return s.withProofRecord(status, orgID), nil
 }
 
 // trackingStatusPending marks stored state that has not been re-resolved, as
 // opposed to the codes a live lookup produces.
 const trackingStatusPending = "pending"
 
-// resolveTrackingDomain runs the live lookup and renders it as an API status.
-func (s *emailService) resolveTrackingDomain(ctx context.Context, domain string) *models.TrackingDomainStatus {
+// resolveTrackingDomain runs the live lookup and renders it as an API status; held skips the TXT proof for a host the mailbox already verified.
+func (s *emailService) resolveTrackingDomain(ctx context.Context, orgID, domain string, held bool) *models.TrackingDomainStatus {
 	target := config.TrackingHostname()
-	res := trackdns.Verify(ctx, domain, target)
+	res := s.gateTrackingDomain(ctx, orgID, trackdns.Verify(ctx, domain, target), held)
 
 	status := &models.TrackingDomainStatus{
 		TrackingDomain:           res.Domain,
@@ -294,7 +299,7 @@ func (s *emailService) resolveTrackingDomain(ctx context.Context, domain string)
 		now := time.Now().UTC()
 		status.TrackingDomainVerifiedAt = &now
 	}
-	return status
+	return s.withProofRecord(status, orgID)
 }
 
 // CheckDomainAuth runs a live SPF/DKIM/DMARC lookup for a mailbox's sending
