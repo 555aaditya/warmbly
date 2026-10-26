@@ -2493,13 +2493,18 @@ pull_failed() {
               "Releases: https://github.com/$REPO/releases"
 }
 
+# pull_in_dir runs in a subshell so the cd never leaks; the directory is never part of a shell string.
+pull_in_dir() (
+    cd "$DIR" && composec pull
+)
+
 # pull_images shows one row per image, flipping to a tick the moment that image
 # lands. The pull itself runs in the background, so this is compose's own
 # parallel pull with a readable face on it rather than a serial one.
 pull_images() {
     _refs=$(cd "$DIR" && composec config --images 2>/dev/null | sort -u)
     if [ -z "$_refs" ]; then
-        spin "Pulling images" sh -c "cd '$DIR' && $COMPOSE pull" || pull_failed
+        spin "Pulling images" pull_in_dir || pull_failed
         return 0
     fi
     _total=$(printf '%s\n' "$_refs" | wc -l | tr -d ' ')
