@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -12,6 +13,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/aitools"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/pkg/generation"
+	"github.com/warmbly/warmbly/internal/repository"
 )
 
 func testRegistry() *aitools.Registry {
@@ -101,26 +103,52 @@ func TestForReaderWithholdsResultsOfToolsTheReaderCannotRun(t *testing.T) {
 	}
 }
 
-func TestOrderTiedMessagesAnswersEveryToolCallInPlace(t *testing.T) {
+type transcriptRepo struct {
+	repository.AgentRepository
+	rows []models.AgentMessageRow
+}
+
+func (r transcriptRepo) LoadTranscript(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) ([]models.AgentMessageRow, error) {
+	return r.rows, nil
+}
+
+func TestLoadTranscriptAnswersEveryToolCallInPlace(t *testing.T) {
+	asked := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	ran := asked.Add(time.Minute)
+	row := func(at time.Time, m generation.AgentMessage) models.AgentMessageRow {
+		b, _ := json.Marshal(m)
+		return models.AgentMessageRow{Role: m.Role, Content: b, CreatedAt: at}
+	}
 	call := func(id string) generation.AgentMessage {
 		return generation.AgentMessage{Role: "assistant", ToolCalls: []generation.ToolCall{{ID: id, Name: "list_contacts"}}}
 	}
 	result := func(id string) generation.AgentMessage {
 		return generation.AgentMessage{Role: "tool", ToolCallID: id, Content: id}
 	}
-	reply := generation.AgentMessage{Role: "assistant", Content: "done"}
-	// A resumed run saved in one transaction: the approved call's result, two tool rounds, the reply.
-	got := orderTiedMessages([]generation.AgentMessage{reply, result("b"), call("c"), result("c"), result("a"), call("b")})
-	if len(got) != 6 {
-		t.Fatalf("got %d messages, want 6", len(got))
+	// A resumed run that older releases saved under one timestamp, read back shuffled.
+	s := &service{repo: transcriptRepo{rows: []models.AgentMessageRow{
+		row(asked, generation.AgentMessage{Role: "user", Content: "find leads"}),
+		row(ran, generation.AgentMessage{Role: "assistant", Content: "done"}),
+		row(ran, result("b")),
+		row(ran, call("c")),
+		row(ran, result("c")),
+		row(ran, result("a")),
+		row(ran, call("b")),
+	}}}
+	got, xerr := s.loadTranscript(context.Background(), uuid.New(), uuid.New(), uuid.New())
+	if xerr != nil {
+		t.Fatal(xerr)
 	}
-	if got[0].ToolCallID != "a" {
-		t.Fatalf("result for the earlier call is not first: %v", got)
+	if len(got) != 7 || got[0].Content != "find leads" {
+		t.Fatalf("earlier rows moved: %v", got)
 	}
-	if got[5].Content != "done" {
+	if got[1].ToolCallID != "a" {
+		t.Fatalf("result for the approved call is not first: %v", got)
+	}
+	if got[6].Content != "done" {
 		t.Fatalf("reply is not last: %v", got)
 	}
-	for i := 1; i < 5; i += 2 {
+	for i := 2; i < 6; i += 2 {
 		if len(got[i].ToolCalls) != 1 || got[i+1].ToolCallID != got[i].ToolCalls[0].ID {
 			t.Fatalf("tool call at %d is not followed by its result: %v", i, got)
 		}
