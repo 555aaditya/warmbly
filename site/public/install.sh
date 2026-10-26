@@ -1276,10 +1276,9 @@ SMTP_SECURITY=$SMTP_SECURITY
 MAILEOF
     else
         cat <<MAILEOF
-# log: login codes are PRINTED TO THE BACKEND LOG instead of being sent;
-# reset and invitation links there have their tokens redacted. Fine for a
-# trial, not for a team.
-#   docker compose -p warmbly logs backend | grep -i code
+# log: platform mail is written to the backend log instead of being sent.
+# No sign-in or signup waits on an emailed code, and reset and invitation
+# links there are withheld. Fine for a trial, not for a team.
 # Switch to a relay by setting MAIL_TRANSPORT=smtp and the SMTP_* values.
 MAIL_TRANSPORT=log
 EMAIL_ADDRESS=noreply@$HOSTNAME_ANSWER
@@ -2767,9 +2766,7 @@ finale() {
     if [ "$MAIL_MODE" = "log" ]; then
         say ""
         out "  ${AMBER}!${R} ${B}Platform mail goes to the log${R}"
-        note "Login codes are printed, not sent. Reset and invitation links are withheld."
-        note "From $DIR:"
-        note "  docker compose -p warmbly logs backend | grep -i code"
+        note "No sign-in waits on an emailed code. Reset and invitation links are withheld."
         note "Set MAIL_TRANSPORT=smtp in .env before anyone else uses this instance."
     fi
 
