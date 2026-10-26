@@ -34,6 +34,7 @@ func securityChecks() []check {
 		{id: "dev_mode_public", run: checkDevModePublic},
 		{id: "unsafe_webhook_urls", run: checkUnsafeWebhookURLs},
 		{id: "tls_verification_off", run: checkTLSVerificationOff},
+		{id: "twofa_secret_short", run: checkTwoFASecretShort},
 	}
 }
 
@@ -204,4 +205,15 @@ func checkTLSVerificationOff(ctx context.Context, d Deps, in Input) *Finding {
 			"Unset the setting and restart to verify certificates again; a mailbox on a server with its own certificate "+
 			"can trust that server in its own settings instead, which pins the certificate.", vars, subject),
 		docsMail)
+}
+
+func checkTwoFASecretShort(ctx context.Context, d Deps, in Input) *Finding {
+	if !config.TwoFASecretShort() {
+		return nil
+	}
+	return result(CategorySecurity, SeverityWarning, "TWOFA_SECRET is short",
+		fmt.Sprintf("TWOFA_SECRET is shorter than %d characters, and it seals every enrolled TOTP secret. "+
+			"Generate a replacement with `warmblyctl keys generate TWOFA_SECRET`, move the current value into TWOFA_READ_SECRETS, "+
+			"restart, then run `warmblyctl keys reseal --apply` so existing enrollments keep working.", config.MinAuthSecretLength),
+		docsSecrets)
 }

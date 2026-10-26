@@ -176,6 +176,10 @@ The request that loaded this page carried an `X-Forwarded-For` header while `TRU
 
 `MAIL_TLS_INSECURE` or `SMTP_TLS_INSECURE_SKIP_VERIFY` set on hosted production has no effect, and the check reports it at Info so the variable can be removed. Mailbox and platform relay certificates are verified there; a mailbox on a server with a self-signed or private certificate is trusted through its own [certificate choice](/guides/mailboxes/#servers-with-their-own-certificate), which pins that server's certificate.
 
+### twofa_secret_short
+
+`TWOFA_SECRET` is set to a value shorter than 32 characters. It seals every enrolled TOTP secret, so it should be as strong as `AUTH_SECRET`. A self-hosted or development instance keeps starting and logs a warning at boot; hosted production refuses to start. Generate a replacement with `warmblyctl keys generate TWOFA_SECRET`, move the current value into `TWOFA_READ_SECRETS`, restart, then run [`warmblyctl keys reseal --apply`](/development/warmblyctl/#keys) so existing enrollments keep working.
+
 ## URLs and reachability
 
 The dashboard, API and admin panel may use different hosts. `APP_URL` names the customer dashboard used in emailed links, not the API or admin panel. The checks do not compare it to the backend request's host or the admin panel's origin; HTTPS and CORS checks still apply.

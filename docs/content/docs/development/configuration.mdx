@@ -195,7 +195,7 @@ TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12
 | `WARMBLY_BOOTSTRAP_PASSWORD_HASH` | Argon2id PHC string for that owner, as `warmblyctl hash-password` prints it. Preferred over the plaintext form. A malformed hash, or one whose cost parameters are below `m=65536,t=3,p=2` with a 16-byte salt and 32-byte key, is refused and no owner is created | unset | yes |
 | `WARMBLY_BOOTSTRAP_PASSWORD` | Plaintext convenience form. Held to the same rules as any password (length, breached list); one that fails them is refused and no owner is created. Warns at boot, and leaves a password in your process environment | unset | yes |
 | `WARMBLY_BOOTSTRAP_ORG` | Name of the organization created with that owner. A value that breaks the [naming rules](/api/error-codes/#name-refusals) is ignored with a warning | derived from the name | yes |
-| `TWOFA_SECRET` | Key that encrypts stored TOTP secrets. Falls back to `AUTH_SECRET`. Keep matching `TWOFA_READ_SECRETS` while existing enrollments are resealed under a replacement key | `AUTH_SECRET` | yes |
+| `TWOFA_SECRET` | Key that encrypts stored TOTP secrets. Falls back to `AUTH_SECRET`. Keep matching `TWOFA_READ_SECRETS` while existing enrollments are resealed under a replacement key. Use at least 32 characters: a shorter value logs a warning and raises an instance health finding on a self-hosted or development instance, and hosted production refuses to start with one | `AUTH_SECRET` | yes |
 | `WEBAUTHN_RP_ID` | Passkey relying party id. Derived from `APP_URL` when unset. Changing it invalidates every enrolled passkey | derived | yes |
 | `WEBAUTHN_RP_ORIGINS` | Origins accepted for passkey ceremonies | derived from `APP_URL` | yes |
 | `WEBAUTHN_RP_DISPLAY_NAME` | The name the passkey prompt shows | `Warmbly` | yes |
