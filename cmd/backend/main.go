@@ -587,12 +587,12 @@ func main() {
 		// when they cannot log in.
 		if perr := mailTransport.Preflight(ctx); perr != nil {
 			log.Printf("Warning: platform mail preflight FAILED (%s): %v", mailTransport.Description, perr)
-			log.Printf("Warning: login codes, password resets and invitations will not be delivered. Set MAIL_TRANSPORT=log to read login codes from these logs instead. Reset and invitation links are not logged outside APP_ENV=dev: copy an invitation link from its row under Settings > Members > Pending invitations, and reset a password with `warmblyctl user reset-password --email <address>`.")
+			log.Printf("Warning: login codes, password resets and invitations will not be delivered. Under MAIL_TRANSPORT=log no sign-in or signup waits on an emailed code. Reset and invitation links are not logged outside APP_ENV=dev: copy an invitation link from its row under Settings > Members > Pending invitations, and reset a password with `warmblyctl user reset-password --email <address>`.")
 		} else {
 			log.Printf("Platform mail transport: %s", mailTransport.Description)
 		}
 		if !mailTransport.Delivers {
-			log.Printf("Warning: MAIL_TRANSPORT=log: every platform email is printed here and never delivered. Login codes appear in full. Outside APP_ENV=dev every link's query string, where reset and invitation tokens travel, is replaced with ?[redacted]: copy an invitation link from its row under Settings > Members > Pending invitations, and reset a password with `warmblyctl user reset-password --email <address>`. Do not use this on a deployment other people can reach.")
+			log.Printf("Warning: MAIL_TRANSPORT=log: every platform email is printed here and never delivered, so no sign-in or signup waits on an emailed code. Outside APP_ENV=dev every link's query string and fragment, where reset and invitation tokens travel, is replaced with ?[redacted]: copy an invitation link from its row under Settings > Members > Pending invitations, and reset a password with `warmblyctl user reset-password --email <address>`. Do not use this on a deployment other people can reach.")
 		}
 
 		authCfg, err := cfg.LoadAuthConfig(ctx)

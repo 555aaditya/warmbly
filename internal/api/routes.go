@@ -385,10 +385,7 @@ func Run(
 	}
 
 	auth := v1.Group("/auth")
-	// Every unauthenticated auth route shares one per-IP budget. Nothing
-	// throttled these before: RateLimitMiddleware is keyed on the user id and
-	// short-circuits when there is none, so password guessing was unbounded and
-	// each guess cost a 64 MiB Argon2 hash.
+	// Every unauthenticated auth route shares one per-IP budget, which bounds password guessing and its Argon2 cost.
 	auth.Use(m.AuthIPRateLimitMiddleware())
 	{
 		// Public deployment capabilities. Deliberately outside the rate limiter
@@ -514,10 +511,7 @@ func Run(
 
 		// Passkey enrollment + management require an authenticated session.
 		//
-		// Registering a passkey adds a credential that signs in on its own, so
-		// it is a sensitive change in the CASA 2.4.1 sense: a stolen token must
-		// not be enough to leave a permanent way back in. Listing and renaming
-		// are not.
+		// Adding or removing a passkey changes who can get in, so it needs a fresh confirmation; listing and renaming do not.
 		protectedAuth.POST("/passkey/register/begin", middleware.RequireFreshAuth(), h.PasskeyRegisterBegin)
 		protectedAuth.POST("/passkey/register/finish", middleware.RequireFreshAuth(), h.PasskeyRegisterFinish)
 		protectedAuth.GET("/passkey/credentials", h.PasskeyListCredentials)
@@ -1088,7 +1082,7 @@ func Run(
 				apiKeys.GET("/usage/summary", h.GetAPIKeyUsageSummary)
 				apiKeys.GET("/usage/analytics", h.GetAPIKeyAnalytics)
 				apiKeys.GET("/:id", h.GetAPIKey)
-				apiKeys.PATCH("/:id", middleware.RefuseOAuth(), h.UpdateAPIKey)
+				apiKeys.PATCH("/:id", middleware.RefuseOAuth(), middleware.RequireFreshAuth(), h.UpdateAPIKey)
 				apiKeys.DELETE("/:id", middleware.RefuseOAuth(), h.RevokeAPIKey)
 				// Revoking ends a key; deleting removes the row and its usage
 				// logs. Separate paths so neither can be reached by accident.
@@ -1196,13 +1190,13 @@ func Run(
 			webhooks.Use(m.RequireOrganization(), m.RequireAccess(models.PermManageSettings, models.APIPermWebhooks), m.RateLimitMiddleware(models.RateLimitWrite))
 			{
 				webhooks.GET("", h.ListWebhookEndpoints)
-				webhooks.POST("", h.CreateWebhookEndpoint)
+				webhooks.POST("", middleware.RequireFreshAuth(), h.CreateWebhookEndpoint)
 				// Discovery + cross-endpoint views (static paths; sit beside :id).
 				webhooks.GET("/event-types", h.ListWebhookEventCatalog)
 				webhooks.GET("/deliveries", h.ListWebhookDeliveries)
 				webhooks.POST("/deliveries/:deliveryId/redeliver", h.RedeliverWebhookDelivery)
 				webhooks.GET("/throttle-drops", h.ListWebhookDrops)
-				webhooks.PATCH("/:id", h.UpdateWebhookEndpoint)
+				webhooks.PATCH("/:id", middleware.RequireFreshAuth(), h.UpdateWebhookEndpoint)
 				webhooks.DELETE("/:id", h.DeleteWebhookEndpoint)
 				webhooks.POST("/:id/rotate-secret", middleware.RequireFreshAuth(), h.RotateWebhookSecret)
 				webhooks.POST("/:id/verify", h.VerifyWebhookEndpoint)
@@ -1556,7 +1550,7 @@ func Run(
 				org.GET("/members", m.RequireOrganization(), h.GetMembers)
 				org.POST("/members/invite", m.RequireOrganization(), m.RequirePermission(models.PermManageTeam), middleware.RequireFreshAuth(), h.InviteMember)
 				org.PATCH("/members/:id", m.RequireOrganization(), m.RequirePermission(models.PermManageTeam), middleware.RequireFreshAuth(), h.UpdateMemberRole)
-				org.DELETE("/members/:id", m.RequireOrganization(), m.RequirePermission(models.PermManageTeam), h.RemoveMember)
+				org.DELETE("/members/:id", m.RequireOrganization(), m.RequirePermission(models.PermManageTeam), middleware.RequireFreshAuth(), h.RemoveMember)
 				// Resource scope: which campaigns, folders and mailboxes a member's role applies to.
 				org.GET("/members/:id/access", m.RequireOrganization(), m.RequirePermission(models.PermManageTeam), h.GetMemberAccess)
 				org.PUT("/members/:id/access", m.RequireOrganization(), m.RequirePermission(models.PermManageTeam), middleware.RequireFreshAuth(), h.SetMemberAccess)
@@ -1564,9 +1558,9 @@ func Run(
 
 				// Custom roles: named permission sets assignable to members.
 				org.GET("/roles", m.RequireOrganization(), h.ListOrganizationRoles)
-				org.POST("/roles", m.RequireOrganization(), m.RequirePermission(models.PermManageTeam), h.CreateOrganizationRole)
-				org.PATCH("/roles/:id", m.RequireOrganization(), m.RequirePermission(models.PermManageTeam), h.UpdateOrganizationRole)
-				org.DELETE("/roles/:id", m.RequireOrganization(), m.RequirePermission(models.PermManageTeam), h.DeleteOrganizationRole)
+				org.POST("/roles", m.RequireOrganization(), m.RequirePermission(models.PermManageTeam), middleware.RequireFreshAuth(), h.CreateOrganizationRole)
+				org.PATCH("/roles/:id", m.RequireOrganization(), m.RequirePermission(models.PermManageTeam), middleware.RequireFreshAuth(), h.UpdateOrganizationRole)
+				org.DELETE("/roles/:id", m.RequireOrganization(), m.RequirePermission(models.PermManageTeam), middleware.RequireFreshAuth(), h.DeleteOrganizationRole)
 
 				org.GET("/invitations", m.RequireOrganization(), m.RequirePermission(models.PermManageTeam), h.GetPendingInvitations)
 				org.DELETE("/invitations/:id", m.RequireOrganization(), m.RequirePermission(models.PermManageTeam), h.CancelInvitation)
@@ -1696,7 +1690,7 @@ func Run(
 				// dashboard has no other way to learn its price or reach a
 				// checkout for it.
 				poolLink.GET("/offer", h.PoolLinkOffer)
-				poolLink.POST("/checkout", m.RequireOrganization(), m.RequirePermission(models.PermManageBilling), h.PoolLinkCheckout)
+				poolLink.POST("/checkout", m.RequireOrganization(), m.RequirePermission(models.PermManageBilling), middleware.RequireFreshAuth(), h.PoolLinkCheckout)
 				poolLink.GET("/instances", m.RequireOrganization(), m.RequirePermission(models.PermManageSettings), h.PoolLinkListInstances)
 				poolLink.DELETE("/instances/:id", m.RequireOrganization(), m.RequirePermission(models.PermManageSettings), h.PoolLinkRevokeInstance)
 			}
@@ -1782,12 +1776,12 @@ func Run(
 				subscriptions.GET("/limits", h.GetSubscriptionLimits)
 				subscriptions.GET("/trial", h.GetTrialStatus)
 				subscriptions.GET("/features", h.GetFeatureStatus)
-				subscriptions.POST("/checkout", m.RequireOrganization(), m.RequirePermission(models.PermManageBilling), h.CreateCheckoutSession)
+				subscriptions.POST("/checkout", m.RequireOrganization(), m.RequirePermission(models.PermManageBilling), middleware.RequireFreshAuth(), h.CreateCheckoutSession)
 				subscriptions.POST("/discount/validate", h.ValidateDiscountCode)
-				subscriptions.POST("/portal", m.RequireOrganization(), m.RequirePermission(models.PermManageBilling), h.CreateBillingPortalSession)
-				subscriptions.POST("/cancel", m.RequireOrganization(), m.RequirePermission(models.PermManageBilling), h.CancelSubscription)
+				subscriptions.POST("/portal", m.RequireOrganization(), m.RequirePermission(models.PermManageBilling), middleware.RequireFreshAuth(), h.CreateBillingPortalSession)
+				subscriptions.POST("/cancel", m.RequireOrganization(), m.RequirePermission(models.PermManageBilling), middleware.RequireFreshAuth(), h.CancelSubscription)
 
-				subscriptions.POST("/change-plan", m.RequireOrganization(), m.RequirePermission(models.PermManageBilling), h.ChangePlan)
+				subscriptions.POST("/change-plan", m.RequireOrganization(), m.RequirePermission(models.PermManageBilling), middleware.RequireFreshAuth(), h.ChangePlan)
 				subscriptions.GET("/preview-change", m.RequireOrganization(), m.RequirePermission(models.PermManageBilling), h.PreviewPlanChange)
 
 				// Promo code redemption history for the current org (better
@@ -1798,11 +1792,11 @@ func Run(
 				// manage_billing-gated; purchase fulfillment is webhook-only.
 				subscriptions.GET("/credits", m.RequireOrganization(), m.RequirePermission(models.PermManageBilling), h.GetCreditBalance)
 				subscriptions.GET("/credits/transactions", m.RequireOrganization(), m.RequirePermission(models.PermManageBilling), h.ListCreditTransactions)
-				subscriptions.POST("/credits/checkout", m.RequireOrganization(), m.RequirePermission(models.PermManageBilling), h.CreateCreditCheckoutSession)
+				subscriptions.POST("/credits/checkout", m.RequireOrganization(), m.RequirePermission(models.PermManageBilling), middleware.RequireFreshAuth(), h.CreateCreditCheckoutSession)
 				// AI usage overview + spend controls (limits, alerts, auto top-up).
 				subscriptions.GET("/credits/usage", m.RequireOrganization(), m.RequirePermission(models.PermManageBilling), h.GetCreditUsage)
 				subscriptions.GET("/credits/settings", m.RequireOrganization(), m.RequirePermission(models.PermManageBilling), h.GetCreditSettings)
-				subscriptions.PATCH("/credits/settings", m.RequireOrganization(), m.RequirePermission(models.PermManageBilling), h.UpdateCreditSettings)
+				subscriptions.PATCH("/credits/settings", m.RequireOrganization(), m.RequirePermission(models.PermManageBilling), middleware.RequireFreshAuth(), h.UpdateCreditSettings)
 
 				// Referral program (owner-scoped, gated like the rest of billing).
 				subscriptions.GET("/referral", m.RequireOrganization(), m.RequirePermission(models.PermManageBilling), h.GetReferralSummary)

@@ -233,10 +233,8 @@ func (s *authService) finishLoginWith(ctx context.Context, userID uuid.UUID, ipa
 // finishLoginAs is everything that happens once a caller has proved they own
 // the account: ban enforcement, the 2FA gate, and session issuance.
 //
-// Every login path goes through it. Previously only the password path checked
-// 2FA, so a user who enrolled TOTP could still be signed in without it through
-// Apple, Google or a passkey, and the browser OAuth paths skipped the ban check
-// as well.
+// Every login path goes through it, so the ban check and the 2FA gate hold for
+// password, Apple, Google, passkey and browser OAuth sign-ins alike.
 func (s *authService) finishLoginAs(ctx context.Context, userID uuid.UUID, ipaddr, userAgent, provider string) (*models.LoginResult, *errx.Error) {
 	return s.finishLoginAsWith(ctx, userID, ipaddr, userAgent, provider, nil)
 }

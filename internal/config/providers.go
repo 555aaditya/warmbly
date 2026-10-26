@@ -136,6 +136,15 @@ func DevEnv() bool {
 	return false
 }
 
+// ExplicitDevelopment reports whether APP_ENV names development; unlike DevEnv, unset is not.
+func ExplicitDevelopment() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV"))) {
+	case "dev", "development", "local":
+		return true
+	}
+	return false
+}
+
 // HostedProduction reports a hosted (not self-host) instance outside development.
 func HostedProduction() bool { return !SelfHosted() && !DevEnv() }
 
