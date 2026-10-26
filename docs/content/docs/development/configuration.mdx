@@ -269,7 +269,7 @@ Platform mail is the product's own outbound: registration codes, password resets
 | `SMTP_SECURITY` | `starttls` (587), `tls` (465) or `none` (25) | `starttls` | yes |
 | `SMTP_AUTH` | `auto`, `plain`, `login`, `cram-md5` or `none` | `auto` | yes |
 | `SMTP_EHLO_NAME` | EHLO name presented to the relay | the sender domain | yes |
-| `SMTP_TLS_INSECURE_SKIP_VERIFY` | Skips certificate verification. Only for a relay with a private certificate authority | `false` | yes |
+| `SMTP_TLS_INSECURE_SKIP_VERIFY` | Skips certificate verification. Only for a relay with a private certificate authority. Honoured on a self-hosted or development instance and ignored on hosted production | `false` | yes |
 | `EMAIL_BRAND_NAME` | The product name in transactional subjects and the header | `Warmbly` | yes |
 | `EMAIL_BRAND_LEGAL_ENTITY`, `EMAIL_BRAND_COMPANY_NUMBER`, `EMAIL_BRAND_PLACE_OF_REG`, `EMAIL_BRAND_ADDRESS` | The identification line in the transactional footer | unset on a self-host, which renders no line | yes |
 | `EMAIL_BRAND_WEBSITE_URL`, `EMAIL_BRAND_TERMS_URL`, `EMAIL_BRAND_PRIVACY_URL`, `EMAIL_BRAND_SUPPORT_EMAIL` | The footer's links and support address | unset on a self-host, which renders no link row | yes |

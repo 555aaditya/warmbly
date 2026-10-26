@@ -168,18 +168,25 @@ func checkUnsafeWebhookURLs(ctx context.Context, d Deps, in Input) *Finding {
 }
 
 func checkTLSVerificationOff(ctx context.Context, d Deps, in Input) *Finding {
-	platform := truthy("SMTP_TLS_INSECURE_SKIP_VERIFY")
-	mailboxSet := truthy("MAIL_TLS_INSECURE")
-	// Hosted production ignores the mailbox knob; each mailbox records its own pinned opt-out.
+	// Hosted production ignores both knobs; each mailbox records its own pinned opt-out.
+	platform := config.SMTPTLSInsecureAllowed()
 	mailbox := config.MailTLSInsecureAllowed()
-	if mailboxSet && !mailbox && !platform {
-		return result(CategorySecurity, SeverityInfo, "MAIL_TLS_INSECURE is ignored",
-			"MAIL_TLS_INSECURE=true is set but hosted production ignores it, so mailbox certificates are verified. "+
-				"A mailbox on a server with a self-signed or private certificate can trust that server in its own settings, "+
-				"which pins the server's certificate. Remove the variable from the backend and worker environments to avoid confusion.",
-			docsWorkers)
-	}
 	if !platform && !mailbox {
+		switch smtpSet, mailSet := truthy("SMTP_TLS_INSECURE_SKIP_VERIFY"), truthy("MAIL_TLS_INSECURE"); {
+		case mailSet:
+			body := "MAIL_TLS_INSECURE=true is set but hosted production ignores it, so mailbox certificates are verified. " +
+				"A mailbox on a server with a self-signed or private certificate can trust that server in its own settings, " +
+				"which pins the server's certificate. Remove the variable from the backend and worker environments to avoid confusion."
+			if smtpSet {
+				body += " SMTP_TLS_INSECURE_SKIP_VERIFY=true is ignored too, so the platform mail relay's certificate is verified."
+			}
+			return result(CategorySecurity, SeverityInfo, "MAIL_TLS_INSECURE is ignored", body, docsWorkers)
+		case smtpSet:
+			return result(CategorySecurity, SeverityInfo, "SMTP_TLS_INSECURE_SKIP_VERIFY is ignored",
+				"SMTP_TLS_INSECURE_SKIP_VERIFY=true is set but hosted production ignores it, so the platform mail relay's certificate is verified. "+
+					"Remove the variable from the backend and consumer environments to avoid confusion.",
+				docsMail)
+		}
 		return nil
 	}
 

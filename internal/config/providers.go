@@ -161,6 +161,11 @@ func MailTLSInsecureAllowed() bool {
 	return isTrue(os.Getenv("MAIL_TLS_INSECURE")) && !HostedProduction()
 }
 
+// SMTPTLSInsecureAllowed reports whether SMTP_TLS_INSECURE_SKIP_VERIFY=true applies: never on hosted production.
+func SMTPTLSInsecureAllowed() bool {
+	return isTrue(os.Getenv("SMTP_TLS_INSECURE_SKIP_VERIFY")) && !HostedProduction()
+}
+
 // MailvendorSandboxURL points every inbox vendor client at the sandbox's mock
 // vendor API (<url>/<vendor>). Honoured only in development (APP_ENV dev or
 // unset), so a stray value can never send real vendor keys elsewhere.
