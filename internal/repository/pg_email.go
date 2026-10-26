@@ -793,7 +793,7 @@ type MailboxAssignment struct {
 }
 
 func (r *emailRepository) ListActiveWorkerAccounts(ctx context.Context) ([]MailboxAssignment, error) {
-	const query = `SELECT id, worker_id FROM email_accounts WHERE status = 'active'`
+	query := `SELECT id, worker_id FROM email_accounts WHERE status = 'active' AND NOT ` + instanceExecutedSQL("email_accounts.id")
 	rows, err := r.DB.Query(ctx, query)
 	if err != nil {
 		return nil, err
@@ -2805,7 +2805,7 @@ func (r *emailRepository) SetStatus(ctx context.Context, emailAccountID uuid.UUI
 
 // SetWorkerID assigns a worker to an email account
 func (r *emailRepository) SetWorkerID(ctx context.Context, emailAccountID, workerID uuid.UUID) *errx.Error {
-	query := `UPDATE email_accounts SET worker_id = $1, updated_at = NOW() WHERE id = $2`
+	query := `UPDATE email_accounts SET worker_id = $1, updated_at = NOW() WHERE id = $2 AND NOT ` + instanceExecutedSQL("email_accounts.id")
 
 	cmd, err := r.DB.Exec(ctx, query, workerID, emailAccountID)
 	if err != nil {
