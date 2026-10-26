@@ -313,6 +313,7 @@ func (h *Handler) CloudLinkAdopt(c *gin.Context) {
 func (h *Handler) InternalCloudLinkToken(c *gin.Context) {
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
+		logBrokerAccess(c, "cloud_link.token", "", false, "mailbox id is not a uuid")
 		errx.JSON(c, errx.ErrUuid)
 		return
 	}
@@ -321,23 +322,28 @@ func (h *Handler) InternalCloudLinkToken(c *gin.Context) {
 		tok, handled, xerr := h.DelegationService.AccessToken(c.Request.Context(), id)
 		if handled {
 			if xerr != nil {
+				logBrokerAccess(c, "cloud_link.token.delegated", id.String(), false, xerr.ResponseCode())
 				errx.JSON(c, xerr)
 				return
 			}
+			logBrokerAccess(c, "cloud_link.token.delegated", id.String(), true, "")
 			c.Header("Cache-Control", "no-store")
 			c.JSON(http.StatusOK, tok)
 			return
 		}
 	}
 	if h.CloudLinkService == nil {
+		logBrokerAccess(c, "cloud_link.token", id.String(), false, "instance is not linked")
 		errx.JSON(c, errx.ErrNotFound)
 		return
 	}
 	tok, xerr := h.CloudLinkService.AccessToken(c.Request.Context(), id)
 	if xerr != nil {
+		logBrokerAccess(c, "cloud_link.token", id.String(), false, xerr.ResponseCode())
 		errx.JSON(c, xerr)
 		return
 	}
+	logBrokerAccess(c, "cloud_link.token", id.String(), true, "")
 	c.Header("Cache-Control", "no-store")
 	c.JSON(http.StatusOK, tok)
 }
