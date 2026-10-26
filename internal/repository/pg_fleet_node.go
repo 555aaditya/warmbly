@@ -38,6 +38,11 @@ type FleetNodeRepository interface {
 	SetNotes(ctx context.Context, id uuid.UUID, notes string) error
 	// SetPinnedVersion holds one node at a version, or clears the pin with "".
 	SetPinnedVersion(ctx context.Context, id uuid.UUID, version string) error
+
+	// SetCredentialHash stores the hash of the node's own credential; only join writes it.
+	SetCredentialHash(ctx context.Context, id uuid.UUID, hash string) error
+	// CredentialHash returns the stored hash, "" for an unknown node or one that holds none.
+	CredentialHash(ctx context.Context, id uuid.UUID) (string, error)
 }
 
 type fleetNodeRepository struct {
@@ -205,4 +210,19 @@ func (r *fleetNodeRepository) SetPinnedVersion(ctx context.Context, id uuid.UUID
 	_, err := r.db.Exec(ctx,
 		`UPDATE fleet_nodes SET pinned_version = $2, updated_at = now() WHERE id = $1`, id, version)
 	return err
+}
+
+func (r *fleetNodeRepository) SetCredentialHash(ctx context.Context, id uuid.UUID, hash string) error {
+	_, err := r.db.Exec(ctx,
+		`UPDATE fleet_nodes SET credential_hash = $2, updated_at = now() WHERE id = $1`, id, hash)
+	return err
+}
+
+func (r *fleetNodeRepository) CredentialHash(ctx context.Context, id uuid.UUID) (string, error) {
+	var hash string
+	err := r.db.QueryRow(ctx, `SELECT credential_hash FROM fleet_nodes WHERE id = $1`, id).Scan(&hash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return hash, err
 }

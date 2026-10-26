@@ -27,7 +27,7 @@ import (
 //
 //	POST /api/v1/fleet/join                 join token   -> node id + env file
 //	POST /api/v1/internal/fleet/heartbeat   internal     -> desired version
-//	GET  /api/v1/internal/fleet/node-env    node broker  -> current env file
+//	GET  /api/v1/internal/fleet/node-env    node broker + that node's credential -> current env file
 //
 // Nothing here reaches into a machine, which is why onboarding needs no
 // keypair, no inbound port and no cloud account.
@@ -109,6 +109,10 @@ func (h *Handler) FleetJoin(c *gin.Context) {
 	}
 
 	address := heartbeatAddress(req.Address)
+	if err := fleetnode.CheckBackendURL(); err != nil {
+		errx.JSON(c, errx.NewPublic(errx.Internal, err.Error()))
+		return
+	}
 	joinVersion := h.FleetNodes.JoinVersion(ctx, nodeID)
 	if joinVersion == "" {
 		errx.JSON(c, errx.New(errx.Internal, "cannot resolve a backend-compatible node image; configure WARMBLY_VERSION for unstamped builds"))
@@ -147,11 +151,18 @@ func (h *Handler) FleetJoin(c *gin.Context) {
 		errx.JSON(c, errx.ErrServiceDown)
 		return
 	}
+	// The node's own credential: its env is handed only to a caller presenting it.
+	credential, credErr := h.FleetNodes.IssueNodeCredential(ctx, nodeID)
+	if credErr != nil {
+		errx.JSON(c, errx.ErrServiceDown)
+		return
+	}
 	c.Header("Cache-Control", "no-store")
 	c.JSON(http.StatusOK, fleetJoinResponse{
 		NodeID: nodeID,
 		Role:   string(role),
-		EnvB64: base64.StdEncoding.EncodeToString([]byte(renderNodeEnv(nodeID, role, req.Region) + "\nNODE_LOG_TOKEN=" + logToken + "\n")),
+		EnvB64: base64.StdEncoding.EncodeToString([]byte(renderNodeEnv(nodeID, role, req.Region) +
+			"\nNODE_LOG_TOKEN=" + logToken + "\nNODE_CREDENTIAL=" + credential + "\n")),
 		// Not reply.DesiredVersion: an empty answer is "no opinion" to a node
 		// that is already running something, but this one has nothing to run.
 		DesiredVersion:   joinVersion,
@@ -225,29 +236,65 @@ func (h *Handler) nodeEnvFor(ctx context.Context, id uuid.UUID, role models.Node
 	return env, fleetnode.EnvRevision(env), true
 }
 
+// nodeCredentialHeader carries the credential join issued to one node, next to the fleet bearer.
+const nodeCredentialHeader = "X-Warmbly-Node-Credential"
+
 // InternalFleetNodeEnv hands an enrolled node the env file join would write
-// today, so a rotated value reaches it by pulling instead of rejoining.
+// today, so a rotated value reaches it by pulling instead of rejoining. The
+// caller proves which node it is with that node's own credential; an updater
+// from before node credentials is answered only for a worker, whose env holds
+// nothing a fleet token holder lacks.
 func (h *Handler) InternalFleetNodeEnv(c *gin.Context) {
+	const op = "fleet.node_env"
+	c.Header("Cache-Control", "no-store")
 	if h.FleetNodes == nil {
 		c.Status(http.StatusNotFound)
 		return
 	}
 	id, err := uuid.Parse(c.Query("node_id"))
 	if err != nil {
+		logBrokerAccess(c, op, "", false, "node_id is not a uuid")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "node_id must be a uuid"})
 		return
 	}
 	role := models.NodeRole(c.Query("role"))
 	if !role.Valid() {
+		logBrokerAccess(c, op, id.String(), false, "unknown role")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "role must be worker or consumer"})
 		return
 	}
-	env, rev, ok := h.nodeEnvFor(c.Request.Context(), id, role)
+	if err := fleetnode.CheckBackendURL(); err != nil {
+		logBrokerAccess(c, op, id.String(), false, "control-plane address is not https")
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+		return
+	}
+	ctx := c.Request.Context()
+	reason := "node credential"
+	if credential := c.GetHeader(nodeCredentialHeader); credential != "" {
+		switch err := h.FleetNodes.VerifyNodeCredential(ctx, id, credential); {
+		case errors.Is(err, fleetnode.ErrNoNodeCredential), errors.Is(err, fleetnode.ErrBadNodeCredential):
+			logBrokerAccess(c, op, id.String(), false, err.Error())
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "node credential does not match this node; join this machine again"})
+			return
+		case err != nil:
+			logBrokerAccess(c, op, id.String(), false, "credential lookup failed")
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "node credential could not be checked"})
+			return
+		}
+	} else if role != models.NodeRoleWorker {
+		logBrokerAccess(c, op, id.String(), false, "consumer env requires the node credential")
+		c.JSON(http.StatusForbidden, gin.H{"error": "a consumer's env is handed only to the node itself; join this machine again so its updater presents the node credential"})
+		return
+	} else {
+		reason = "worker updater without a node credential"
+	}
+	env, rev, ok := h.nodeEnvFor(ctx, id, role)
 	if !ok {
+		logBrokerAccess(c, op, id.String(), false, "no enrolled node with that id and role")
 		c.JSON(http.StatusNotFound, gin.H{"error": "no enrolled node with that id and role"})
 		return
 	}
-	c.Header("Cache-Control", "no-store")
+	logBrokerAccess(c, op, id.String(), true, reason)
 	c.Header("X-Warmbly-Env-Revision", rev)
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(env))
 }
