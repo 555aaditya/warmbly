@@ -10,7 +10,7 @@ import (
 )
 
 // With NODE_BROKER_TOKEN set, the token the tracking and forms services hold opens no node route.
-func TestNodeRoutesRefuseTheEdgeToken(t *testing.T) {
+func TestEdgeAndNodeTokensOpenOnlyTheirOwnRouteGroups(t *testing.T) {
 	t.Setenv("INTERNAL_API_TOKEN", "edge-token")
 	t.Setenv("NODE_BROKER_TOKEN", "node-token")
 	t.Setenv("NODE_ACCEPT_INTERNAL_TOKEN", "")
