@@ -2766,7 +2766,8 @@ finale() {
     if [ "$MAIL_MODE" = "log" ]; then
         say ""
         out "  ${AMBER}!${R} ${B}Platform mail goes to the log${R}"
-        note "No sign-in waits on an emailed code. Reset and invitation links are withheld."
+        note "No sign-in waits on an emailed code."
+        note "Reset and invitation links are withheld."
         note "Set MAIL_TRANSPORT=smtp in .env before anyone else uses this instance."
     fi
 
