@@ -62,7 +62,7 @@ func TestChangePasswordRevokesBeforeStoring(t *testing.T) {
 		s.WireCredentialRevokers(revokers...)
 		uid := uuid.New()
 		t.Cleanup(func() { s.ClearReauthFailures(ctx, uid) })
-		_, xerr := s.ChangePassword(ctx, uid, &models.Session{ID: uuid.New(), UserID: uid}, "[IP]", "test",
+		_, xerr := s.ChangePassword(ctx, uid, &models.Session{ID: uuid.New(), UserID: uid}, "127.0.0.1", "test",
 			&ChangePassword{CurrentPassword: current, NewPassword: next, RevokeAPICredentials: revokeCreds})
 		return log, xerr
 	}

@@ -15,7 +15,7 @@ import (
 // Past its expires_at a session answers no request and mints no token, even
 // with an access and a refresh token whose own exp is still ahead.
 func TestExpiredSessionNeitherAuthenticatesNorRefreshes(t *testing.T) {
-	down := &cache.Cache{Client: redis.NewClient(&redis.Options{Addr: "[IP]:1", DialTimeout: 200 * time.Millisecond})}
+	down := &cache.Cache{Client: redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", DialTimeout: 200 * time.Millisecond})}
 	issued := time.Now().Add(-time.Hour).Truncate(time.Second)
 	ended := time.Now().Add(-time.Minute)
 	id, uid := uuid.New(), uuid.New()

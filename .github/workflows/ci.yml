@@ -339,7 +339,7 @@ jobs:
 
       - name: Workspace isolation regressions (PostgreSQL)
         env:
-          WARMBLY_TEST_DB: postgres://warmbly:warmbly@[IP]:5432/warmbly_test?sslmode=disable
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
         run: |
           set -euo pipefail
           go test -race -v -p 1 ./internal/api/handler ./internal/app/email ./internal/app/contact ./internal/app/contactimport ./internal/app/orgtransfer ./internal/app/form ./internal/app/websitetracking ./internal/repository ./internal/scheduler -run '^TestLive(SharedCampaignAccess|ContactTimelineAccess|TrackingDomain(WriteIsOrgScoped|VerifyRoundTrip|Sweep|BelongsToOneOrganization)|ImportLeavesAnotherWorkspaceAlone|ContactImportIsScopedToItsWorkspace|ImportRefuses(RowsOwnedByAnotherWorkspace|ReferencesIntoAnotherWorkspace)|TenantFamiliesRefuseAnotherOrganization|CampaignChildrenRefuseAnotherWorkspace|CRMSyncIntegrationsRefuseAnotherOrganization|FormLinkTokenIsBoundToItsForm|IdentifyTicketStaysInItsWorkspace|TenantMatrixRefusesAnotherOrganization|SenderResolutionStaysInsideTheCampaignOrg|SenderSchedulerNeverPicksAnotherOrgMailbox|SenderScopeWithoutAnOrganizationReachesNothing|ActiveCampaignLookupIsOrgScoped|OwnConversationDoesNotCrossWorkspaces|UniboxGetBySenderIsScopedToTheOrganization|UniboxMoveFolderIsOrgScoped|UniboxScopeMoveThreadsIsOrgScoped|ScheduledSendsAreScopedToTheMailboxOrganization|NoLabelIsReferencedAcrossWorkspaces|CampaignAudienceIsScoped)$' -count=1 | tee workspace-isolation.log
