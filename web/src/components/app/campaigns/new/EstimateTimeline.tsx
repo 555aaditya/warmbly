@@ -179,12 +179,12 @@ export default function EstimateTimeline({
                                 {showFollowUps && <Row swatch={FOLLOW} label="Follow-ups" value={h.follow_ups} />}
                             </>
                         )}
-                        {h.warmup > 0 && <Row swatch={WARMUP} label="Warmup" value={h.warmup} />}
+                        {warm(h) > 0 && <Row swatch={WARMUP} label="Warmup" value={warm(h)} />}
                     </div>
                     <div className="mt-1 pt-1 border-t border-slate-100 space-y-0.5 tabular-nums">
-                        <Row label="Sent in total" value={h.sends + h.warmup} />
-                        {mailboxes > 0 && size === 1 && h.sends + h.warmup > 0 && (
-                            <Row label="Per mailbox, about" value={Math.round((h.sends + h.warmup) / mailboxes)} muted />
+                        <Row label="Sent in total" value={h.sends + warm(h)} />
+                        {mailboxes > 0 && size === 1 && h.sends + warm(h) > 0 && (
+                            <Row label="Per mailbox, about" value={Math.round((h.sends + warm(h)) / mailboxes)} muted />
                         )}
                         {h.sending_day && <Row label="Campaign capacity" value={h.capacity} muted />}
                     </div>
