@@ -418,6 +418,12 @@ events and capture metadata; TTL retry markers age out independently. Redis
 eviction/restore may lose credential hashes: re-enroll, never fall back to shared
 broker authentication for logs.
 
+`NODE_CREDENTIAL` is a second 256-bit per-node secret, issued in the same join
+environment, that proves which node is asking for its env. Only its SHA-256 is
+kept, on the node's `fleet_nodes` row in Postgres rather than in Redis, so a
+backup of the database carries it and a Redis loss does not. A rejoin replaces
+it and node deletion revokes it. It is never logged.
+
 Admin device grants/indexes/hashed session-bound consent tokens expire within
 five minutes. Device secrets are hashed; access/refresh tokens are not stored
 there for deferred delivery. Rate counters expire after one/ten minutes.

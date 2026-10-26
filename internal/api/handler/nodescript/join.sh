@@ -547,7 +547,7 @@ SETTLE_SECONDS="${WARMBLY_UPDATE_SETTLE_SECONDS:-15}"
 POLL_SECONDS="${WARMBLY_UPDATE_POLL_SECONDS:-10}"
 LOCK_SECONDS="${WARMBLY_UPDATE_LOCK_SECONDS:-300}"
 # Kept across an env refresh: written by join or by this updater, never rendered.
-PRESERVED_KEYS="WARMBLY_VERSION WARMBLY_TARGET_VERSION_PATH WARMBLY_NODE_NAME WARMBLY_ENV_REFRESH NODE_LOG_TOKEN"
+PRESERVED_KEYS="WARMBLY_VERSION WARMBLY_TARGET_VERSION_PATH WARMBLY_NODE_NAME WARMBLY_ENV_REFRESH NODE_LOG_TOKEN NODE_CREDENTIAL"
 
 log() { printf 'warmbly-node-update: %s\n' "$*"; }
 
@@ -668,12 +668,18 @@ fetch_env() {
     log "node.env lacks WARMBLY_BACKEND_URL, WARMBLY_NODE_ID or a node token; cannot fetch env"
     return 1
   fi
-  # The token goes through curl's stdin config, never argv, so ps never shows it.
-  code=$(printf 'header = "Authorization: Bearer %s"\n' "$token" |
-    curl -sS -K - --max-time 30 -o "$1" -w '%{http_code}' \
+  # Both credentials go through curl's stdin config, never argv, so ps never shows them.
+  cred=$(env_value NODE_CREDENTIAL)
+  code=$( {
+    printf 'header = "Authorization: Bearer %s"\n' "$token"
+    if [ -n "$cred" ]; then printf 'header = "X-Warmbly-Node-Credential: %s"\n' "$cred"; fi
+  } | curl -sS -K - --max-time 30 -o "$1" -w '%{http_code}' \
       "${url%/}/api/v1/internal/fleet/node-env?node_id=$id&role=$role") || code=000
   if [ "$code" != "200" ]; then
-    log "fetching env failed (HTTP $code)"
+    case "$code" in
+      401|403) log "fetching env failed (HTTP $code): the control plane hands an env only to the node it was issued to; run the join command again on this machine, which keeps its id and node.local.env" ;;
+      *) log "fetching env failed (HTTP $code)" ;;
+    esac
     return 1
   fi
   if ! grep -qx "WARMBLY_NODE_ID=$id" "$1" || ! grep -qx "WARMBLY_NODE_ROLE=$role" "$1"; then
@@ -727,9 +733,15 @@ check_env() {
     return 1
   fi
   dropped=""
+  withdrawn=""
+  if [ "$role" = "worker" ]; then
+    withdrawn="CREDENTIALS_ENCRYPTION_KEY CREDENTIALS_ENCRYPTION_READ_KEYS KMS_LOCAL_MASTER_KEY"
+  fi
   keys=$(sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$CONFIG_DIR/node.env" | tr '\n' ' ')
   for key in $keys; do
     case " $PRESERVED_KEYS " in *" $key "*) continue ;; esac
+    # Keys the control plane no longer sends a worker are meant to go.
+    case " $withdrawn " in *" $key "*) continue ;; esac
     grep -q "^$key=" "$fresh" && continue
     if [ -f "$CONFIG_DIR/node.local.env" ] && grep -q "^$key=" "$CONFIG_DIR/node.local.env"; then
       continue

@@ -385,6 +385,7 @@ upd_reset() {
   printf 'WARMBLY_IMAGE_REF=ghcr.io/warmbly/warmbly/worker:v1\n' > "$U/root/var/lib/warmbly/image-ref"
   printf 'WARMBLY_NODE_ID=%s\nWARMBLY_NODE_ROLE=worker\nWARMBLY_BACKEND_URL=https://fixture.invalid\nNODE_BROKER_TOKEN=fixture-broker-old\nWARMBLY_VERSION=v1\nNODE_LOG_TOKEN=fixture-log\n' \
     "$NODE_ID" > "$U/root/etc/warmbly/node.env"
+  printf 'NODE_CREDENTIAL=fixture-node-credential\n' >> "$U/root/etc/warmbly/node.env"
   : > "$U/fix/pulls"; : > "$U/fix/systemctl"; : > "$U/fix/curl-argv"; : > "$U/fix/curl-stdin"
 }
 run_updater() {
@@ -466,6 +467,9 @@ done
   || fail "a refresh must report the revision it applied"
 if grep -q 'fixture-broker-old' "$U/fix/curl-argv"; then fail "the node token reached curl's argv"; fi
 grep -q 'Authorization: Bearer fixture-broker-old' "$U/fix/curl-stdin" || fail "the node token must reach curl on stdin"
+grep -qx 'NODE_CREDENTIAL=fixture-node-credential' "$envf" || fail "an env refresh dropped the node credential"
+if grep -q 'fixture-node-credential' "$U/fix/curl-argv"; then fail "the node credential reached curl's argv"; fi
+grep -q 'X-Warmbly-Node-Credential: fixture-node-credential' "$U/fix/curl-stdin" || fail "the node credential must reach curl on stdin"
 ok "env refresh applies, keeps local keys and never puts the token on argv"
 
 upd_reset
@@ -501,6 +505,12 @@ printf 'WORKER_PUBLIC_IP=203.0.113.9\n' > "$U/root/etc/warmbly/node.local.env"
 run_updater --check-env || fail "--check-env must accept a key kept in node.local.env"
 [ "$(count "$U/fix/systemctl")" = "0" ] || fail "--check-env restarted the node"
 ok "--check-env names dropped keys without values and changes nothing"
+
+upd_reset
+printf 'CREDENTIALS_ENCRYPTION_KEY=fixture-instance-key\nKMS_LOCAL_MASTER_KEY=fixture-master-key\n' >> "$U/root/etc/warmbly/node.env"
+reply
+run_updater --check-env || fail "--check-env must not ask a worker to keep keys the control plane withdrew"
+ok "--check-env lets a worker drop the keys it is no longer sent"
 
 # adopt reads a passed --check-env as consent, so a held update lock must fail it.
 upd_reset
