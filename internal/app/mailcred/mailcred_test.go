@@ -178,3 +178,14 @@ func TestOpenAddEmailRefusesAnotherKey(t *testing.T) {
 		t.Fatal("a payload sealed for one organization must not open under another's key")
 	}
 }
+
+// The background reseal runs under either sealing as long as a key exists to seal under.
+func TestResealsUnderEitherSealing(t *testing.T) {
+	if !testSealer(t, ModeInstance).Reseals() || !testSealer(t, ModeOrganization).Reseals() {
+		t.Fatal("a configured sealer must reseal")
+	}
+	var none *Sealer
+	if none.Reseals() || (&Sealer{Mode: ModeInstance}).Reseals() {
+		t.Fatal("no key means nothing to reseal under")
+	}
+}

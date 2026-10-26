@@ -627,8 +627,8 @@ func main() {
 	// result never came back, so a lead is never held in flight forever.
 	go jobsService.StartStuckSendReclaimer(ctx, 5*time.Minute)
 
-	if mailboxCredentials.SealsForOrganizations() {
-		// Moves credentials stored under the instance key onto workspace keys.
+	if mailboxCredentials.Reseals() {
+		// Moves credentials onto workspace keys, or seals legacy plaintext OAuth tokens under the instance key.
 		go jobsService.StartMailboxCredentialReseal(ctx)
 	}
 
