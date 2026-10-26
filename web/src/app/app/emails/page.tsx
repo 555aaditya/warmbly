@@ -1216,6 +1216,8 @@ function MailboxRow({
                                                     ? `Remove ${box.email} from this instance and stop its Cloud warmup sending and receiving? Its mailbox, sign-in and history stay in your Warmbly Cloud workspace; campaigns here stop sending from it.`
                                                     : cloud?.independent_smtp || cloud?.cloud?.managed
                                                     ? `Disconnect Cloud warmup for ${box.email}? Its Cloud mailbox, credentials and warmup history stay on Cloud. Campaigns here keep their existing app-password connection. Cloud warmup sending and receiving stop until you restart them there.`
+                                                    : cloud?.executor === "instance"
+                                                    ? `Stop warming ${box.email} in the Warmbly pool? Its credential never left this server.`
                                                     : `Stop warming ${box.email} in the Warmbly pool? The cloud deletes its credential right away.`,
                                                 async () => {
                                                     await cloudRun(() => cloudUnenroll.mutateAsync(box.id), cloud?.managed ? `${box.email} removed from this instance` : `${box.email} removed from the pool`);
