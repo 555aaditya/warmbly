@@ -139,7 +139,10 @@ export default function RichTextAIEdit({ editor }: { editor: Editor }) {
             if (cause === "escape") {
                 if (run.phase === "writing") run.stop();
                 else if (run.phase !== "idle") run.discard();
-                else closeAll();
+                else {
+                    closeAll();
+                    editor.commands.focus();
+                }
                 return false;
             }
             if (run.phase === "review") run.keep();
