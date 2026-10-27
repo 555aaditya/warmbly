@@ -49,6 +49,7 @@ import { ChoiceCard, SectionLabel, SendingWindowFields, StepIntro, SwitchRow, Ti
 import EstimateTimeline from "./EstimateTimeline";
 import { BottleneckNote, FinishSooner, MailboxMix, SenderList, WarmupNote } from "./EstimateInsights";
 import { estimateHeadline, paceLabel, rampStart } from "./estimateText";
+import { htmlToPlain } from "@/components/app/campaigns/sequences/emailPreview";
 
 export type EstimateState = {
     data: CampaignEstimateResult | undefined;
@@ -287,6 +288,14 @@ function EmailsEditor({
 }) {
     const index = Math.min(selected, draft.emails.length - 1);
     const email = draft.emails[index];
+    // What the prospect has read before this email, for AI follow-ups.
+    const earlier = React.useMemo(
+        () =>
+            draft.emails
+                .slice(0, index)
+                .map((e) => ({ subject: e.subject, body: e.body_plain || htmlToPlain(e.body_html) })),
+        [draft.emails, index],
+    );
     const update = (i: number, p: Partial<Draft["emails"][number]>) =>
         patch((d) => ({ emails: d.emails.map((e, idx) => (idx === i ? { ...e, ...p } : e)) }));
     const add = (wait: number) => {
@@ -415,7 +424,9 @@ function EmailsEditor({
                 bodyCode={email.body_code}
                 onBodyCodeChange={(code) => update(index, { body_code: code })}
                 subjectPlaceholder={index === 0 ? undefined : "Leave blank to reply in the same thread"}
-                bodyPlaceholder={index === 0 ? undefined : "Just bumping this in case it slipped past, {{.FirstName}}."}
+                bodyPlaceholder={index === 0 ? undefined : "One more idea on this, {{.FirstName}}. …"}
+                earlierEmails={earlier}
+                replyInThread={index > 0 && !email.subject.trim()}
             />
         </div>
     );

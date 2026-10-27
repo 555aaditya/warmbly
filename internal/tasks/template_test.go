@@ -100,6 +100,20 @@ func TestTemplateSender_EmptyAndEffectiveIdentity(t *testing.T) {
 	}
 }
 
+func TestTemplateSender_SplitsName(t *testing.T) {
+	cases := []struct{ name, want string }{
+		{"  Jamie   van der  Berg ", "Jamie|van der Berg|Jamie   van der  Berg"},
+		{"Jamie", "Jamie||Jamie"},
+		{"   ", "||"},
+	}
+	for _, tc := range cases {
+		context := templateContext(&models.Email{Name: tc.name}, "")
+		if got := RenderTemplateWith(`{{.Sender.FirstName}}|{{.Sender.LastName}}|{{.Sender.Name}}`, models.Contact{}, context); got != tc.want {
+			t.Errorf("name %q: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestAIVarAvailableVarsSkipsReservedSenderNamespace(t *testing.T) {
 	vars := aiVarAvailableVars(&models.Contact{CustomFields: map[string]string{"Sender": "not a mailbox", "UnsubscribeLink": "not a link", "role": "CTO"}})
 	for _, token := range vars {
@@ -158,6 +172,9 @@ func TestTemplateSender_MapsEveryAllowedMailboxField(t *testing.T) {
 	sender := reflect.ValueOf(templateContext(account, "").Sender)
 	for i := 0; i < sender.NumField(); i++ {
 		name := sender.Type().Field(i).Name
+		if name == "FirstName" || name == "LastName" {
+			continue // derived from Name, covered by TestTemplateSender_SplitsName
+		}
 		mailboxName := name
 		if name == "MailboxEmail" {
 			mailboxName = "Email"

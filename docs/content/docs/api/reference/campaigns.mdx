@@ -1468,6 +1468,25 @@ Generate outreach copy with the AI writing assistant. Gated to paid and free-tri
 
 When the organization is out of credits the endpoint returns `402` with `code: "insufficient_credits"` and the standard envelope. A depleted balance is checked before any provider call, so no completion is ever burned on a `402`.
 
+### Streaming
+
+Send `Accept: text/event-stream` to receive the text while the model writes it. `POST /generation/edit` streams the same way. Refusals (`402`, `403`, `429`, validation) still answer with a JSON error before the stream starts. Once it starts, each event is one `data:` line of JSON:
+
+| `type` | Fields | Meaning |
+| --- | --- | --- |
+| `delta` | `text` | The next fragment, in order. |
+| `stage` | `stage: "checking"` | The text is written and words spam filters flag are being reworded. |
+| `done` | `text`, `credits_remaining`, `credits_charged`, `tokens_used`, `model` | The final text, which can differ from the joined deltas after the rewording. Always the last event on success. |
+| `error` | `code`, `message` | The generation failed. A failure refunds the credit, except when the caller disconnected after text had arrived. |
+
+```text
+data: {"type":"delta","text":"Hi {{.FirstName}},"}
+
+data: {"type":"delta","text":" saw that"}
+
+data: {"type":"done","text":"Hi {{.FirstName}}, saw that...","credits_remaining":247,"credits_charged":1,"tokens_used":412,"model":"..."}
+```
+
 ## Preview an AI variable
 
 `POST /generation/ai-variable`
