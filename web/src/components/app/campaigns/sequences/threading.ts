@@ -1,5 +1,7 @@
 import type Sequence from "@/lib/api/models/app/campaigns/sequences/Sequence";
 import type ABVariant from "@/lib/api/models/app/campaigns/ABVariant";
+import type { EarlierEmail } from "./emailAIPrompt";
+import { htmlToPlain } from "./emailPreview";
 
 /**
  * conversationOpenerFor is the step that opened the conversation a step at
@@ -34,6 +36,17 @@ export function conversationOpenerFor(steps: Sequence[], index: number): Sequenc
  */
 export function conversationSubjectFor(steps: Sequence[], index: number): string | null {
     return conversationOpenerFor(steps, index)?.subject ?? null;
+}
+
+/**
+ * earlierEmailsFor lists the email steps before `index` in canvas order, the
+ * same walk conversationOpenerFor makes, as what the prospect has already read.
+ */
+export function earlierEmailsFor(steps: Sequence[], index: number): EarlierEmail[] {
+    return steps
+        .slice(0, index)
+        .filter((s) => s.kind === "email")
+        .map((s) => ({ subject: s.subject, body: s.body_plain?.trim() ? s.body_plain : htmlToPlain(s.body_html ?? "") }));
 }
 
 export interface ArmSubject {

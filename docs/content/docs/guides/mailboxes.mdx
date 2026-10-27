@@ -379,9 +379,28 @@ The same tab sets the **display name**, **reply-to** (empty uses the mailbox add
 
 The HTML signature is placed in a block of its own one line below the body, so it arrives without the stack of blank lines above it that Apple Mail and Outlook used to show. Put any extra spacing you want inside the signature itself. On a body laid out in HTML it goes inside the container the email was built in, so it lines up with the copy it signs off rather than sitting under it at the left edge of the window (the same placement as the [opt-out line](/guides/unsubscribe/#where-it-appears)). The plain-text signature follows the body after a single blank line.
 
-The signature editor has four views. **HTML** is the visual surface with bold, italic, underline, links and images. The `</>` button next to it swaps that for the raw markup, which is sent exactly as written, so a table-based signature from another tool can be pasted in whole. **Preview** renders it the way a mail client will, in its own frame. **Plain** holds the plain-text version, generated from the HTML while **Sync** is on.
+The signature editor has four views. **HTML** is the visual surface with bold, italic, underline, links and images. The `</>` button next to it swaps that for the raw markup, which is sent exactly as written, so a table-based signature from another tool can be pasted in whole. **Preview** renders it the way a mail client will, in its own frame. **Plain** holds the plain-text version, generated from the HTML while **Sync** is on; turn Sync off to write it separately.
+
+**Add to every email this mailbox sends**, above the editor, is what decides whether the signature goes out at all. It is on by default and covers campaign steps, replies and new emails alike. Turn it off to keep a signature stored without adding it to mail.
 
 A signature carrying a `<style>` block, a whole HTML document, or an event handler is always edited as markup and the visual toggle is greyed out. The visual surface works by putting the markup into the page, and a signature is workspace data your teammates also see, so that markup is never given a live element to run in. Preview is how you look at it. Any `<style>` block in a signature is inlined onto the elements it matches when the email sends, the same as a campaign body.
+
+### One signature on many mailboxes
+
+To give several mailboxes the same signature, tick their rows on the Accounts page and press **Signature** in the selection bar. You write the signature once, in the same editor, using the [sender fields](/guides/expressions/#sender-fields-emails) a campaign email uses, and each mailbox gets its own values:
+
+| Field | Filled in with |
+|---|---|
+| `{{.Sender.FirstName}}` | The first word of the mailbox's display name |
+| `{{.Sender.LastName}}` | Everything after the first word of the display name |
+| `{{.Sender.Name}}` | The whole display name |
+| `{{.Sender.Email}}` | The From address: the send-as alias when one is set, otherwise the mailbox address |
+
+The values are the ones a campaign email would render for that mailbox, so a mailbox with no display name gets empty name fields. The preview flags those mailboxes, and shows the finished signature for one selected mailbox at a time; switch between them with the picker or the arrows.
+
+The fields are filled in when you press **Apply**, and each mailbox stores its finished signature, not the template. A signature is added to mail as it is stored, so contact fields such as `{{.FirstName}}`, other sender fields and spintax are not filled in inside one; the editor points out any it finds. Changing a mailbox's display name later does not change its signature; apply it again, or edit that mailbox's signature on its own.
+
+**Add signature to sends**, on by default, applies to every selected mailbox. Apply replaces the signature on each selected mailbox, and asks first when any of them already has one. A mailbox that could not be saved is listed with the reason, and **Retry** tries just those again.
 
 ### A shared reply inbox
 

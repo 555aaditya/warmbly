@@ -42,7 +42,7 @@ import { DirtyContext, useDirtyRegistry } from "@/components/app/flow/dirty";
 import { layoutFlow, type InsertPoint, type PlacedEdge } from "@/components/app/flow/tree";
 import { cn } from "@/lib/utils";
 import StepEmailArms from "./StepEmailArms";
-import { conversationOpenerFor, conversationSubjectFor } from "./threading";
+import { conversationOpenerFor, conversationSubjectFor, earlierEmailsFor } from "./threading";
 import { ActionEditor, NodeTypeSwitcher, PathEditor, ReplyStopWarning, StopOnReplyToggle } from "./CampaignEditors";
 import { defaultActionFor } from "./campaignActions";
 import {
@@ -687,6 +687,7 @@ function StepPanel({
                         index={index}
                         conversationSubject={conversationSubjectFor(steps, index)}
                         conversationOpener={conversationOpenerFor(steps, index)}
+                        earlierEmails={earlierEmailsFor(steps, index)}
                     />
                 ) : (
                     <ActionEditor campaignId={campaignId} sequence={step} onSaved={onChanged} />
