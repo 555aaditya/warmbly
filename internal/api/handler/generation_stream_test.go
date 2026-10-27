@@ -40,7 +40,11 @@ type refundCredits struct {
 	refunds int
 }
 
-func (r *refundCredits) Grant(context.Context, uuid.UUID, int, string) (int, *errx.Error) {
+// Grant fails on a cancelled context, as the ledger's transaction does.
+func (r *refundCredits) Grant(ctx context.Context, _ uuid.UUID, _ int, _ string) (int, *errx.Error) {
+	if ctx.Err() != nil {
+		return 0, errx.New(errx.Internal, "context cancelled")
+	}
 	r.refunds++
 	return 42, nil
 }
@@ -98,11 +102,13 @@ func TestGenerateEditStreamsTheTextAsItIsWritten(t *testing.T) {
 func TestStreamedFailureRefundsUnlessTheCallerLeft(t *testing.T) {
 	cases := []struct {
 		name    string
+		deltas  []string
 		cancel  bool
 		refunds int
 	}{
-		{"provider failed mid-stream", false, 1},
-		{"caller left after reading", true, 0},
+		{"provider failed mid-stream", []string{"Hi"}, false, 1},
+		{"caller left after reading", []string{"Hi"}, true, 0},
+		{"caller left before any text", nil, true, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -112,7 +118,7 @@ func TestStreamedFailureRefundsUnlessTheCallerLeft(t *testing.T) {
 				cancel()
 			}
 			credits := &refundCredits{}
-			p := &streamProvider{deltas: []string{"Hi"}, err: errors.New("boom")}
+			p := &streamProvider{deltas: tc.deltas, err: errors.New("boom")}
 			h := &Handler{FeatureGateService: editGate{}, CreditService: credits, AIProvider: p}
 
 			events := streamEdit(t, h, ctx)

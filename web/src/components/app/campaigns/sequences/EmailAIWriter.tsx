@@ -200,15 +200,23 @@ export function SubjectAI({
         }
     }
 
+    // Opening offers ideas straight away, however it was opened (⌘J included);
+    // closing, picking an idea included, stops a stream still writing.
+    const onOpen = React.useRef(() => {});
+    onOpen.current = () => {
+        if (canStart && ideas.length === 0 && !pending) void generate("", brief);
+    };
+    const { stop } = stream;
+    React.useEffect(() => {
+        if (open) onOpen.current();
+        else stop();
+    }, [open, stop]);
+
     return (
         <PopoverMenu
             open={open}
             align="end"
-            onOpenChange={(o) => {
-                onOpenChange(o);
-                if (o && canStart && ideas.length === 0 && !pending) void generate("", brief);
-                if (!o) stream.stop();
-            }}
+            onOpenChange={onOpenChange}
         >
             <PopoverMenuTrigger asChild>
                 <button

@@ -78,7 +78,7 @@ func (h *Handler) deliverWriting(c *gin.Context, w writingCall) {
 		// Text a caller read and then walked away from was delivered; any other
 		// failure is refunded.
 		if !w.local && (!streamed || ctx.Err() == nil) {
-			if bal, rerr := h.CreditService.Grant(w.reqCtx, w.orgID, w.cost, w.ledger+"_refund"); rerr == nil {
+			if bal, rerr := h.CreditService.Grant(context.WithoutCancel(w.reqCtx), w.orgID, w.cost, w.ledger+"_refund"); rerr == nil {
 				w.remaining = bal
 			}
 		}

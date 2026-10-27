@@ -20,6 +20,7 @@ import { useAnchoredFloating, caretReference } from "@/hooks/useAnchoredFloating
 import { passageText } from "./richTextPassage";
 import { shortcutLabel } from "@/components/ui/shortcut-tooltip";
 import useFocusOnOpen from "@/hooks/useFocusOnOpen";
+import useClickOutside from "@/hooks/useClickOutside";
 import useEditorSheen from "./useEditorSheen";
 import useEditorAIRun from "./useEditorAIRun";
 import AIRunCard from "./AIRunCard";
@@ -130,37 +131,25 @@ export default function RichTextAICaret({ editor }: { editor: Editor }) {
 
     // Escape steps back: stop the writing, then discard it, then close.
     // Clicking away keeps a finished passage and leaves a running one running.
-    React.useEffect(() => {
-        if (!open) return;
-        const onDown = (e: MouseEvent | TouchEvent) => {
-            const t = e.target as Node | null;
-            if (localRef.current?.contains(t)) return;
-            if (editor.view.dom.contains(t as Node)) return;
-            const phase = aiRef.current.phase;
-            if (phase === "review") aiRef.current.keep();
-            else if (phase === "idle") setOpen(false);
-        };
-        const onKey = (e: KeyboardEvent) => {
-            if (e.key !== "Escape") return;
-            e.stopPropagation();
-            e.preventDefault();
+    const editorDom = React.useMemo(() => ({ get current() { return editor.view.dom; } }), [editor]);
+    useClickOutside(
+        open,
+        (cause) => {
             const run = aiRef.current;
-            if (run.phase === "writing") run.stop();
-            else if (run.phase !== "idle") run.discard();
-            else {
-                setOpen(false);
-                editor.commands.focus();
-            }
-        };
-        document.addEventListener("mousedown", onDown, true);
-        document.addEventListener("touchstart", onDown, true);
-        document.addEventListener("keydown", onKey, true);
-        return () => {
-            document.removeEventListener("mousedown", onDown, true);
-            document.removeEventListener("touchstart", onDown, true);
-            document.removeEventListener("keydown", onKey, true);
-        };
-    }, [open, editor]);
+            if (cause === "escape") {
+                if (run.phase === "writing") run.stop();
+                else if (run.phase !== "idle") run.discard();
+                else {
+                    setOpen(false);
+                    editor.commands.focus();
+                }
+            } else if (run.phase === "review") run.keep();
+            else if (run.phase === "idle") setOpen(false);
+            // Each path above leaves focus where it belongs.
+            return false;
+        },
+        [editorDom, localRef],
+    );
 
     useFocusOnOpen(open && ai.phase === "idle", inputRef);
     useEditorSheen(editor.view.dom, ai.phase === "thinking");

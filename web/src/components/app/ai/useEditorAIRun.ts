@@ -102,6 +102,7 @@ export default function useEditorAIRun(editor: Editor, onSettle?: () => void): E
             range.current = { from: spec.from, to: spec.to };
             shown.current = "";
             let wrote = false;
+            setUsage(null);
             setPhase("thinking");
             editor.setEditable(false, false);
 

@@ -19,6 +19,7 @@ import AIRunCard from "./AIRunCard";
 import { AI_CARD_CLASS, EDIT_REFINEMENTS, aiRunCardClass } from "./aiCard";
 import useEditorSheen from "./useEditorSheen";
 import useEditorAIRun from "./useEditorAIRun";
+import useClickOutside from "@/hooks/useClickOutside";
 import { clampCardLeft, AI_CARD_WIDTH } from "./floatingBounds";
 import { clampContext, passageAIConfigs, passageText } from "./richTextPassage";
 
@@ -130,34 +131,23 @@ export default function RichTextAIEdit({ editor }: { editor: Editor }) {
 
     // Escape steps back: stop the writing, then discard it, then close.
     // Clicking away keeps a finished rewrite and leaves a running one running.
-    React.useEffect(() => {
-        if (!open) return;
-        const onDown = (e: MouseEvent | TouchEvent) => {
-            const t = e.target as Node | null;
-            if (rootRef.current?.contains(t)) return;
-            if (editor.view.dom.contains(t as Node)) return;
-            const phase = aiRef.current.phase;
-            if (phase === "review") aiRef.current.keep();
-            else if (phase === "idle") closeAll();
-        };
-        const onKey = (e: KeyboardEvent) => {
-            if (e.key !== "Escape") return;
-            e.stopPropagation();
-            e.preventDefault();
+    const editorDom = React.useMemo(() => ({ get current() { return editor.view.dom; } }), [editor]);
+    useClickOutside(
+        open,
+        (cause) => {
             const run = aiRef.current;
-            if (run.phase === "writing") run.stop();
-            else if (run.phase !== "idle") run.discard();
-            else closeAll();
-        };
-        document.addEventListener("mousedown", onDown, true);
-        document.addEventListener("touchstart", onDown, true);
-        document.addEventListener("keydown", onKey, true);
-        return () => {
-            document.removeEventListener("mousedown", onDown, true);
-            document.removeEventListener("touchstart", onDown, true);
-            document.removeEventListener("keydown", onKey, true);
-        };
-    }, [open, closeAll, editor]);
+            if (cause === "escape") {
+                if (run.phase === "writing") run.stop();
+                else if (run.phase !== "idle") run.discard();
+                else closeAll();
+                return false;
+            }
+            if (run.phase === "review") run.keep();
+            else if (run.phase === "idle") closeAll();
+            return false;
+        },
+        [editorDom, rootRef],
+    );
 
     const run = (instruction: string) => {
         const t = frozen.current;

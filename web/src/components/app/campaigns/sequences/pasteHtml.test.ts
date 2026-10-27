@@ -73,6 +73,11 @@ describe("normalizePastedHTML", () => {
 
     // A copy out of a dark-themed page carries its near-white text colour on
     // every block, which on our white editor made every pasted line invisible.
+    it("keeps a block style whose value holds a semicolon", () => {
+        const out = normalizePastedHTML('<div style="background-image: url(data:image/png;base64,AAAA); font-size: 14px">Hi</div>');
+        expect(out).toBe('<div style="background-image: url(data:image/png;base64,AAAA)">Hi</div>');
+    });
+
     it("drops the light text colour and dark background of a dark-themed page", () => {
         const out = normalizePastedHTML(
             '<p style="color: rgb(232, 234, 237); font-family: Roboto, sans-serif; font-size: 14px; background-color: rgb(32, 33, 36)">One</p>' +

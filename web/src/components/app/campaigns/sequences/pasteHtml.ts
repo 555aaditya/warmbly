@@ -200,9 +200,33 @@ export function isPageBackground(value: string): boolean {
 
 // keptInlineStyle reduces an element's style attribute to the declarations
 // above, or "" when nothing in it was a choice.
+// The declarations of a style attribute, split on the semicolons between
+// them and not on one inside url(...) or a quoted value.
+function splitDeclarations(style: string): string[] {
+    const out: string[] = [];
+    let depth = 0;
+    let quote = "";
+    let start = 0;
+    for (let i = 0; i < style.length; i++) {
+        const ch = style[i];
+        if (quote) {
+            if (ch === "\\") i++;
+            else if (ch === quote) quote = "";
+        } else if (ch === '"' || ch === "'") quote = ch;
+        else if (ch === "(") depth++;
+        else if (ch === ")") depth = Math.max(0, depth - 1);
+        else if (ch === ";" && depth === 0) {
+            out.push(style.slice(start, i));
+            start = i + 1;
+        }
+    }
+    out.push(style.slice(start));
+    return out;
+}
+
 function keptInlineStyle(el: Element): string {
     const kept = new Map<string, string>();
-    for (const decl of (el.getAttribute("style") ?? "").split(";")) {
+    for (const decl of splitDeclarations(el.getAttribute("style") ?? "")) {
         const at = decl.indexOf(":");
         if (at < 0) continue;
         const prop = KEEP_SPAN_STYLES[decl.slice(0, at).trim().toLowerCase()];
@@ -240,7 +264,7 @@ function cleanBlockStyle(el: Element) {
     if (style === null) return;
     const textBlock = TEXT_BLOCKS.has(el.tagName);
     const kept: string[] = [];
-    for (const decl of style.split(";")) {
+    for (const decl of splitDeclarations(style)) {
         const at = decl.indexOf(":");
         if (at < 0) continue;
         const prop = decl.slice(0, at).trim().toLowerCase();
