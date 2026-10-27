@@ -1384,6 +1384,15 @@ func (s *tasksService) directedWarmupPartner(ctx context.Context, taskID uuid.UU
 			return nil
 		}
 	}
+	// A reply holds the mailbox's only warmup task, so one to a full inbox ends the thread rather than waiting on the reservation's refusal.
+	if room, ok := s.warmupRepo.(interface {
+		WarmupInboxHasRoom(context.Context, uuid.UUID, string) (bool, error)
+	}); ok {
+		if has, err := room.WarmupInboxHasRoom(ctx, partner.ID, poolType); err == nil && !has {
+			log.Info().Str("task_id", taskID.String()).Str("email_account_id", account.ID.String()).Msg("warmup reply closed: the recipient's inbox is full today")
+			return nil
+		}
+	}
 	return partner
 }
 

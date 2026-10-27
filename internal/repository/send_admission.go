@@ -12,7 +12,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/models"
 )
 
@@ -658,16 +657,9 @@ func checkWarmupRecipientReservation(ctx context.Context, tx pgx.Tx, task, sende
 	if !receiving {
 		return ErrSendAdmissionDenied
 	}
-	share := 100
-	if pool != "premium" {
-		share = config.WarmupFreeInboundSharePercent
-	}
 	var allowed bool
-	err := tx.QueryRow(ctx, `SELECT GREATEST(
-	 (SELECT COUNT(*) FROM warmup_received wr WHERE wr.email_account_id=ea.id AND wr.created_at >= date_trunc('day',NOW() AT TIME ZONE COALESCE(NULLIF(ea.timezone,''),NULLIF(o.timezone,''),'UTC')) AT TIME ZONE COALESCE(NULLIF(ea.timezone,''),NULLIF(o.timezone,''),'UTC')),
-	 (SELECT COUNT(*) FROM warmup_tokens wt WHERE wt.recipient_account_id=ea.id AND wt.created_at >= date_trunc('day',NOW() AT TIME ZONE COALESCE(NULLIF(ea.timezone,''),NULLIF(o.timezone,''),'UTC')) AT TIME ZONE COALESCE(NULLIF(ea.timezone,''),NULLIF(o.timezone,''),'UTC')))
-	 <= LEAST(GREATEST((((SELECT COUNT(*) FROM warmup_tokens wt WHERE wt.sender_account_id=ea.id AND wt.sent_message_id<>'' AND wt.created_at>=NOW()-INTERVAL '7 days')+6)/7)*`+inboundDailyMultipleSQL+`,`+inboundDailyFloorSQL+`),`+inboundDailyCeilingSQL+`)*$2/100
-	 FROM email_accounts ea JOIN organizations o ON o.id=ea.organization_id WHERE ea.id=$1`, recipient, share).Scan(&allowed)
+	// The send's own token is already counted, so it needs no extra room.
+	err := tx.QueryRow(ctx, warmupInboxRoomSQL, recipient, inboundSharePercent(pool), 0).Scan(&allowed)
 	if err != nil {
 		return err
 	}
