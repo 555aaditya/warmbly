@@ -62,7 +62,7 @@ sudo systemctl is-active warmbly-node-update.timer
 
 All three commands must succeed before the host is ready for a release canary.
 Keep the fleet baseline at the version the workers currently run while adopting
-them, then start the target release with `warmblyctl fleet rollout start`.
+them, then start the target release with `warmblyctl fleet rollout start <target-tag>`.
 Automatic release deployments enable the same staged fleet rollout after the
 control-plane services pass their health watches.
 
