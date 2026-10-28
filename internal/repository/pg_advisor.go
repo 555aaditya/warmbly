@@ -281,7 +281,7 @@ type AdvisorFindingFilter struct {
 	Category   models.AdvisorCategory
 	EntityType string
 	EntityID   *uuid.UUID
-	// Statuses defaults to open when empty.
+	// Statuses defaults to open + applied when empty.
 	Statuses []models.AdvisorStatus
 	Limit    int
 }
@@ -497,7 +497,7 @@ func (r *advisorRepository) GetFinding(ctx context.Context, orgID, id uuid.UUID)
 func (r *advisorRepository) ListFindings(ctx context.Context, orgID uuid.UUID, f AdvisorFindingFilter) ([]models.AdvisorFinding, error) {
 	statuses := f.Statuses
 	if len(statuses) == 0 {
-		statuses = []models.AdvisorStatus{models.AdvisorStatusOpen}
+		statuses = []models.AdvisorStatus{models.AdvisorStatusOpen, models.AdvisorStatusApplied}
 	}
 	strs := make([]string, 0, len(statuses))
 	for _, s := range statuses {
