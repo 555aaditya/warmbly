@@ -247,6 +247,17 @@ jobs:
           done
           if grep -q -- '--- SKIP:' linked-mailbox-batch.log; then exit 1; fi
 
+      - name: Campaign mailbox reconnect retry regressions (PostgreSQL)
+        if: matrix.suite == 'live-1'
+        env:
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+        run: |
+          set -o pipefail
+          go test -race -v -p 1 ./internal/app/consumer ./internal/repository -run '^TestLiveCampaign(MailboxLoadingDefersWithoutSpendingAttempts|LoadingLogsKeepHistoryWithoutCustomerAlerts)$' -count=1 | tee campaign-reconnect.log
+          grep -q '^--- PASS: TestLiveCampaignMailboxLoadingDefersWithoutSpendingAttempts ' campaign-reconnect.log
+          grep -q '^--- PASS: TestLiveCampaignLoadingLogsKeepHistoryWithoutCustomerAlerts ' campaign-reconnect.log
+          if grep -q -- '--- SKIP:' campaign-reconnect.log; then exit 1; fi
+
       - name: Contact campaign empty-step regression (PostgreSQL)
         if: matrix.suite == 'live-1'
         env:

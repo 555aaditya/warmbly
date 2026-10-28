@@ -2,9 +2,11 @@ package repository
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
 	"github.com/warmbly/warmbly/internal/models"
 )
@@ -89,6 +91,13 @@ func (r *campaignLogRepository) GetLogs(ctx context.Context, campaignID uuid.UUI
 		if err := rows.Scan(&l.ID, &l.CampaignID, &l.EventType, &l.Message, &l.Metadata, &l.CreatedAt); err != nil {
 			db.CaptureError(err, "", nil, "scan")
 			return nil, err
+		}
+		// Historical reconnect retries stay informational without changing stored diagnostics.
+		if reason, ok := l.Metadata["error"].(string); ok && l.EventType == "email_failed" &&
+			l.Metadata["will_retry"] == true && l.Metadata["code"] == string(errx.MailErrorCodeServerUnreachable) && strings.HasPrefix(reason, models.MailboxNotLoadedPrefix) {
+			l.EventType = "email_deferred"
+			l.Metadata["level"] = "info"
+			l.Message = "Sending was delayed while the mailbox reconnected. An automatic retry was scheduled."
 		}
 		logs = append(logs, l)
 	}
