@@ -41,6 +41,7 @@ func TestLiveCampaignMailboxLoadingDefersWithoutSpendingAttempts(t *testing.T) {
 	s.CampaignLogRepo = repository.NewCampaignLogRepository(handle)
 	s.ContactRepo = repository.NewContactRepostory(handle)
 	ctx := context.Background()
+	var historicalTask string
 	for i := 0; i < 6; i++ {
 		task := f.stampSend(t, s)
 		result := models.SendEmailResult{TaskID: task, SentAt: time.Now(), Error: &models.EmailSendError{
@@ -49,6 +50,12 @@ func TestLiveCampaignMailboxLoadingDefersWithoutSpendingAttempts(t *testing.T) {
 		}}
 		for duplicate := 0; duplicate < 2; duplicate++ {
 			if err := s.HandleEmailFailed(ctx, result); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if i == 0 {
+			historicalTask = task.String()
+			if _, err := handle.Exec(ctx, `UPDATE campaign_logs SET event_type='email_failed', metadata=(metadata-'mailbox_loading_retry') || '{"level":"error","code":"SERVER_UNREACHABLE"}'::jsonb WHERE campaign_id=$1 AND metadata->>'task_id'=$2`, f.campaign, historicalTask); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -75,6 +82,35 @@ func TestLiveCampaignMailboxLoadingDefersWithoutSpendingAttempts(t *testing.T) {
 		if entry.EventType != "email_deferred" || entry.Metadata["level"] != "info" || entry.Metadata["will_retry"] != true {
 			t.Fatalf("reconnect became a customer alert: %+v", entry)
 		}
+		if entry.Metadata["code"] == models.MailboxLoadingCode && entry.Metadata["mailbox_loading_retry"] != true {
+			t.Fatalf("confirmed retry marker missing: %+v", entry)
+		}
+	}
+	if _, err := handle.Exec(ctx, `UPDATE tasks SET send_result_evidence=jsonb_set(send_result_evidence,'{protocol}','"smtp"') WHERE id=$1::uuid`, historicalTask); err != nil {
+		t.Fatal(err)
+	}
+	logs, err = s.CampaignLogRepo.GetLogs(ctx, f.campaign, 100, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var providerRetained bool
+	for _, entry := range logs.Data {
+		if entry.Metadata["task_id"] == historicalTask {
+			providerRetained = entry.EventType == "email_failed" && entry.Metadata["level"] == "error"
+		}
+	}
+	if !providerRetained {
+		t.Fatal("provider evidence was reclassified from log text alone")
+	}
+	other := newSendResultFixture(t, handle)
+	if err := s.CampaignLogRepo.CreateLog(ctx, &repository.CampaignLogEntry{CampaignID: other.campaign, EventType: "email_failed", Message: "unconfirmed reconnect", Metadata: map[string]interface{}{
+		"level": "error", "code": string(errx.MailErrorCodeServerUnreachable), "error": models.MailboxNotLoadedPrefix, "will_retry": true, "task_id": historicalTask,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	otherLogs, err := s.CampaignLogRepo.GetLogs(ctx, other.campaign, 100, nil)
+	if err != nil || len(otherLogs.Data) != 1 || otherLogs.Data[0].Metadata["level"] != "error" {
+		t.Fatalf("another campaign's task must not authorize reclassification: %+v err=%v", otherLogs, err)
 	}
 	task := f.stampSend(t, s)
 	if err := s.HandleEmailFailed(ctx, models.SendEmailResult{TaskID: task, Error: &models.EmailSendError{Code: string(errx.MailErrorCodeServerUnreachable), Message: "provider connection failed", Failure: &errx.SendFailure{Protocol: "smtp", Stage: "connect", Disposition: errx.SendRetry, ObservedAt: time.Now()}}}); err != nil {

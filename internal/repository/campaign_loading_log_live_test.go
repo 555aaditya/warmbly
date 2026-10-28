@@ -15,24 +15,26 @@ func TestLiveCampaignLoadingLogsKeepHistoryWithoutCustomerAlerts(t *testing.T) {
 	ctx := context.Background()
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM campaign_logs WHERE campaign_id=$1`, f.campaign) })
 	for _, tc := range []struct {
-		name  string
-		code  string
-		retry bool
-		text  string
+		name   string
+		code   string
+		retry  bool
+		text   string
+		marker bool
 	}{
-		{name: "loading retry", code: string(errx.MailErrorCodeServerUnreachable), retry: true, text: models.MailboxNotLoadedPrefix},
+		{name: "confirmed retry", code: models.MailboxLoadingCode, retry: true, text: models.MailboxNotLoadedPrefix, marker: true},
+		{name: "unconfirmed loading retry", code: string(errx.MailErrorCodeServerUnreachable), retry: true, text: models.MailboxNotLoadedPrefix},
 		{name: "exhausted", code: string(errx.MailErrorCodeServerUnreachable), text: models.MailboxNotLoadedPrefix},
 		{name: "provider failure", code: string(errx.MailErrorCodeServerUnreachable), retry: true, text: "provider connection failed"},
 		{name: "auth failure", code: string(errx.MailErrorCodeInvalidCredentials), retry: true, text: models.MailboxNotLoadedPrefix},
 	} {
 		if err := repo.CreateLog(ctx, &CampaignLogEntry{CampaignID: f.campaign, EventType: "email_failed", Message: tc.name, Metadata: map[string]interface{}{
-			"level": "error", "code": tc.code, "error": tc.text, "will_retry": tc.retry,
+			"level": "error", "code": tc.code, "error": tc.text, "will_retry": tc.retry, "mailbox_loading_retry": tc.marker,
 		}}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	logs, err := repo.GetLogs(ctx, f.campaign, 100, nil)
-	if err != nil || len(logs.Data) != 4 {
+	if err != nil || len(logs.Data) != 5 {
 		t.Fatalf("logs=%+v err=%v", logs, err)
 	}
 	normalized := 0
@@ -50,7 +52,7 @@ func TestLiveCampaignLoadingLogsKeepHistoryWithoutCustomerAlerts(t *testing.T) {
 		t.Fatalf("normalized %d loading retries, want one", normalized)
 	}
 	var raw int
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM campaign_logs WHERE campaign_id=$1 AND event_type='email_failed' AND metadata->>'level'='error'`, f.campaign).Scan(&raw); err != nil || raw != 4 {
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM campaign_logs WHERE campaign_id=$1 AND event_type='email_failed' AND metadata->>'level'='error'`, f.campaign).Scan(&raw); err != nil || raw != 5 {
 		t.Fatalf("historical diagnostics changed: raw=%d err=%v", raw, err)
 	}
 }

@@ -520,6 +520,7 @@ func (s *JobsService) logCampaignSendFailure(ctx context.Context, campaignID uui
 	if code == models.MailboxLoadingCode && rolledBack && !exhausted {
 		eventType = "email_deferred"
 		meta["level"] = "info"
+		meta["mailbox_loading_retry"] = true
 		msg = fmt.Sprintf("Sending to %s was delayed while the mailbox reconnected. An automatic retry was scheduled.", who)
 	}
 	_ = s.CampaignLogRepo.CreateLog(ctx, &repository.CampaignLogEntry{
