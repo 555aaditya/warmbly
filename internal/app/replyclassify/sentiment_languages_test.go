@@ -183,3 +183,90 @@ func TestEnglishPhrasesReadTheTextAsWritten(t *testing.T) {
 		t.Errorf("English reply with an accent = %q, want it read as before", got.Class)
 	}
 }
+
+// Replies that show interest, in each language as people write them. Each is
+// positive once its language is chosen and not positive without it.
+func TestInterestedRepliesByLanguage(t *testing.T) {
+	positive := map[string][]string{
+		"de": {
+			"Klingt gut, lassen Sie uns telefonieren.",
+			"Ich bin interessiert, was kostet das?",
+			"Klingt interessant!",
+			"Wir sind interessiert.",
+			"Gerne mehr erfahren.",
+			"Können wir telefonieren?",
+		},
+		"fr": {
+			"Ça m'intéresse, quel est le tarif ?",
+			"Je suis intéressée.",
+			"Nous sommes intéressés, prenons rendez-vous.",
+			"Cela semble intéressant.",
+			"Envoyez-moi un devis s'il vous plaît.",
+			"Ca nous interesse.",
+		},
+		"es": {
+			"Me interesa mucho.",
+			"Sí, me interesa.",
+			"Estoy muy interesado, ¿cuánto cuesta?",
+			"Agendemos una llamada.",
+			"Envíeme más información, por favor.",
+			"Estamos muy interesados.",
+		},
+	}
+	for lang, replies := range positive {
+		for _, body := range replies {
+			in := Input{Subject: "Re: Hallo", BodyText: body, Languages: []string{lang}}
+			if got := ClassifyOffline(in); got.Class != ClassPositive {
+				t.Errorf("%s %q = %q, want positive", lang, body, got.Class)
+			}
+			in.Languages = nil
+			if got := ClassifyOffline(in); got.Class == ClassPositive {
+				t.Errorf("%s %q read as positive without %s chosen", lang, body, lang)
+			}
+		}
+	}
+}
+
+// An interest phrase that is negated, outweighed by a no, or only conditional
+// never reads as interest.
+func TestNegatedAndHedgedInterestIsNotPositive(t *testing.T) {
+	all := []string{"de", "fr", "es", "nl", "it", "pt"}
+	for _, body := range []string{
+		"Ich bin nicht interessiert.",
+		"Klingt gut, aber wir haben keinen Bedarf.",
+		"Wir möchten keinen Termin vereinbaren.",
+		"Wir wären interessiert, wenn der Preis stimmt.",
+		"Falls Interesse besteht, melden wir uns.",
+		"Ça m'intéresse pas.",
+		"Cela ne nous intéresse plus.",
+		"Je ne suis pas intéressé.",
+		"Nous ne sommes pas intéressés.",
+		"No me interesa mucho.",
+		"No estoy muy interesado.",
+		"Gracias, pero no estamos muy interesados.",
+	} {
+		if got := ClassifyOffline(Input{Subject: "Re: Hallo", BodyText: body, Languages: all}); got.Class == ClassPositive {
+			t.Errorf("%q read as positive", body)
+		}
+	}
+}
+
+// A negating word straight before the phrase turns it around; anything else between does not.
+func TestNegatedAtReadsTheWordBefore(t *testing.T) {
+	for text, want := range map[string]bool{
+		"no me interesa mucho":       true,
+		"nicht klingt gut":           true,
+		"no, me interesa mucho":      false,
+		"bueno me interesa mucho":    false,
+		"me interesa mucho":          false,
+		"pero no  me interesa mucho": true,
+	} {
+		start := len(text) - len("me interesa mucho")
+		if text == "nicht klingt gut" {
+			start = len("nicht ")
+		}
+		if got := negatedAt(text, start); got != want {
+			t.Errorf("negatedAt(%q) = %v, want %v", text, got, want)
+		}
+	}
+}

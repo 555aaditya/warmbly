@@ -35,11 +35,15 @@ type langRules struct {
 	// declined turns down interest and is read before any interest phrase;
 	// negative is any other clear no. Both are phrases, never single words.
 	declined, negative []string
+	// positive is clear interest. A chosen language's is read after its no
+	// phrases, and never straight after a negating word.
+	positive []string
 }
 
 var baseRules = langRules{
 	declined: declinedInterestKeywords,
 	negative: negativeKeywords,
+	positive: positiveKeywords,
 	quote: []quoteMarker{
 		{re: attribution(`on`, `wrote:`)},
 		{re: regexp.MustCompile(`(?i)_{10,}`)},
@@ -139,6 +143,11 @@ var languageRules = map[string]langRules{
 			"nein danke", "nein, danke", "kein bedarf", "keinen bedarf", "falscher ansprechpartner", "falschen ansprechpartner",
 			"nicht der richtige ansprechpartner", "nicht die richtige ansprechpartnerin", "nicht zuständig",
 		},
+		positive: []string{
+			"klingt gut", "klingt interessant", "klingt spannend", "ich bin interessiert", "wir sind interessiert",
+			"lassen sie uns telefonieren", "lass uns telefonieren", "können wir telefonieren", "termin vereinbaren",
+			"gerne mehr erfahren", "schicken sie mir mehr informationen", "was kostet das",
+		},
 	},
 	"fr": {
 		quote:      []quoteMarker{{re: headerBlock(`de ?`, `envoyé ?|date ?`)}},
@@ -146,12 +155,20 @@ var languageRules = map[string]langRules{
 		ooo:        []string{"absent du bureau", "absente du bureau"},
 		declined: []string{
 			"pas intéressé", "pas intéressée", "pas intéressés", "pas intéressées", "aucun intérêt",
-			"ne nous intéresse pas", "ne m'intéresse pas", "ne suis plus intéressé", "ne suis plus intéressée",
+			"nous intéresse pas", "m'intéresse pas", "ne m'intéresse plus", "ne nous intéresse plus",
+			"ne suis plus intéressé", "ne suis plus intéressée",
 			"ne sommes plus intéressés", "ne sommes plus intéressées",
 		},
 		negative: []string{
 			"non merci", "non, merci", "pas le bon interlocuteur", "pas la bonne personne",
 			"nous avons déjà une solution", "nous avons déjà un prestataire",
+		},
+		positive: []string{
+			"je suis intéressé", "je suis intéressée", "nous sommes intéressés", "nous sommes intéressées",
+			"ça m'intéresse", "cela m'intéresse", "ça nous intéresse", "cela nous intéresse",
+			"ça a l'air intéressant", "cela semble intéressant", "prenons rendez-vous", "fixer un rendez-vous",
+			"envoyez-moi plus d'informations", "envoyez-moi une offre", "envoyez-moi un devis",
+			"quel est le tarif", "quels sont vos tarifs",
 		},
 	},
 	"es": {
@@ -166,6 +183,12 @@ var languageRules = map[string]langRules{
 		negative: []string{
 			"no gracias", "no, gracias", "no soy la persona", "persona equivocada",
 			"ya tenemos una solución", "ya tenemos proveedor",
+		},
+		positive: []string{
+			"me interesa mucho", "nos interesa mucho", "sí me interesa", "sí, me interesa", "estoy muy interesado",
+			"estoy muy interesada", "estamos muy interesados", "agendemos una llamada", "agendar una llamada",
+			"programar una llamada", "envíeme más información", "envíame más información", "cuánto cuesta",
+			"cuál es el precio",
 		},
 	},
 	"pt": {
@@ -429,6 +452,7 @@ type ruleSet struct {
 	bounce    []string
 	declined  []phrase
 	negative  []phrase
+	positive  []phrase
 }
 
 // phrase is a sentiment phrase as compiled. The English base set keeps the
@@ -437,6 +461,28 @@ type ruleSet struct {
 type phrase struct {
 	text    string
 	bounded bool
+	// negatable phrases do not count straight after a negating word ("no me interesa mucho").
+	negatable bool
+}
+
+// negators are the words that, directly before an interest phrase, turn it around.
+var negators = map[string]bool{
+	"no": true, "not": true, "nicht": true, "kein": true, "keine": true, "keinen": true, "nie": true,
+	"pas": true, "ne": true, "non": true, "niet": true, "geen": true, "nao": true, "nunca": true, "jamas": true, "mai": true,
+}
+
+// negatedAt reports a negating word directly before start, with nothing but spaces between.
+func negatedAt(text string, start int) bool {
+	head := strings.TrimRight(text[:start], " ")
+	end := len(head)
+	for end > 0 {
+		r, size := utf8.DecodeLastRuneInString(head[:end])
+		if !unicode.IsLetter(r) {
+			break
+		}
+		end -= size
+	}
+	return negators[head[end:]]
 }
 
 // in matches an English base phrase against the text as written and a chosen
@@ -454,7 +500,7 @@ func (p phrase) in(text, folded string) bool {
 		start, end := i+j, i+j+len(p.text)
 		before, _ := utf8.DecodeLastRuneInString(text[:start])
 		after, _ := utf8.DecodeRuneInString(text[end:])
-		if !wordRune(before) && !wordRune(after) {
+		if !wordRune(before) && !wordRune(after) && !(p.negatable && negatedAt(text, start)) {
 			return true
 		}
 		_, size := utf8.DecodeRuneInString(text[start:])
@@ -518,6 +564,9 @@ func compileRules(parts []langRules) *ruleSet {
 		}
 		for _, n := range p.negative {
 			rs.negative = append(rs.negative, phrase{text: accentFolder.Replace(strings.ToLower(n)), bounded: i > 0})
+		}
+		for _, pos := range p.positive {
+			rs.positive = append(rs.positive, phrase{text: accentFolder.Replace(strings.ToLower(pos)), bounded: i > 0, negatable: i > 0})
 		}
 	}
 	rs.quote = append(rs.quote, quoteMarker{re: regexp.MustCompile(`(?i)-{2,}\s*(` + strings.Join(separators, `|`) + `)\s*-{2,}`)})

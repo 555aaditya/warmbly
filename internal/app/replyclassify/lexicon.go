@@ -39,16 +39,23 @@ func classifyLexicon(in Input) (Result, bool) {
 		}
 	}
 
+	// A chosen language's clear no is read before any interest, so "klingt gut, aber kein bedarf" stays negative.
+	for _, kw := range rules.negative {
+		if kw.bounded && kw.in(text, folded) {
+			return Result{Class: ClassNegative, Confidence: 0.8, Source: SourceLexicon}, true
+		}
+	}
+
 	// 3. Clear interest => positive.
-	for _, kw := range positiveKeywords {
-		if strings.Contains(text, kw) {
+	for _, kw := range rules.positive {
+		if kw.in(text, folded) {
 			return Result{Class: ClassPositive, Confidence: 0.8, Source: SourceLexicon}, true
 		}
 	}
 
-	// 4. Clear rejection => negative.
+	// 4. Clear rejection => negative. English keeps its place after interest.
 	for _, kw := range rules.negative {
-		if kw.in(text, folded) {
+		if !kw.bounded && kw.in(text, folded) {
 			return Result{Class: ClassNegative, Confidence: 0.8, Source: SourceLexicon}, true
 		}
 	}
