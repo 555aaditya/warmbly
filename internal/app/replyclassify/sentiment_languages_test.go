@@ -244,6 +244,10 @@ func TestNegatedAndHedgedInterestIsNotPositive(t *testing.T) {
 		"No me interesa mucho.",
 		"No estoy muy interesado.",
 		"Gracias, pero no estamos muy interesados.",
+		"Si me interesa, les aviso.",
+		"No\nme interesa mucho.",
+		"No quiero agendar una llamada.",
+		"Wir wollen nicht gleich einen Termin vereinbaren.",
 	} {
 		if got := ClassifyOffline(Input{Subject: "Re: Hallo", BodyText: body, Languages: all}); got.Class == ClassPositive {
 			t.Errorf("%q read as positive", body)
@@ -254,12 +258,15 @@ func TestNegatedAndHedgedInterestIsNotPositive(t *testing.T) {
 // A negating word straight before the phrase turns it around; anything else between does not.
 func TestNegatedAtReadsTheWordBefore(t *testing.T) {
 	for text, want := range map[string]bool{
-		"no me interesa mucho":       true,
-		"nicht klingt gut":           true,
-		"no, me interesa mucho":      false,
-		"bueno me interesa mucho":    false,
-		"me interesa mucho":          false,
-		"pero no  me interesa mucho": true,
+		"no me interesa mucho":        true,
+		"nicht klingt gut":            true,
+		"no, me interesa mucho":       false,
+		"bueno me interesa mucho":     false,
+		"me interesa mucho":           false,
+		"pero no  me interesa mucho":  true,
+		"no\nme interesa mucho":       true,
+		"no quiero me interesa mucho": true,
+		"no a b c me interesa mucho":  false,
 	} {
 		start := len(text) - len("me interesa mucho")
 		if text == "nicht klingt gut" {

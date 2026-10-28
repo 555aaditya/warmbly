@@ -36,8 +36,9 @@ type langRules struct {
 	// negative is any other clear no. Both are phrases, never single words.
 	declined, negative []string
 	// positive is clear interest. A chosen language's is read after its no
-	// phrases, and never straight after a negating word.
-	positive []string
+	// phrases, and never shortly after a negating word. positiveAsWritten
+	// keeps its accents, where folding would change the meaning.
+	positive, positiveAsWritten []string
 }
 
 var baseRules = langRules{
@@ -185,11 +186,13 @@ var languageRules = map[string]langRules{
 			"ya tenemos una solución", "ya tenemos proveedor",
 		},
 		positive: []string{
-			"me interesa mucho", "nos interesa mucho", "sí me interesa", "sí, me interesa", "estoy muy interesado",
+			"me interesa mucho", "nos interesa mucho", "estoy muy interesado",
 			"estoy muy interesada", "estamos muy interesados", "agendemos una llamada", "agendar una llamada",
 			"programar una llamada", "envíeme más información", "envíame más información", "cuánto cuesta",
 			"cuál es el precio",
 		},
+		// "Si me interesa, les aviso" is conditional; only the accented "sí" says yes.
+		positiveAsWritten: []string{"sí me interesa", "sí, me interesa"},
 	},
 	"pt": {
 		quote: []quoteMarker{
@@ -461,28 +464,45 @@ type ruleSet struct {
 type phrase struct {
 	text    string
 	bounded bool
-	// negatable phrases do not count straight after a negating word ("no me interesa mucho").
+	// negatable phrases do not count after a negating word in the same clause ("no me interesa mucho").
 	negatable bool
+	// asWritten phrases keep their accents, because folding them changes the meaning ("sí" is not "si").
+	asWritten bool
 }
 
-// negators are the words that, directly before an interest phrase, turn it around.
+// negators are the words that, shortly before an interest phrase, turn it around.
 var negators = map[string]bool{
 	"no": true, "not": true, "nicht": true, "kein": true, "keine": true, "keinen": true, "nie": true,
-	"pas": true, "ne": true, "non": true, "niet": true, "geen": true, "nao": true, "nunca": true, "jamas": true, "mai": true,
+	"pas": true, "ne": true, "non": true, "niet": true, "geen": true, "nao": true, "nunca": true, "jamas": true,
 }
 
-// negatedAt reports a negating word directly before start, with nothing but spaces between.
+// negationWindow is how many words back a negator still reaches ("no quiero agendar una llamada").
+const negationWindow = 3
+
+// negatedAt reports a negator within negationWindow words before start. Words are
+// separated by any whitespace; punctuation ends the clause, and the search with it.
 func negatedAt(text string, start int) bool {
-	head := strings.TrimRight(text[:start], " ")
-	end := len(head)
-	for end > 0 {
-		r, size := utf8.DecodeLastRuneInString(head[:end])
-		if !unicode.IsLetter(r) {
-			break
+	head := text[:start]
+	for range negationWindow {
+		head = strings.TrimRightFunc(head, unicode.IsSpace)
+		end := len(head)
+		for end > 0 {
+			r, size := utf8.DecodeLastRuneInString(head[:end])
+			if !unicode.IsLetter(r) {
+				break
+			}
+			end -= size
 		}
-		end -= size
+		word := head[end:]
+		if word == "" {
+			return false
+		}
+		if negators[word] {
+			return true
+		}
+		head = head[:end]
 	}
-	return negators[head[end:]]
+	return false
 }
 
 // in matches an English base phrase against the text as written and a chosen
@@ -491,7 +511,9 @@ func (p phrase) in(text, folded string) bool {
 	if !p.bounded {
 		return strings.Contains(text, p.text)
 	}
-	text = folded
+	if !p.asWritten {
+		text = folded
+	}
 	for i := 0; i < len(text); {
 		j := strings.Index(text[i:], p.text)
 		if j < 0 {
@@ -567,6 +589,9 @@ func compileRules(parts []langRules) *ruleSet {
 		}
 		for _, pos := range p.positive {
 			rs.positive = append(rs.positive, phrase{text: accentFolder.Replace(strings.ToLower(pos)), bounded: i > 0, negatable: i > 0})
+		}
+		for _, pos := range p.positiveAsWritten {
+			rs.positive = append(rs.positive, phrase{text: strings.ToLower(pos), bounded: true, negatable: true, asWritten: true})
 		}
 	}
 	rs.quote = append(rs.quote, quoteMarker{re: regexp.MustCompile(`(?i)-{2,}\s*(` + strings.Join(separators, `|`) + `)\s*-{2,}`)})
