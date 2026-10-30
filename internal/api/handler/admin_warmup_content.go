@@ -149,7 +149,7 @@ func (h *Handler) AdminWarmupContentOverview(c *gin.Context) {
 		return
 	}
 
-	totalDemand, _ := h.WarmupContentRepo.WarmupSendsSince(ctx, time.Now().AddDate(0, 0, -7))
+	mailboxDemand, _ := h.WarmupContentRepo.WarmupMailboxDemandSince(ctx, time.Now().AddDate(0, 0, -7))
 
 	stock := make([]warmupSegmentStock, 0, 1)
 	for _, pool := range settings.Pools {
@@ -161,12 +161,12 @@ func (h *Handler) AdminWarmupContentOverview(c *gin.Context) {
 			segmentSet[segment] = struct{}{}
 		}
 		for seg := range segmentSet {
-			active, _ := h.WarmupContentRepo.CountActiveConversations(ctx, pool.PoolType, seg)
-			recent := totalDemand
+			active, _ := h.WarmupContentRepo.CountAvailableConversations(ctx, pool.PoolType, seg)
+			recent := mailboxDemand
 			stock = append(stock, warmupSegmentStock{
 				Segment:           seg,
 				Active:            active,
-				Target:            warmupcontent.AdaptiveThreadTarget(recent, settings.AISelectionShare, pool.TargetActiveThreads),
+				Target:            warmupcontent.AdaptiveThreadTarget(recent, pool.TargetActiveThreads),
 				RecentSends:       recent,
 				AverageDailySends: (recent + 6) / 7,
 			})

@@ -2,13 +2,14 @@ package tasks
 
 import (
 	"context"
-	"math/rand"
+	"errors"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/pkg/generation"
+	"github.com/warmbly/warmbly/internal/repository"
 )
 
 // warmupContent is the rendered content for one warmup send plus the cohort
@@ -24,9 +25,7 @@ type warmupContent struct {
 	maxTurns         int
 }
 
-// getWarmupSettings returns the warmup generation settings with a short
-// in-process TTL cache so the per-send AI-vs-static decision doesn't hit
-// Postgres on every warmup send. Falls back to defaults when unconfigured.
+// getWarmupSettings caches selection settings briefly between warmup sends.
 func (s *tasksService) getWarmupSettings(ctx context.Context) models.WarmupGenerationSettings {
 	if s.warmupContentRepo == nil {
 		return models.DefaultWarmupGenerationSettings()
@@ -53,20 +52,21 @@ func (s *tasksService) getWarmupSettings(ctx context.Context) models.WarmupGener
 	return *set
 }
 
-// pickNewWarmupContent selects content for a NEW (non-reply) warmup send. When
-// AI enrichment is enabled and the dice roll falls within AISelectionShare it
-// draws a thread from the cached, segment-aware AI bank; otherwise it uses the
-// static in-code library. The static library is always the safe fallback, so
-// an empty bank or disabled generator never stops warmup.
-func (s *tasksService) pickNewWarmupContent(ctx context.Context, account Email) warmupContent {
+var errWarmupContentUnavailable = errors.New("fresh approved warmup content is unavailable")
+
+// Reserve an approved pooled plan unseen by both participants; keep replies pinned.
+func (s *tasksService) pickNewWarmupContent(ctx context.Context, account Email, recipientID, taskID uuid.UUID) (warmupContent, error) {
 	settings := s.getWarmupSettings(ctx)
 
-	if settings.Enabled && s.warmupContentRepo != nil && rand.Intn(100) < settings.AISelectionShare {
+	if settings.Enabled && s.warmupContentRepo != nil {
 		// Content is drawn from the shared library by segment; tier doesn't
 		// affect content (only mailbox reputation isolation uses the pool).
 		segment := strings.TrimSpace(account.WarmupTag)
-		conv, err := s.warmupContentRepo.PickConversation(ctx, segment)
-		if err == nil && conv != nil && conv.ScenarioVersion != nil && conv.RenderingVersion != nil && conv.Status == models.WarmupConversationActive && conv.ReplyEligible && conv.LintPassed {
+		conv, err := s.warmupContentRepo.PickConversation(ctx, repository.WarmupContentPick{Segment: segment, TaskID: taskID, SenderID: account.ID, RecipientID: recipientID})
+		if err == nil && conv != nil && conv.ScenarioVersion != nil && conv.RenderingVersion != nil && conv.Status == models.WarmupConversationActive && conv.ReplyEligible && conv.LintPassed && conv.SemanticReview == "passed" {
+			if err := generation.ValidateFreshWarmup(generation.Conversation{Subject: conv.Subject, Description: conv.Description, Messages: conv.Messages}); err != nil {
+				return warmupContent{}, errWarmupContentUnavailable
+			}
 			c := Conversation{ID: conv.ID, Subject: conv.Subject, Theme: conv.Theme, Description: conv.Description, Messages: conv.Messages}
 			body := GenerateConversationOpeningEmail(c, account)
 			subject := strings.TrimSpace(conv.Subject)
@@ -81,22 +81,10 @@ func (s *tasksService) pickNewWarmupContent(ctx context.Context, account Email) 
 					scenarioVersion:  *conv.ScenarioVersion,
 					renderingVersion: *conv.RenderingVersion,
 					maxTurns:         len(conv.Messages) + 1,
-				}
+				}, nil
 			}
 		}
 	}
 
-	bank := VettedDiagnosticConversations()
-	conversation := bank[rand.Intn(len(bank))]
-	staticID := conversation.ID
-	return warmupContent{
-		subject:          conversation.Subject,
-		body:             GenerateConversationEmail(conversation, account, false),
-		theme:            conversation.Theme,
-		contentSource:    models.WarmupContentSourceStatic,
-		conversationID:   &staticID,
-		scenarioVersion:  conversation.Version,
-		renderingVersion: generation.CanonicalRenderingVersion,
-		maxTurns:         len(conversation.Messages) + 1,
-	}
+	return warmupContent{}, errWarmupContentUnavailable
 }

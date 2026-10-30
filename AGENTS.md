@@ -24,6 +24,15 @@ store lives, what is kept and for how long, how it is backed up. The script is
 
 ## Working In This Repo
 
+### Warmup content and deliverability
+
+- Do not require fixed phrases, shared subject prefixes or repetitive boilerplate in warmup mail. Subjects and bodies must vary meaningfully while keeping each thread coherent.
+- Generate fresh content in the background and monitor whether it becomes usable. Do not silently treat a failed generator or an unavailable reviewer as a healthy content supply.
+- New warmup threads draw from an automatically replenished approved conversation pool. Preserve approved plans for future use with other mailboxes, prefer less-used plans, and never repeat a plan for either participating mailbox in either role. Do not impose an arbitrary lifetime usage cap or discard usable stock to force generation. Reserve atomically so retries and concurrent tasks cannot bypass mailbox exclusions. If no eligible plan exists, defer sending while the batch generator replenishes supply. Keep historical plans readable for existing replies.
+- Do not add random strings, fabricated reply prefixes, invented relationships or other cosmetic variation to disguise repetition.
+- Preserve honest automation disclosure, mailbox consent, authentication checks, provider limits, suppression and conservative pacing. Content variation must never bypass these safeguards.
+- Review warmup changes for potential deliverability harm. Do not claim that wording, synthetic exchanges or local checks guarantee inbox placement, improve reputation or prevent provider suspensions.
+
 CI is strict. `go build ./...` succeeding is not enough — `golangci-lint` runs `gofmt` as part of its checks, and a single unformatted import block or mis-indented doc comment will fail the PR even when the code compiles cleanly. Before declaring any Go change done:
 
 - run `gofmt -w` on every Go file you touched (or `gofmt -w internal/ cmd/` to be safe)

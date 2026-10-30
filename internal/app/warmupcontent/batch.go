@@ -264,6 +264,8 @@ func (s *service) ingestBatch(ctx context.Context, job *models.WarmupGenerationJ
 	job.FailedCount = 0
 
 	seen := make(map[string]bool, len(results))
+	subjects := make(map[string]bool, len(results))
+	openings := make(map[string]bool, len(results))
 	for i := range results {
 		r := &results[i]
 		index, indexErr := strconv.Atoi(strings.TrimPrefix(r.CustomID, job.ID.String()+"-"))
@@ -285,6 +287,10 @@ func (s *service) ingestBatch(ctx context.Context, job *models.WarmupGenerationJ
 			job.FailedCount++
 			continue
 		}
+		subjectKey := strings.ToLower(strings.Join(strings.Fields(subject), " "))
+		openingKey := strings.ToLower(strings.Join(strings.Fields(description), " "))
+		duplicate := subjects[subjectKey] || openings[openingKey]
+		subjects[subjectKey], openings[openingKey] = true, true
 		recordID := batchConversationID(job.ID, r.CustomID)
 		prior, err := s.repo.GetConversation(ctx, recordID)
 		if err != nil {
@@ -300,6 +306,10 @@ func (s *service) ingestBatch(ctx context.Context, job *models.WarmupGenerationJ
 			if prior.SemanticReview == "unavailable" {
 				job.FailedCount++
 			}
+			continue
+		}
+		if duplicate {
+			job.LintRejectedCount++
 			continue
 		}
 		if job.ContentVersion == nil {
@@ -333,20 +343,17 @@ func (s *service) ingestBatch(ctx context.Context, job *models.WarmupGenerationJ
 			continue
 		}
 		review, status := "unavailable", models.WarmupConversationArchived
-		if s.judge != nil {
-			if judgment, err := judgeThread(ctx, s.judge, rendered.Subject, rendered.Description, rendered.Messages); err != nil {
-				review = "unavailable"
-				job.FailedCount++
-			} else {
-				if reject, _ := judgment.Reject(); reject {
-					review = "rejected"
-					job.LintRejectedCount++
-				} else {
-					review, status = "passed", models.WarmupConversationActive
-				}
-			}
-		} else {
+		if err := generation.ValidateFreshWarmup(*r.Conversation); err != nil {
+			review = "rejected"
+			job.LintRejectedCount++
+		} else if judgment, err := s.reviewThread(ctx, rendered, job.Model); err != nil {
+			review = "unavailable"
 			job.FailedCount++
+		} else if reject, _ := judgment.Reject(); reject {
+			review = "rejected"
+			job.LintRejectedCount++
+		} else {
+			review, status = "passed", models.WarmupConversationActive
 		}
 		scenarioVersion, renderingVersion := generation.DiagnosticScenarioVersion, generation.CanonicalRenderingVersion
 

@@ -22,6 +22,18 @@ type controlRepo struct {
 	reserved   int
 	reserveErr error
 	countErr   error
+	available  int
+}
+
+func (*controlRepo) ExpireStaleScheduledJobs(context.Context, time.Time) (int64, error) {
+	return 0, nil
+}
+func (*controlRepo) RetireRiskyConversations(context.Context, time.Time, int, int, float64) (int, error) {
+	return 0, nil
+}
+func (*controlRepo) WarmupMailboxDemandSince(context.Context, time.Time) (int, error) { return 0, nil }
+func (r *controlRepo) CountAvailableConversations(context.Context, string, string) (int, error) {
+	return r.available, nil
 }
 
 func (r *controlRepo) GetGenerationSettings(context.Context) (*models.WarmupGenerationSettings, error) {
@@ -84,14 +96,16 @@ func (r *controlRepo) GetConversation(_ context.Context, id uuid.UUID) (*models.
 }
 
 type controlProvider struct {
-	model    string
-	modelErr error
-	requests []generation.BatchRequest
-	state    generation.BatchState
-	results  []generation.BatchResult
-	fetchErr error
-	polls    int
-	cancels  int
+	model     string
+	modelErr  error
+	requests  []generation.BatchRequest
+	state     generation.BatchState
+	results   []generation.BatchResult
+	fetchErr  error
+	polls     int
+	cancels   int
+	review    *generation.WarmupReview
+	reviewErr error
 }
 
 func (p *controlProvider) CheckModel(_ context.Context, model string) error {
@@ -111,13 +125,17 @@ func (p *controlProvider) FetchBatchResults(context.Context, string) ([]generati
 }
 func (p *controlProvider) CancelBatch(context.Context, string) error { p.cancels++; return nil }
 
+func (p *controlProvider) ReviewConversation(context.Context, generation.Conversation, string) (*generation.WarmupReview, error) {
+	return p.review, p.reviewErr
+}
+
 func newControlFixture() (*service, *controlRepo, *controlProvider) {
 	r := &controlRepo{settings: models.DefaultWarmupGenerationSettings()}
 	p := &controlProvider{}
 	return &service{repo: r, gen: p}, r, p
 }
 func diagnosticResult(job models.WarmupGenerationJob) generation.BatchResult {
-	return generation.BatchResult{CustomID: fmt.Sprintf("%s-0", job.ID), Conversation: &generation.Conversation{Subject: "Simulated diagnostic: sample count", Description: "Simulated diagnostic. This hypothetical sample contains 3 blue cards and 2 green cards. How many cards are in the sample?", Messages: []string{"The hypothetical sample contains 5 cards, not 6.", "Agreed. This example is closed; no physical cards were exchanged."}}}
+	return generation.BatchResult{CustomID: fmt.Sprintf("%s-0", job.ID), Conversation: &generation.Conversation{Subject: "A card count", Description: "An automated warmup exchange: this hypothetical sample contains 3 blue cards and 2 green cards. How many cards are in the sample?", Messages: []string{"The hypothetical sample contains 5 cards, not 6.", "Agreed. This example is closed; no physical cards were exchanged."}}}
 }
 
 func TestGenerationStopBlocksBeforeProviderAndReservation(t *testing.T) {
@@ -131,6 +149,91 @@ func TestGenerationStopBlocksBeforeProviderAndReservation(t *testing.T) {
 	}
 	if p.model != "" || len(p.requests) != 0 || len(r.jobs) != 0 {
 		t.Fatal("stop touched provider or reserved job")
+	}
+}
+
+func TestScheduledGenerationReplenishesEligiblePoolCapacity(t *testing.T) {
+	s, r, p := newControlFixture()
+	r.settings.RefreshEnabled = false
+	r.available = 200
+	if err := s.RunScheduled(t.Context()); err != nil || len(p.requests) != 0 {
+		t.Fatalf("full pool generated unnecessarily: %v", err)
+	}
+	r.available = 199
+	if err := s.RunScheduled(t.Context()); err != nil || len(p.requests) != 1 {
+		t.Fatalf("depleted capacity did not replenish automatically: requests=%d err=%v", len(p.requests), err)
+	}
+}
+
+func TestBatchReviewsWithOpenAIWhenTypeSafeIsAbsent(t *testing.T) {
+	for _, review := range []*generation.WarmupReview{
+		{Coherent: true, Confidence: 0.95},
+		{Coherent: true, Confidence: 0.5},
+		{Coherent: true, ContainsPitch: true, Confidence: 0.95},
+		{Coherent: true, FabricatesEvents: true, Confidence: 0.95},
+		nil,
+	} {
+		s, r, p := newControlFixture()
+		version := generation.DiagnosticScenarioVersion
+		job := models.WarmupGenerationJob{ID: uuid.New(), Model: "configured-model", RequestedCount: 1, ContentVersion: &version}
+		r.jobs = append(r.jobs, job)
+		p.review = review
+		result := diagnosticResult(job)
+		result.Conversation.Subject = "A card count"
+		result.Conversation.Description = "An automated warmup example has 3 blue cards and 2 green cards. How many cards is that?"
+		p.results = []generation.BatchResult{result}
+		if err := s.ingestBatch(t.Context(), &r.jobs[0], "output", generation.BatchCounts{Total: 1}); err != nil {
+			t.Fatal(err)
+		}
+		got := r.records[batchConversationID(job.ID, result.CustomID)]
+		approved := review != nil && review.Coherent && !review.ContainsPitch && !review.FabricatesEvents && review.Confidence >= judgeConfFloor
+		if (got.Status == models.WarmupConversationActive) != approved || got.ReplyEligible != approved {
+			t.Fatalf("semantic review bypassed: review=%+v record=%+v", review, got)
+		}
+	}
+}
+
+func TestBatchRejectsRepeatedSubjectsAndOpenings(t *testing.T) {
+	s, r, p := newControlFixture()
+	version := generation.DiagnosticScenarioVersion
+	job := models.WarmupGenerationJob{ID: uuid.New(), Model: "configured-model", RequestedCount: 3, ContentVersion: &version}
+	r.jobs = append(r.jobs, job)
+	p.review = &generation.WarmupReview{Coherent: true, Confidence: 0.95}
+	for i := range 3 {
+		result := diagnosticResult(job)
+		result.CustomID = fmt.Sprintf("%s-%d", job.ID, i)
+		if i == 1 {
+			result.Conversation.Subject = "  A   CARD COUNT "
+			result.Conversation.Description += " A different opening."
+		}
+		if i == 2 {
+			result.Conversation.Subject = "A different subject"
+		}
+		p.results = append(p.results, result)
+	}
+	if err := s.ingestBatch(t.Context(), &r.jobs[0], "output", generation.BatchCounts{Total: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if r.jobs[0].GeneratedCount != 1 || r.jobs[0].LintRejectedCount != 2 || len(r.records) != 1 {
+		t.Fatalf("duplicate content accepted: %+v", r.jobs[0])
+	}
+}
+
+func TestBatchKeepsHistoricalQueuedOutputWithoutReactivatingBoilerplate(t *testing.T) {
+	s, r, p := newControlFixture()
+	version := generation.DiagnosticScenarioVersion
+	job := models.WarmupGenerationJob{ID: uuid.New(), Model: "configured-model", RequestedCount: 1, ContentVersion: &version}
+	r.jobs = append(r.jobs, job)
+	result := diagnosticResult(job)
+	result.Conversation.Subject = "Simulated diagnostic: sample count"
+	result.Conversation.Description = "Simulated diagnostic. A hypothetical sample has 5 cards. How many cards is that?"
+	p.results = []generation.BatchResult{result}
+	if err := s.ingestBatch(t.Context(), &r.jobs[0], "output", generation.BatchCounts{Total: 1}); err != nil {
+		t.Fatal(err)
+	}
+	got := r.records[batchConversationID(job.ID, result.CustomID)]
+	if got.Subject != result.Conversation.Subject || got.Description != result.Conversation.Description || got.Status != models.WarmupConversationArchived || got.SemanticReview != "rejected" || got.ReplyEligible {
+		t.Fatalf("historical queued output was lost or reactivated: %+v", got)
 	}
 }
 

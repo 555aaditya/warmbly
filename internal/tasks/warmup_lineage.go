@@ -32,7 +32,8 @@ func lintDiagnosticContent(subject, body string, reply bool, account Email) erro
 	if identity == "" {
 		identity = account.Email
 	}
-	canonical := strings.TrimSuffix(body, "\n\nSimulated diagnostic.\n"+identity)
+	canonical := strings.TrimSuffix(body, "\n\n"+identity)
+	canonical = strings.TrimSuffix(canonical, "\n\nSimulated diagnostic.")
 	return lintWarmupContent(subject, canonical, reply)
 }
 

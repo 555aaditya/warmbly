@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -22,20 +23,15 @@ func (r *qualityContentRepo) GetGenerationSettings(context.Context) (*models.War
 	s.AISelectionShare = 100
 	return &s, nil
 }
-func (r *qualityContentRepo) PickConversation(context.Context, string) (*models.WarmupConversation, error) {
+func (r *qualityContentRepo) PickConversation(context.Context, repository.WarmupContentPick) (*models.WarmupConversation, error) {
 	return r.conversation, nil
 }
 
 func TestVettedStaticOpeningContinuationAndClosure(t *testing.T) {
-	s := &tasksService{}
 	account := Email{Name: "Ada A", Email: "ada@example.test"}
-	for i := 0; i < 20; i++ {
-		got := s.pickNewWarmupContent(context.Background(), account)
-		if got.contentSource != models.WarmupContentSourceStatic || got.conversationID == nil {
-			t.Fatal("missing static source ID")
-		}
-		c, ok := ResolveDiagnosticConversation(*got.conversationID)
-		if !ok || c.Version != generation.DiagnosticScenarioVersion || got.subject != c.Subject || got.body != c.Description+"\n\nSimulated diagnostic.\nAda A" {
+	for _, source := range VettedDiagnosticConversations() {
+		c, ok := ResolveDiagnosticConversation(source.ID)
+		if !ok || c.Version != generation.DiagnosticScenarioVersion || c.Subject != source.Subject || GenerateConversationOpeningEmail(c, account) != c.Description+"\n\nAda A" {
 			t.Fatal("opening subject, body or stable provenance mismatch")
 		}
 		for n := 1; n <= len(c.Messages); n++ {
@@ -44,7 +40,7 @@ func TestVettedStaticOpeningContinuationAndClosure(t *testing.T) {
 				sender = Email{Name: "Ben B", Email: "ben@example.test"}
 			}
 			reply, ok := GenerateConversationReplyEmail(c, sender, n)
-			if !ok || reply != c.Messages[n-1]+"\n\nSimulated diagnostic.\n"+sender.Name {
+			if !ok || reply != c.Messages[n-1]+"\n\n"+sender.Name {
 				t.Fatalf("reply %d changed canonical facts/role", n)
 			}
 			if n == len(c.Messages) && strings.Contains(reply, "?") {
@@ -64,19 +60,37 @@ func TestVettedStaticOpeningContinuationAndClosure(t *testing.T) {
 }
 
 func TestAISelectionPreservesSubjectAndCanonicalBody(t *testing.T) {
-	conv := &models.WarmupConversation{ID: uuid.New(), Subject: "Simulated diagnostic: dates", Description: "Simulated diagnostic. Ada will not meet on 2026-10-08 at 14:00.", Theme: "dates", Messages: []string{"Nothing was scheduled."}}
+	conv := &models.WarmupConversation{ID: uuid.New(), Subject: "A date example", Description: "An automated warmup example: Ada will not meet on 2026-10-08 at 14:00.", Theme: "dates", Messages: []string{"Nothing was scheduled."}}
 	scenario, rendering := generation.DiagnosticScenarioVersion, generation.CanonicalRenderingVersion
 	conv.ScenarioVersion, conv.RenderingVersion = &scenario, &rendering
 	conv.Status, conv.ReplyEligible, conv.LintPassed = models.WarmupConversationActive, true, true
+	conv.SemanticReview = "passed"
 	s := &tasksService{warmupContentRepo: &qualityContentRepo{conversation: conv}}
-	got := s.pickNewWarmupContent(context.Background(), Email{Name: "Ada A", Email: "ada@example.test"})
-	if got.contentSource != models.WarmupContentSourceAI || *got.conversationID != conv.ID || got.subject != conv.Subject || got.body != conv.Description+"\n\nSimulated diagnostic.\nAda A" {
+	got, err := s.pickNewWarmupContent(context.Background(), Email{Name: "Ada A", Email: "ada@example.test"}, uuid.New(), uuid.New())
+	if err != nil || got.contentSource != models.WarmupContentSourceAI || *got.conversationID != conv.ID || got.subject != conv.Subject || got.body != conv.Description+"\n\nAda A" {
 		t.Fatal("AI subject, facts, signature or ID changed")
 	}
 	conv.Description = "{14:00|15:00}"
-	got = s.pickNewWarmupContent(context.Background(), Email{Name: "Ada A", Email: "ada@example.test"})
-	if got.contentSource != models.WarmupContentSourceStatic || *got.conversationID == conv.ID {
-		t.Fatal("failed AI render retained stale provenance")
+	got, err = s.pickNewWarmupContent(context.Background(), Email{Name: "Ada A", Email: "ada@example.test"}, uuid.New(), uuid.New())
+	if !errors.Is(err, errWarmupContentUnavailable) || got.conversationID != nil {
+		t.Fatal("invalid content did not wait for fresh supply")
+	}
+}
+
+func TestNewWarmupWaitsRatherThanReusingHistoricalContent(t *testing.T) {
+	for _, repo := range []*qualityContentRepo{
+		nil,
+		{},
+		{conversation: &models.WarmupConversation{ID: uuid.New(), Subject: "Simulated diagnostic: dates", Description: "Simulated diagnostic. A date example.", Messages: []string{"Closed."}, Status: models.WarmupConversationActive, ReplyEligible: true, LintPassed: true}},
+	} {
+		s := &tasksService{}
+		if repo != nil {
+			s.warmupContentRepo = repo
+		}
+		content, err := s.pickNewWarmupContent(t.Context(), Email{Name: "Ada", Email: "ada@example.test"}, uuid.New(), uuid.New())
+		if !errors.Is(err, errWarmupContentUnavailable) || content.conversationID != nil || content.body != "" {
+			t.Fatalf("unavailable fresh supply produced a send: %+v, %v", content, err)
+		}
 	}
 }
 
@@ -163,7 +177,7 @@ func TestVettedStaticBankFinalRenderedFactsAndIdentities(t *testing.T) {
 					}
 					canonical = rendered.Messages[turn-1]
 				}
-				if got != body+"\n\nSimulated diagnostic.\n"+sender.Name || got != canonical || strings.Contains(got, senders[(turn+1)%2].Name) {
+				if got != body+"\n\n"+sender.Name || got != canonical || strings.Contains(got, senders[(turn+1)%2].Name) {
 					t.Fatalf("turn %d canonical content or actual identity changed", turn)
 				}
 				for _, fact := range fixture.facts[turn] {
