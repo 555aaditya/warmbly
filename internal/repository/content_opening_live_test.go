@@ -174,3 +174,38 @@ func TestLiveContentPoolHonorsHistoricalTokensAndExcludesFixedWording(t *testing
 		t.Fatalf("fixed wording selected: %+v %v", c, err)
 	}
 }
+
+func TestLiveContentPoolReplenishesForDisjointParticipantHistories(t *testing.T) {
+	f, r, segment, first := contentPoolFixture(t)
+	second := uuid.New()
+	_, err := f.pool.Exec(t.Context(), `INSERT INTO warmup_conversations(id,pool_type,segment,source,subject,description,messages,status,scenario_version,rendering_version,reply_eligible,lint_passed,semantic_review)
+ SELECT $2,pool_type,segment,source,'A different example',description,messages,status,scenario_version,rendering_version,reply_eligible,lint_passed,semantic_review FROM warmup_conversations WHERE id=$1`, first, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.pool.Exec(t.Context(), `INSERT INTO warmup_conversation_mailboxes(conversation_id,email_account_id) VALUES($1,$2),($3,$4)`, first, f.sender, second, f.recipient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := r.CountAvailableConversations(t.Context(), "premium", segment); err != nil || n != 0 {
+		t.Fatalf("disjoint participant histories hid exhaustion: n=%d err=%v", n, err)
+	}
+	if c, err := r.PickConversation(t.Context(), contentPoolPick(t, f, segment, f.sender, f.recipient)); err != nil || c != nil {
+		t.Fatalf("exhausted pair selected a conversation: %+v %v", c, err)
+	}
+}
+
+func TestLiveContentPoolDemandCountsPlansRatherThanReplies(t *testing.T) {
+	f, r, _, conversation := contentPoolFixture(t)
+	// A separate time window isolates this fleet-wide aggregate from other fixtures.
+	cutoff := time.Date(2200, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, id := range []any{conversation, conversation, nil} {
+		_, err := f.pool.Exec(t.Context(), `INSERT INTO warmup_tokens(token,task_id,sender_account_id,recipient_account_id,conversation_id,created_at) VALUES($1,$2,$3,$4,$5,$6)`, uuid.New(), f.task, f.sender, f.recipient, id, cutoff.Add(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := r.WarmupMailboxDemandSince(t.Context(), cutoff); err != nil || n != 1 {
+		t.Fatalf("reply or unversioned token inflated plan demand: n=%d err=%v", n, err)
+	}
+}

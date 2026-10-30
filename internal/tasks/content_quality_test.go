@@ -16,6 +16,7 @@ import (
 type qualityContentRepo struct {
 	repository.WarmupContentRepository
 	conversation *models.WarmupConversation
+	pickErr      error
 }
 
 func (r *qualityContentRepo) GetGenerationSettings(context.Context) (*models.WarmupGenerationSettings, error) {
@@ -24,7 +25,16 @@ func (r *qualityContentRepo) GetGenerationSettings(context.Context) (*models.War
 	return &s, nil
 }
 func (r *qualityContentRepo) PickConversation(context.Context, repository.WarmupContentPick) (*models.WarmupConversation, error) {
-	return r.conversation, nil
+	return r.conversation, r.pickErr
+}
+
+func TestWarmupContentPreservesRepositoryFailure(t *testing.T) {
+	want := errors.New("temporary content repository failure")
+	s := &tasksService{warmupContentRepo: &qualityContentRepo{pickErr: want}}
+	_, err := s.pickNewWarmupContent(t.Context(), Email{ID: uuid.New()}, uuid.New(), uuid.New())
+	if !errors.Is(err, want) || errors.Is(err, errWarmupContentUnavailable) {
+		t.Fatalf("repository failure became content exhaustion: %v", err)
+	}
 }
 
 func TestVettedStaticOpeningContinuationAndClosure(t *testing.T) {

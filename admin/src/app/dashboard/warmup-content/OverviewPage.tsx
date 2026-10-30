@@ -71,7 +71,7 @@ function pipelineSteps(d: WarmupContentOverview): PipelineStep[] {
             ok: d.schedule_enabled,
             detail: d.schedule_enabled
                 ? `Tops the library up every ${d.cadence_hours}h`
-                : "New conversations wait for fresh approved content",
+                : "Automatic replenishment off; eligible pooled plans remain available",
         },
         {
             label: "Library stocked",

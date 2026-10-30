@@ -63,7 +63,10 @@ func (s *tasksService) pickNewWarmupContent(ctx context.Context, account Email, 
 		// affect content (only mailbox reputation isolation uses the pool).
 		segment := strings.TrimSpace(account.WarmupTag)
 		conv, err := s.warmupContentRepo.PickConversation(ctx, repository.WarmupContentPick{Segment: segment, TaskID: taskID, SenderID: account.ID, RecipientID: recipientID})
-		if err == nil && conv != nil && conv.ScenarioVersion != nil && conv.RenderingVersion != nil && conv.Status == models.WarmupConversationActive && conv.ReplyEligible && conv.LintPassed && conv.SemanticReview == "passed" {
+		if err != nil {
+			return warmupContent{}, err
+		}
+		if conv != nil && conv.ScenarioVersion != nil && conv.RenderingVersion != nil && conv.Status == models.WarmupConversationActive && conv.ReplyEligible && conv.LintPassed && conv.SemanticReview == "passed" {
 			if err := generation.ValidateFreshWarmup(generation.Conversation{Subject: conv.Subject, Description: conv.Description, Messages: conv.Messages}); err != nil {
 				return warmupContent{}, errWarmupContentUnavailable
 			}

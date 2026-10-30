@@ -149,7 +149,11 @@ func (h *Handler) AdminWarmupContentOverview(c *gin.Context) {
 		return
 	}
 
-	mailboxDemand, _ := h.WarmupContentRepo.WarmupMailboxDemandSince(ctx, time.Now().AddDate(0, 0, -7))
+	mailboxDemand, err := h.WarmupContentRepo.WarmupMailboxDemandSince(ctx, time.Now().AddDate(0, 0, -7))
+	if err != nil {
+		errx.JSON(c, errx.InternalError())
+		return
+	}
 
 	stock := make([]warmupSegmentStock, 0, 1)
 	for _, pool := range settings.Pools {
@@ -161,7 +165,11 @@ func (h *Handler) AdminWarmupContentOverview(c *gin.Context) {
 			segmentSet[segment] = struct{}{}
 		}
 		for seg := range segmentSet {
-			active, _ := h.WarmupContentRepo.CountAvailableConversations(ctx, pool.PoolType, seg)
+			active, err := h.WarmupContentRepo.CountAvailableConversations(ctx, pool.PoolType, seg)
+			if err != nil {
+				errx.JSON(c, errx.InternalError())
+				return
+			}
 			recent := mailboxDemand
 			stock = append(stock, warmupSegmentStock{
 				Segment:           seg,

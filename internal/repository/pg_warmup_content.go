@@ -371,7 +371,8 @@ func (r *warmupContentRepository) CountAvailableConversations(ctx context.Contex
      AND ea.warmup_paused_at IS NULL AND ea.warmup_stopped_at IS NULL
    GROUP BY seen.email_account_id
  )
- SELECT (SELECT COUNT(*) FROM available)-COALESCE((SELECT MAX(seen_count) FROM exposure),0)
+ SELECT GREATEST(0, (SELECT COUNT(*) FROM available)
+   - COALESCE((SELECT SUM(seen_count) FROM (SELECT seen_count FROM exposure ORDER BY seen_count DESC LIMIT 2) most_exposed),0))
  `, poolType, segment).Scan(&n)
 	return n, err
 }
@@ -615,10 +616,10 @@ func (r *warmupContentRepository) WarmupMailboxDemandSince(ctx context.Context, 
 	var sends int
 	err := r.db.QueryRow(ctx, `
 		SELECT COALESCE(MAX(exposures),0)::integer FROM (
-          SELECT COUNT(*) AS exposures FROM (
-            SELECT sender_account_id AS mailbox FROM warmup_tokens WHERE created_at >= $1
+          SELECT COUNT(DISTINCT conversation_id) AS exposures FROM (
+            SELECT sender_account_id AS mailbox,conversation_id FROM warmup_tokens WHERE created_at >= $1 AND conversation_id IS NOT NULL
             UNION ALL
-            SELECT recipient_account_id AS mailbox FROM warmup_tokens WHERE created_at >= $1
+            SELECT recipient_account_id AS mailbox,conversation_id FROM warmup_tokens WHERE created_at >= $1 AND conversation_id IS NOT NULL
           ) participants GROUP BY mailbox
         ) demand
 	`, since).Scan(&sends)

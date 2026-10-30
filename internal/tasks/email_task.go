@@ -356,6 +356,10 @@ func (s *tasksService) HandleEmailTask(task *proto.ProcessTask) *errx.Error {
 		var contentErr error
 		content, contentErr = s.pickNewWarmupContent(ctx, *account, partner.ID, taskID)
 		if contentErr != nil {
+			if !errors.Is(contentErr, errWarmupContentUnavailable) {
+				errs.CaptureException(contentErr)
+				return errx.InternalError()
+			}
 			log.Warn().Str("email_account_id", account.ID.String()).Msg("Warmup waiting for fresh approved content; check the generation job and provider configuration")
 			return s.closeWarmupThread(ctx, taskID, account.ID)
 		}

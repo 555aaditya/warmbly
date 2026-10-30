@@ -116,6 +116,16 @@ func TestLiveWarmupTaskDoesNotApplyResultsAfterConfirmedDeferral(t *testing.T) {
 	f.svc.scheduler = preparationScheduler{}
 	sender := &preparationDeferringSender{repo: f.svc.taskRepo.(repository.WarmupDispatchRepository)}
 	f.svc.emailSender = sender
+	f.svc.warmupContentRepo = &qualityContentRepo{pickErr: errors.New("temporary repository failure")}
+	if xerr := f.svc.HandleEmailTask(&proto.ProcessTask{TaskId: task.String()}); xerr == nil {
+		t.Fatal("repository failure was not retryable")
+	}
+	var retryStatus string
+	if err := f.pool.QueryRow(ctx, `SELECT status FROM tasks WHERE id=$1`, task).Scan(&retryStatus); err != nil || retryStatus != "pending" || sender.calls != 0 {
+		t.Fatalf("repository failure lost claimed task: status=%s calls=%d err=%v", retryStatus, sender.calls, err)
+	}
+	f.svc.warmupContentRepo = contentRepo
+	exec(`UPDATE tasks SET scheduled_at=NOW()-INTERVAL '1 minute' WHERE id=$1`, task)
 	for i := 1; i <= 2; i++ {
 		if xerr := f.svc.HandleEmailTask(&proto.ProcessTask{TaskId: task.String()}); xerr != nil {
 			t.Fatal(xerr)
