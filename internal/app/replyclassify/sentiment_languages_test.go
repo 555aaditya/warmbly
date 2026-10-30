@@ -211,6 +211,7 @@ func TestInterestedRepliesByLanguage(t *testing.T) {
 			"Agendemos una llamada.",
 			"Envíeme más información, por favor.",
 			"Estamos muy interesados.",
+			"Me interesa mucho, pero tengo una pregunta.",
 		},
 	}
 	for lang, replies := range positive {
@@ -252,6 +253,10 @@ func TestNegatedAndHedgedInterestIsNotPositive(t *testing.T) {
 		"No me parece buena idea programar una llamada.",
 		"No sé todavía si nos interesa mucho.",
 		"Je ne crois pas, honnêtement, que cela nous intéresse.",
+		"Me interesa mucho, pero no ahora.",
+		"Me interesa mucho. Pero no este año.",
+		"Klingt interessant, aber nicht vor dem nächsten Quartal.",
+		"Ça m'intéresse, mais pas maintenant.",
 	} {
 		if got := ClassifyOffline(Input{Subject: "Re: Hallo", BodyText: body, Languages: all}); got.Class == ClassPositive {
 			t.Errorf("%q read as positive", body)
@@ -275,5 +280,13 @@ func TestNegatedAtReadsTheSentence(t *testing.T) {
 		if got := negatedAt(text, len(text)-len("me interesa mucho")); got != want {
 			t.Errorf("negatedAt(%q) = %v, want %v", text, got, want)
 		}
+	}
+}
+
+// A negator in the subject never turns the body's interest around.
+func TestSubjectNegatorDoesNotReachTheBody(t *testing.T) {
+	in := Input{Subject: "Re: No-code platform", BodyText: "Me interesa mucho.", Languages: []string{"es"}}
+	if got := ClassifyOffline(in); got.Class != ClassPositive {
+		t.Errorf("%q under %q = %q, want positive", in.BodyText, in.Subject, got.Class)
 	}
 }

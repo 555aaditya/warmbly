@@ -491,6 +491,23 @@ func negatedAt(text string, start int) bool {
 	return false
 }
 
+// contrasts open a reservation; a negator after one takes the interest back.
+var contrasts = map[string]bool{
+	"aber": true, "jedoch": true, "allerdings": true, "mais": true, "cependant": true, "toutefois": true, "pero": true, "aunque": true,
+}
+
+// refusedAfter reports a contrast and then a negator later in the reply ("me interesa mucho, pero no ahora").
+func refusedAfter(text string, end int) bool {
+	contrast := false
+	for _, word := range strings.FieldsFunc(text[end:], func(r rune) bool { return !unicode.IsLetter(r) }) {
+		if contrast && negators[word] {
+			return true
+		}
+		contrast = contrast || contrasts[word]
+	}
+	return false
+}
+
 // in matches an English base phrase against the text as written and a chosen
 // language's phrase, whole words only, against its accent-folded form.
 func (p phrase) in(text, folded string) bool {
@@ -508,7 +525,7 @@ func (p phrase) in(text, folded string) bool {
 		start, end := i+j, i+j+len(p.text)
 		before, _ := utf8.DecodeLastRuneInString(text[:start])
 		after, _ := utf8.DecodeRuneInString(text[end:])
-		if !wordRune(before) && !wordRune(after) && !(p.negatable && negatedAt(text, start)) {
+		if !wordRune(before) && !wordRune(after) && !(p.negatable && (negatedAt(text, start) || refusedAfter(text, end))) {
 			return true
 		}
 		_, size := utf8.DecodeRuneInString(text[start:])

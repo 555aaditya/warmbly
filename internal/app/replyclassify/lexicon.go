@@ -19,7 +19,8 @@ import (
 //  3. Clear interest phrases => positive.
 //  4. Clear rejection phrases => negative.
 func classifyLexicon(in Input) (Result, bool) {
-	text := quoteFolder.Replace(strings.ToLower(strings.TrimSpace(in.Subject + "\n" + StripQuoted(in.BodyText, slices.Concat(in.Languages, optOutLanguages)...))))
+	// The subject ends its own sentence, so a negator there never reaches the body.
+	text := quoteFolder.Replace(strings.ToLower(strings.TrimSpace(in.Subject + ".\n" + StripQuoted(in.BodyText, slices.Concat(in.Languages, optOutLanguages)...))))
 	if text == "" {
 		return Result{}, false
 	}
