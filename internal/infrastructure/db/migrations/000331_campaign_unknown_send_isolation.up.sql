@@ -13,6 +13,8 @@ CREATE INDEX tasks_isolatable_unknown_campaign ON tasks (COALESCE(send_reserved_
       AND send_result_applied_at IS NULL AND send_released_at IS NULL;
 CREATE INDEX tasks_unresolved_campaign_isolation ON tasks (id)
     WHERE campaign_send_isolated_at IS NOT NULL AND send_result_applied_at IS NULL;
+CREATE INDEX idx_tasks_campaign_isolated_budget ON tasks (email_account_id,completed_at)
+    WHERE task_type='campaign' AND campaign_send_isolated_at IS NOT NULL AND send_released_at IS NULL;
 
 CREATE FUNCTION campaign_isolation_dispatch_guard() RETURNS trigger
 LANGUAGE plpgsql AS $$

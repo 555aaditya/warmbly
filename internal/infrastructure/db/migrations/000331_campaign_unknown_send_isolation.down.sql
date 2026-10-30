@@ -13,6 +13,7 @@ DROP FUNCTION campaign_isolation_executor_guard();
 DROP TRIGGER campaign_isolation_dispatch_guard ON campaign_contact_progress;
 DROP FUNCTION campaign_isolation_dispatch_guard();
 DROP INDEX tasks_unresolved_campaign_isolation;
+DROP INDEX idx_tasks_campaign_isolated_budget;
 DROP INDEX tasks_isolatable_unknown_campaign;
 DROP INDEX campaign_leads_pending_send_outcome;
 ALTER TABLE campaign_leads DROP COLUMN send_outcome_pending_at;
