@@ -13,7 +13,7 @@ import (
 )
 
 func diagnosticFixture() Conversation {
-	return Conversation{Subject: "A date example", Description: "For this automated warmup exchange, consider a hypothetical example: Ada will not schedule a meeting on 2026-10-08 at 14:00. What is excluded?", Messages: []string{"The example excludes a meeting on 2026-10-08 at 14:00.", "Agreed. This hypothetical scenario is closed; nothing was scheduled."}}
+	return Conversation{Subject: "Paper notes again", Description: "I've gone back to paper notes for meetings and I'm remembering more. Do you still keep yours digital?", Messages: []string{"Digital, mostly, though I copy the action items onto a card.", "That's a neat middle ground. Thanks,"}}
 }
 
 func TestCanonicalIdentityPreservesPunctuationAndUnicode(t *testing.T) {
@@ -45,15 +45,18 @@ func TestDiagnosticRenderingPreservesCanonicalFactsAndRoles(t *testing.T) {
 		t.Fatalf("opening or subject altered: %+v", rendered)
 	}
 	for i, body := range c.Messages {
-		name := "Ben B"
+		name, sep := "Ben B", "\n\n"
 		if i%2 == 1 {
 			name = "Ada A"
 		}
-		if rendered.Messages[i] != body+"\n\n"+name {
+		if strings.HasSuffix(body, ",") {
+			sep = "\n"
+		}
+		if rendered.Messages[i] != body+sep+name || StripCanonicalSignature(rendered.Messages[i], name) != body {
 			t.Fatalf("turn %d altered: %s", i, rendered.Messages[i])
 		}
 	}
-	if c.Messages[0] != "The example excludes a meeting on 2026-10-08 at 14:00." {
+	if c.Messages[0] != "Digital, mostly, though I copy the action items onto a card." {
 		t.Fatal("input mutated")
 	}
 }
@@ -76,24 +79,26 @@ func TestDiagnosticRejectsBrokenRenderedContract(t *testing.T) {
 	}
 }
 
-func TestHistoricalDisclosureRemainsReadableWithoutBecomingFreshSupply(t *testing.T) {
+func TestSelfDescribingWordingNeverBecomesFreshSupply(t *testing.T) {
 	c := diagnosticFixture()
+	if err := ValidateFreshWarmup(c); err != nil {
+		t.Fatalf("ordinary thread rejected: %v", err)
+	}
 	c.Subject = "Simulated diagnostic: date example"
 	c.Description = "Simulated diagnostic. In this hypothetical example, a date stays unchanged."
 	if _, err := RenderDiagnostic(c, [2]string{"Ada", "Ben"}); err != nil {
-		t.Fatalf("historical thread cannot finish: %v", err)
-	}
-	if err := ValidateFreshWarmup(c); err == nil {
-		t.Fatal("historical template accepted for a fresh opening")
+		t.Fatalf("historical thread cannot be read: %v", err)
 	}
 	for _, opening := range []string{
-		"An automated warmup exchange about a hypothetical date.",
-		"A hypothetical date is the topic of this warmup exchange, which is automated.",
-		"This system-generated practice exchange explores a fictional date.",
+		"Simulated diagnostic. In this hypothetical example, a date stays unchanged.",
+		"An automated warmup exchange about planning.",
+		"This warm-up note is about planning.",
+		"Quick test email about planning, nothing else.",
+		"A fictional date is the topic here.",
 	} {
-		c.Subject, c.Description = "A date example", opening
-		if err := ValidateFreshWarmup(c); err != nil {
-			t.Fatalf("varied disclosure rejected: %v", err)
+		c.Subject, c.Description = "Planning notes", opening
+		if err := ValidateFreshWarmup(c); err == nil {
+			t.Fatalf("self-describing opening accepted: %q", opening)
 		}
 	}
 }
@@ -154,8 +159,8 @@ func TestGenerateConversationChecksConfiguredModelAndCanonicalTurns(t *testing.T
 				w.WriteHeader(400)
 				return
 			}
-			if request.Model != "stored-model" || len(request.Messages) == 0 || !strings.Contains(request.Messages[0].Content, "exactly 2") || !strings.Contains(request.Messages[0].Content, "automated warmup") {
-				t.Error("configured model, turn count or disclosure contract changed")
+			if request.Model != "stored-model" || len(request.Messages) == 0 || !strings.Contains(request.Messages[0].Content, "exactly 2") || !strings.Contains(request.Messages[0].Content, "Never mention or hint that the mail is automated") {
+				t.Error("configured model, turn count or natural-mail contract changed")
 			}
 			body, _ := json.Marshal(fixture)
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": "fixture-chat", "object": "chat.completion", "created": 1, "model": "stored-model", "choices": []any{map[string]any{"index": 0, "message": map[string]any{"role": "assistant", "content": string(body)}, "finish_reason": "stop"}}})
@@ -176,16 +181,19 @@ func TestGenerateConversationChecksConfiguredModelAndCanonicalTurns(t *testing.T
 			t.Fatal(err)
 		}
 		rendered, err := RenderDiagnostic(*got, [2]string{"Ada A", "Ben B"})
-		if err != nil || rendered.Subject != fixture.Subject || rendered.Messages[0] != fixture.Messages[0]+"\n\nBen B" {
+		if err != nil || rendered.Subject != fixture.Subject || StripCanonicalSignature(rendered.Messages[0], "Ben B") != fixture.Messages[0] {
 			t.Fatalf("AI rendered facts, subject or roles changed: %v", err)
 		}
 	}
 }
 
 func TestOutgoingWarmupRejectsHistoricalWordingInAnyTurn(t *testing.T) {
-	for _, text := range []string{"Simulated diagnostic: clock", "A reply. SIMULATED DIAGNOSTIC.", "A reply. Simulated\n\tdiagnostic."} {
+	for _, text := range []string{"Simulated diagnostic: clock", "A reply. SIMULATED DIAGNOSTIC.", "A reply. Simulated\n\tdiagnostic.", "Part of our automated warmup."} {
 		if err := ValidateWarmupWording("A topic", text); err == nil {
-			t.Fatalf("historical wording remained sendable: %q", text)
+			t.Fatalf("self-describing wording remained sendable: %q", text)
 		}
+	}
+	if err := ValidateWarmupWording("Weekend plans", "We tested a new trail and it was lovely."); err != nil {
+		t.Fatalf("ordinary wording refused: %v", err)
 	}
 }

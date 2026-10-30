@@ -16,10 +16,10 @@ func TestWarmupReviewUsesConfiguredModelAndRefusesIncompleteVerdicts(t *testing.
 		name, response string
 		valid          bool
 	}{
-		{"approved", `{"contains_pitch":false,"fabricates_events":false,"coherent":true,"confidence":0.95}`, true},
+		{"approved", `{"contains_pitch":false,"unnatural":false,"coherent":true,"confidence":0.95}`, true},
 		{"missing_checks", `{"coherent":true,"confidence":0.95}`, false},
-		{"null_check", `{"contains_pitch":null,"fabricates_events":false,"coherent":true,"confidence":0.95}`, false},
-		{"invalid_confidence", `{"contains_pitch":false,"fabricates_events":false,"coherent":true,"confidence":2}`, false},
+		{"null_check", `{"contains_pitch":null,"unnatural":false,"coherent":true,"confidence":0.95}`, false},
+		{"invalid_confidence", `{"contains_pitch":false,"unnatural":false,"coherent":true,"confidence":2}`, false},
 		{"refusal", `Unable to review`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -432,10 +432,12 @@ jobs:
           for test in TestLiveContentPoolRejectsDuplicateBatchContentUnderConcurrency \
             TestLiveContentPoolRetryReservesOnceAndReplenishesForExposedMailboxes \
             TestLiveContentPoolPreservesPlansForFutureDistinctMailboxes \
-            TestLiveContentPoolConcurrentPairsCannotRepeatAMailbox \
+            TestLiveContentPoolConcurrentPairsAlwaysReceiveContent \
             TestLiveContentPoolPrefersLessUsedEligiblePlans \
-            TestLiveContentPoolHonorsHistoricalTokensAndExcludesFixedWording \
-            TestLiveContentPoolReplenishesForDisjointParticipantHistories \
+            TestLiveContentPoolPrefersWhatNeitherMailboxSawRecently \
+            TestLiveContentPoolExhaustedPairRepeatsTheLeastRecentlySeen \
+            TestLiveContentPoolTokenCleanupKeepsExposure \
+            TestLiveContentPoolStaticRowsOnlyFromTheCurrentLibrary \
             TestLiveContentPoolDemandCountsPlansRatherThanReplies \
             TestLiveWarmupDispatchRechecksOpeningSourceAndExactRecipient; do
             grep -q "^--- PASS: $test " content-pool.log

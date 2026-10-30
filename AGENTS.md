@@ -26,12 +26,11 @@ store lives, what is kept and for how long, how it is backed up. The script is
 
 ### Warmup content and deliverability
 
-- Do not require fixed phrases, shared subject prefixes or repetitive boilerplate in warmup mail. Subjects and bodies must vary meaningfully while keeping each thread coherent.
-- Generate fresh content in the background and monitor whether it becomes usable. Do not silently treat a failed generator or an unavailable reviewer as a healthy content supply.
-- New warmup threads draw from an automatically replenished approved conversation pool. Preserve approved plans for future use with other mailboxes, prefer less-used plans, and never repeat a plan for either participating mailbox in either role. Do not impose an arbitrary lifetime usage cap or discard usable stock to force generation. Reserve atomically so retries and concurrent tasks cannot bypass mailbox exclusions. If no eligible plan exists, defer sending while the batch generator replenishes supply. Keep historical plans readable for audit and lineage, but reject prohibited boilerplate in every outgoing opening, reply and queued execution. Stop incompatible old threads instead of rewriting their subjects or source text.
-- Do not add random strings, fabricated reply prefixes, invented relationships or other cosmetic variation to disguise repetition.
-- Preserve honest automation disclosure, mailbox consent, authentication checks, provider limits, suppression and conservative pacing. Content variation must never bypass these safeguards.
-- Review warmup changes for potential deliverability harm. Do not claim that wording, synthetic exchanges or local checks guarantee inbox placement, improve reputation or prevent provider suspensions.
+- Warmup mail reads as ordinary correspondence and never describes itself. `generation.ValidateWarmupWording` refuses any outgoing turn that calls itself simulated, diagnostic, hypothetical, fictional, automated, generated, a test message or a warmup; generation, review and the hand-written library all have to pass it. No fixed phrases, shared subject prefixes or repeated footers.
+- Content never runs out. New threads draw from the hand-written library (`internal/tasks/warmup_library_*.go`) and the AI bank together, preferring what neither mailbox saw in `repository.WarmupContentRepeatWindow`, then the least recently seen. Do not add a path that defers sending for lack of fresh content, and do not reintroduce a lifetime per-mailbox exclusion.
+- A library thread's ID is derived from its theme and opening, so editing one retires it and threads in flight on it close. Keep the library above the floor `TestStaticLibraryReadsAsOrdinaryMail` enforces.
+- Do not add random strings, fabricated reply prefixes, invented relationships or other cosmetic variation to disguise repetition. Content variation never bypasses mailbox consent, authentication checks, provider limits, suppression or pacing.
+- Do not claim that wording or local checks guarantee inbox placement, improve reputation or prevent provider suspensions.
 
 CI is strict. `go build ./...` succeeding is not enough — `golangci-lint` runs `gofmt` as part of its checks, and a single unformatted import block or mis-indented doc comment will fail the PR even when the code compiles cleanly. Before declaring any Go change done:
 

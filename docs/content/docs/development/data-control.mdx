@@ -88,7 +88,7 @@ Mail over a daily budget is deferred, never dropped: the provider cursor is held
 | Mailbox import columns | The key alone | For a column of an import file that no header name or value pattern placed: the column's header text and a description of its values (such as "16 lowercase letters" or "hostnames"), never a value | Nowhere; the answer only sets that column's suggested field, which can be changed before importing |
 | Mailbox import failures | The key alone | For a connect refusal the import does not recognise: the server's reply with addresses, IP addresses, usernames and long tokens scrubbed out, and the mail host family (such as `google_workspace` or `other`) | `mailbox_import_rows.cause`, as the cause the row is grouped under |
 
-Warmup generation sends theme instructions to the configured OpenAI Batch generator. When TypeSafe is absent, a separate OpenAI completion receives the complete generated thread with placeholder mailbox identities for semantic review. It receives generated content, not customer mailbox messages or credentials. Approved and rejected generated content and review status are stored in the shared content bank. Without a compatible OpenAI generator, no new warmup plans are generated and new threads wait when approved supply runs out. See [generation configuration and limits](/development/warmup-generation/).
+Warmup generation sends theme instructions to the configured OpenAI Batch generator. When TypeSafe is absent, a separate OpenAI completion receives the complete generated thread with placeholder sender names for semantic review. It receives generated content, not customer mailbox messages or credentials. Approved and rejected generated content and review status are stored in the shared content bank. Without a compatible OpenAI generator, nothing is sent to a provider and warmup uses the built-in conversation library, which never leaves the instance. See [generation configuration and limits](/development/warmup-generation/).
 
 See [Automatic inbox tagging](/guides/inbox-tagging/), [Advisor](/guides/advisor/), [Warmup](/guides/warmup/), [Deliverability](/guides/deliverability/), [Contacts](/guides/contacts-crm/#mapping-into-your-custom-fields), [Forms](/guides/forms/) and [Import mailboxes](/guides/mailbox-import/).
 
@@ -134,7 +134,7 @@ The iOS app proves it is a genuine copy with [App Attest](/api/reference/account
 
 ### Warmup content reservations
 
-`warmup_conversation_mailboxes` records which mailboxes have reserved each shared approved conversation. It prevents repeated exposure in either role and survives task and warmup-token cleanup. Rows remain until the conversation or mailbox is deleted. Instance backups preserve them; workspace exports exclude these instance-local reservations because the shared content library does not travel. Imported mailboxes join the destination’s content pool.
+`warmup_conversation_mailboxes` records when each mailbox last saw each shared conversation, as sender or recipient, so selection can avoid repeats within 30 days. It survives task and warmup-token cleanup. Rows remain until the conversation or mailbox is deleted. Instance backups preserve them; workspace exports exclude these instance-local reservations because the shared content library does not travel. Imported mailboxes join the destination’s content pool.
 
 ### Warmup reconnect recovery
 

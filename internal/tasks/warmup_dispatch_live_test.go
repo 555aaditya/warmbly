@@ -105,7 +105,7 @@ func TestLiveWarmupDispatchRechecksOpeningSourceAndExactRecipient(t *testing.T) 
 	exec(`UPDATE organizations SET risk_state='trusted' WHERE id=$1`, f.org)
 	exec(`UPDATE email_accounts SET test_mode='diagnostic',test_send_enabled=true,test_receive_enabled=true,warmup=NOW()-INTERVAL '30 days',warmup_pool_type='free',warmup_days=127,warmup_start_time='00:00',warmup_end_time='23:59',warmup_base=20,warmup_max=20,name='Ádám Support <EMEA>' WHERE organization_id=$1`, f.org)
 	task := uuid.New()
-	source := Conversation{ID: uuid.New(), Version: generation.DiagnosticScenarioVersion, Subject: "A wording choice", Description: "This automated warmup exchange compares two hypothetical labels. Which is clearer?", Messages: []string{"The shorter label is clearer.", "Agreed. The example is closed."}}
+	source := Conversation{ID: uuid.New(), Version: generation.WarmupScenarioVersion, Subject: "A wording choice", Description: "I'm rewording the labels on our intake form and can't pick between two options. Which one reads clearer to you?", Messages: []string{"The shorter one, I think. It scans faster.", "Agreed, I'll go with that. Thanks for the quick read."}}
 	contentRepo := repository.NewWarmupContentRepository(f.pool)
 	rendering := generation.CanonicalRenderingVersion
 	if err := contentRepo.InsertConversation(ctx, &models.WarmupConversation{ID: source.ID, PoolType: "premium", Source: models.WarmupContentSourceAI, Subject: source.Subject, Description: source.Description, Messages: source.Messages, Status: models.WarmupConversationActive, LintPassed: true, ReplyEligible: true, ScenarioVersion: &source.Version, RenderingVersion: &rendering, SemanticReview: "passed"}); err != nil {

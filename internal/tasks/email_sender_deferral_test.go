@@ -99,11 +99,11 @@ func TestLiveWarmupTaskDoesNotApplyResultsAfterConfirmedDeferral(t *testing.T) {
 	exec(`INSERT INTO warmup_tasks(task_id) VALUES($1)`, task)
 	exec(`UPDATE email_accounts SET test_receive_enabled=false WHERE id=$1`, f.atSmallHost)
 	contentRepo := repository.NewWarmupContentRepository(f.pool)
-	scenario, rendering := generation.DiagnosticScenarioVersion, generation.CanonicalRenderingVersion
+	scenario, rendering := generation.WarmupScenarioVersion, generation.CanonicalRenderingVersion
 	conversation := &models.WarmupConversation{
 		ID: uuid.New(), PoolType: "premium", Source: models.WarmupContentSourceAI,
-		Subject: "A card count", Description: "An automated warmup example: this hypothetical sample has three cards. How many cards are there?",
-		Messages: []string{"The hypothetical sample has three cards.", "Agreed. This example is closed."},
+		Subject: "A card count", Description: "We sorted the supply cupboard and found three boxes of index cards nobody remembers ordering. Do you still plan on cards?",
+		Messages: []string{"I do, mostly for sketching out a week at a glance.", "Same here. Good to know I'm not the only one."},
 		Status:   models.WarmupConversationActive, ReplyEligible: true, LintPassed: true,
 		ScenarioVersion: &scenario, RenderingVersion: &rendering, SemanticReview: "passed",
 	}
