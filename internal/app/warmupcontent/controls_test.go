@@ -23,6 +23,7 @@ type controlRepo struct {
 	reserveErr error
 	countErr   error
 	available  int
+	insertErr  error
 }
 
 func (*controlRepo) ExpireStaleScheduledJobs(context.Context, time.Time) (int64, error) {
@@ -81,11 +82,30 @@ func (r *controlRepo) MarkBatchCancelling(_ context.Context, id uuid.UUID, reaso
 	return false, nil
 }
 func (r *controlRepo) InsertConversation(_ context.Context, c *models.WarmupConversation) error {
+	if r.insertErr != nil {
+		return r.insertErr
+	}
 	if r.records == nil {
 		r.records = map[uuid.UUID]models.WarmupConversation{}
 	}
 	r.records[c.ID] = *c
 	return nil
+}
+
+func TestBatchCountsPriorLibraryDuplicatesAsRejectedContent(t *testing.T) {
+	s, r, p := newControlFixture()
+	version := generation.DiagnosticScenarioVersion
+	job := models.WarmupGenerationJob{ID: uuid.New(), Model: "configured-model", RequestedCount: 1, ContentVersion: &version}
+	r.jobs = append(r.jobs, job)
+	r.insertErr = repository.ErrWarmupConversationDuplicate
+	p.review = &generation.WarmupReview{Coherent: true, Confidence: 0.95}
+	p.results = []generation.BatchResult{diagnosticResult(job)}
+	if err := s.ingestBatch(t.Context(), &r.jobs[0], "output", generation.BatchCounts{Total: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if r.jobs[0].GeneratedCount != 0 || r.jobs[0].LintRejectedCount != 1 || r.jobs[0].FailedCount != 0 {
+		t.Fatalf("duplicate batch outcome: %+v", r.jobs[0])
+	}
 }
 func (r *controlRepo) GetConversation(_ context.Context, id uuid.UUID) (*models.WarmupConversation, error) {
 	c, ok := r.records[id]

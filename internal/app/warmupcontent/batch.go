@@ -2,6 +2,7 @@ package warmupcontent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/pkg/generation"
 	"github.com/warmbly/warmbly/internal/pkg/warmlint"
+	"github.com/warmbly/warmbly/internal/repository"
 )
 
 // themeForIndex uses a pinned theme when present, otherwise it rotates through
@@ -375,6 +377,10 @@ func (s *service) ingestBatch(ctx context.Context, job *models.WarmupGenerationJ
 			SemanticReview:   review,
 		}
 		if err := s.repo.InsertConversation(ctx, record); err != nil {
+			if errors.Is(err, repository.ErrWarmupConversationDuplicate) {
+				job.LintRejectedCount++
+				continue
+			}
 			job.FailedCount++
 			return err
 		}

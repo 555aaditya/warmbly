@@ -220,3 +220,19 @@ func TestVettedStaticOriginalScenarioContentRemainsImmutable(t *testing.T) {
 		}
 	}
 }
+
+func TestHistoricalStaticRepliesStopWithoutRewritingSource(t *testing.T) {
+	source := VettedDiagnosticConversations()[0]
+	candidate := &repository.WarmupReplyCandidate{ConversationID: &source.ID, Subject: source.Subject, ContentSource: models.WarmupContentSourceStatic, ScenarioVersion: source.Version, RenderingVersion: generation.CanonicalRenderingVersion, MessageID: "parent@example.test", MaxTurns: len(source.Messages) + 1}
+	s := &tasksService{}
+	if _, _, _, err := s.exactReplyContent(t.Context(), candidate, Email{Name: "Ada"}); err == nil {
+		t.Fatal("historical static reply continued with diagnostic wording")
+	}
+	if err := lintDiagnosticContent("A topic", "A reply.\n\nSimulated diagnostic.\n\nAda", true, Email{Name: "Ada"}); err == nil {
+		t.Fatal("historical footer passed final dispatch lint")
+	}
+	retained, ok := ResolveDiagnosticConversation(source.ID)
+	if !ok || retained.Subject != source.Subject || retained.Description != source.Description {
+		t.Fatal("historical source was rewritten instead of stopping dispatch")
+	}
+}

@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -8,6 +10,51 @@ import (
 
 	"github.com/google/uuid"
 )
+
+func TestLiveContentPoolRejectsDuplicateBatchContentUnderConcurrency(t *testing.T) {
+	_, r, _, original := contentPoolFixture(t)
+	base, err := r.GetConversation(t.Context(), original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject := "A shared topic " + uuid.NewString()
+	accepted := make(chan uuid.UUID, 12)
+	var workers sync.WaitGroup
+	for i := range 12 {
+		workers.Go(func() {
+			c := *base
+			c.ID, c.Subject, c.Description = uuid.New(), subject, "A distinct opening "+uuid.NewString()
+			if i%2 == 1 {
+				c.Subject = "  " + strings.ToUpper(subject) + "  "
+			}
+			if err := r.InsertConversation(t.Context(), &c); err == nil {
+				accepted <- c.ID
+			} else if !errors.Is(err, ErrWarmupConversationDuplicate) {
+				t.Error(err)
+			}
+		})
+	}
+	workers.Wait()
+	close(accepted)
+	if len(accepted) != 1 {
+		t.Fatalf("identical subjects admitted from concurrent batches: %d", len(accepted))
+	}
+	winner, err := r.GetConversation(t.Context(), <-accepted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.InsertConversation(t.Context(), winner); err != nil {
+		t.Fatalf("same-record retry lost idempotence: %v", err)
+	}
+	winner.ID, winner.Subject = uuid.New(), "Another topic "+uuid.NewString()
+	winner.Description = "\n" + strings.ToUpper(winner.Description) + "\n"
+	if err := r.InsertConversation(t.Context(), winner); !errors.Is(err, ErrWarmupConversationDuplicate) {
+		t.Fatalf("reused opening admitted under another subject: %v", err)
+	}
+	if c, err := r.GetConversation(t.Context(), winner.ID); err != nil || c != nil {
+		t.Fatalf("rejected content entered pool: %+v %v", c, err)
+	}
+}
 
 func contentPoolFixture(t *testing.T) (*poolLinkFixture, *warmupContentRepository, string, uuid.UUID) {
 	t.Helper()

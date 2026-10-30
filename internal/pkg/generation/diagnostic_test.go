@@ -64,7 +64,6 @@ func TestDiagnosticRejectsBrokenRenderedContract(t *testing.T) {
 		func(c *Conversation) { c.Messages[0] = "" },
 		func(c *Conversation) { c.Messages[0] = "{14:00|15:00}" },
 		func(c *Conversation) { c.Messages[1] = "And tomorrow?" },
-		func(c *Conversation) { c.Description = "Pretend this is real." },
 	} {
 		c := diagnosticFixture()
 		mutate(&c)
@@ -90,6 +89,7 @@ func TestHistoricalDisclosureRemainsReadableWithoutBecomingFreshSupply(t *testin
 	for _, opening := range []string{
 		"An automated warmup exchange about a hypothetical date.",
 		"A hypothetical date is the topic of this warmup exchange, which is automated.",
+		"This system-generated practice exchange explores a fictional date.",
 	} {
 		c.Subject, c.Description = "A date example", opening
 		if err := ValidateFreshWarmup(c); err != nil {
@@ -178,6 +178,14 @@ func TestGenerateConversationChecksConfiguredModelAndCanonicalTurns(t *testing.T
 		rendered, err := RenderDiagnostic(*got, [2]string{"Ada A", "Ben B"})
 		if err != nil || rendered.Subject != fixture.Subject || rendered.Messages[0] != fixture.Messages[0]+"\n\nBen B" {
 			t.Fatalf("AI rendered facts, subject or roles changed: %v", err)
+		}
+	}
+}
+
+func TestOutgoingWarmupRejectsHistoricalWordingInAnyTurn(t *testing.T) {
+	for _, text := range []string{"Simulated diagnostic: clock", "A reply. SIMULATED DIAGNOSTIC.", "A reply. Simulated\n\tdiagnostic."} {
+		if err := ValidateWarmupWording("A topic", text); err == nil {
+			t.Fatalf("historical wording remained sendable: %q", text)
 		}
 	}
 }

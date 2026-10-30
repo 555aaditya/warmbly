@@ -96,6 +96,8 @@ type warmupContentRepository struct {
 	db *pgxpool.Pool
 }
 
+var ErrWarmupConversationDuplicate = errors.New("warmup subject or opening is already in the conversation library")
+
 // NewWarmupContentRepository creates a new warmup content repository.
 func NewWarmupContentRepository(db *pgxpool.Pool) WarmupContentRepository {
 	return &warmupContentRepository{db: db}
@@ -109,17 +111,40 @@ func (r *warmupContentRepository) InsertConversation(ctx context.Context, c *mod
 	if err != nil {
 		return err
 	}
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if c.SemanticReview == "passed" {
+		// Serialize approved inserts so simultaneous batches cannot admit identical content.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('warmbly:approved-warmup-content',0))`); err != nil {
+			return err
+		}
+		var duplicate bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM warmup_conversations WHERE id<>$3 AND semantic_review='passed' AND (
+ lower(btrim(regexp_replace(subject,'\s+',' ','g')))=lower(btrim(regexp_replace($1::text,'\s+',' ','g'))) OR
+ lower(btrim(regexp_replace(description,'\s+',' ','g')))=lower(btrim(regexp_replace($2::text,'\s+',' ','g')))))`, c.Subject, c.Description, c.ID).Scan(&duplicate); err != nil {
+			return err
+		}
+		if duplicate {
+			return ErrWarmupConversationDuplicate
+		}
+	}
 	query := `
 		INSERT INTO warmup_conversations
 			(id, pool_type, segment, source, theme, subject, description, messages, status, lint_passed, reply_eligible, usage_count, generated_by_job_id, scenario_version, rendering_version, semantic_review)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, COALESCE(NULLIF($16, ''), 'legacy_unknown'))
 		ON CONFLICT (id) DO NOTHING
 	`
-	_, err = r.db.Exec(ctx, query,
+	_, err = tx.Exec(ctx, query,
 		c.ID, c.PoolType, c.Segment, c.Source, c.Theme, c.Subject, c.Description,
 		msgs, c.Status, c.LintPassed, c.ReplyEligible, c.UsageCount, c.GeneratedByJob, c.ScenarioVersion, c.RenderingVersion, c.SemanticReview,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func scanConversation(row pgx.Row) (*models.WarmupConversation, error) {

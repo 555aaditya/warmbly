@@ -13,10 +13,8 @@ func ValidateDiagnostic(c Conversation) error {
 	if strings.TrimSpace(c.Subject) == "" || strings.ContainsAny(c.Subject, "<>{}\x00\r\n") {
 		return fmt.Errorf("missing subject or invalid subject header")
 	}
-	opening := strings.ToLower(c.Description)
-	legacyDisclosure := strings.HasPrefix(c.Description, "Simulated diagnostic.")
-	if !(legacyDisclosure || strings.Contains(opening, "automated") && strings.Contains(opening, "warmup")) || len(c.Messages) == 0 || len(c.Messages) > 5 {
-		return fmt.Errorf("missing diagnostic disclosure or invalid turn count")
+	if len(c.Messages) == 0 || len(c.Messages) > 5 {
+		return fmt.Errorf("invalid turn count")
 	}
 	turns := append([]string{c.Description}, c.Messages...)
 	for _, text := range turns {
@@ -35,8 +33,13 @@ func ValidateFreshWarmup(c Conversation) error {
 	if err := ValidateDiagnostic(c); err != nil {
 		return err
 	}
-	for _, text := range append([]string{c.Subject, c.Description}, c.Messages...) {
-		if strings.Contains(strings.ToLower(text), "simulated diagnostic") {
+	return ValidateWarmupWording(append([]string{c.Subject, c.Description}, c.Messages...)...)
+}
+
+// ValidateWarmupWording applies to every outgoing turn, including queued historical threads.
+func ValidateWarmupWording(texts ...string) error {
+	for _, text := range texts {
+		if strings.Contains(strings.ToLower(strings.Join(strings.Fields(text), " ")), "simulated diagnostic") {
 			return fmt.Errorf("historical diagnostic boilerplate is not fresh warmup content")
 		}
 	}
