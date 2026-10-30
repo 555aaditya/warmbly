@@ -36,7 +36,7 @@ type langRules struct {
 	// negative is any other clear no. Both are phrases, never single words.
 	declined, negative []string
 	// positive is clear interest. A chosen language's is read after its no
-	// phrases, and never shortly after a negating word. positiveAsWritten
+	// phrases, and never in a sentence with a negating word before it. positiveAsWritten
 	// keeps its accents, where folding would change the meaning.
 	positive, positiveAsWritten []string
 }
@@ -146,7 +146,7 @@ var languageRules = map[string]langRules{
 		},
 		positive: []string{
 			"klingt gut", "klingt interessant", "klingt spannend", "ich bin interessiert", "wir sind interessiert",
-			"lassen sie uns telefonieren", "lass uns telefonieren", "können wir telefonieren", "termin vereinbaren",
+			"lassen sie uns telefonieren", "lass uns telefonieren", "können wir telefonieren",
 			"gerne mehr erfahren", "schicken sie mir mehr informationen", "was kostet das",
 		},
 	},
@@ -167,7 +167,7 @@ var languageRules = map[string]langRules{
 		positive: []string{
 			"je suis intéressé", "je suis intéressée", "nous sommes intéressés", "nous sommes intéressées",
 			"ça m'intéresse", "cela m'intéresse", "ça nous intéresse", "cela nous intéresse",
-			"ça a l'air intéressant", "cela semble intéressant", "prenons rendez-vous", "fixer un rendez-vous",
+			"ça a l'air intéressant", "cela semble intéressant", "prenons rendez-vous",
 			"envoyez-moi plus d'informations", "envoyez-moi une offre", "envoyez-moi un devis",
 			"quel est le tarif", "quels sont vos tarifs",
 		},
@@ -187,8 +187,8 @@ var languageRules = map[string]langRules{
 		},
 		positive: []string{
 			"me interesa mucho", "nos interesa mucho", "estoy muy interesado",
-			"estoy muy interesada", "estamos muy interesados", "agendemos una llamada", "agendar una llamada",
-			"programar una llamada", "envíeme más información", "envíame más información", "cuánto cuesta",
+			"estoy muy interesada", "estamos muy interesados", "agendemos una llamada",
+			"envíeme más información", "envíame más información", "cuánto cuesta",
 			"cuál es el precio",
 		},
 		// "Si me interesa, les aviso" is conditional; only the accented "sí" says yes.
@@ -464,43 +464,29 @@ type ruleSet struct {
 type phrase struct {
 	text    string
 	bounded bool
-	// negatable phrases do not count after a negating word in the same clause ("no me interesa mucho").
+	// negatable phrases do not count after a negating word in the same sentence ("no me interesa mucho").
 	negatable bool
 	// asWritten phrases keep their accents, because folding them changes the meaning ("sí" is not "si").
 	asWritten bool
 }
 
-// negators are the words that, shortly before an interest phrase, turn it around.
+// negators are the words that, earlier in the sentence, turn an interest phrase around.
 var negators = map[string]bool{
 	"no": true, "not": true, "nicht": true, "kein": true, "keine": true, "keinen": true, "nie": true,
 	"pas": true, "ne": true, "non": true, "niet": true, "geen": true, "nao": true, "nunca": true, "jamas": true,
 }
 
-// negationWindow is how many words back a negator still reaches ("no quiero agendar una llamada").
-const negationWindow = 3
-
-// negatedAt reports a negator within negationWindow words before start. Words are
-// separated by any whitespace; punctuation ends the clause, and the search with it.
+// negatedAt reports a negator earlier in the sentence that holds start. Commas and
+// line breaks do not end it ("je ne crois pas, honnêtement, que cela nous intéresse").
 func negatedAt(text string, start int) bool {
 	head := text[:start]
-	for range negationWindow {
-		head = strings.TrimRightFunc(head, unicode.IsSpace)
-		end := len(head)
-		for end > 0 {
-			r, size := utf8.DecodeLastRuneInString(head[:end])
-			if !unicode.IsLetter(r) {
-				break
-			}
-			end -= size
-		}
-		word := head[end:]
-		if word == "" {
-			return false
-		}
+	if i := strings.LastIndexAny(head, ".!?;"); i >= 0 {
+		head = head[i+1:]
+	}
+	for _, word := range strings.FieldsFunc(head, func(r rune) bool { return !unicode.IsLetter(r) }) {
 		if negators[word] {
 			return true
 		}
-		head = head[:end]
 	}
 	return false
 }

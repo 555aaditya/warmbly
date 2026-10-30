@@ -248,6 +248,10 @@ func TestNegatedAndHedgedInterestIsNotPositive(t *testing.T) {
 		"No\nme interesa mucho.",
 		"No quiero agendar una llamada.",
 		"Wir wollen nicht gleich einen Termin vereinbaren.",
+		"Ich glaube nicht, dass wir einen Termin vereinbaren sollten.",
+		"No me parece buena idea programar una llamada.",
+		"No sé todavía si nos interesa mucho.",
+		"Je ne crois pas, honnêtement, que cela nous intéresse.",
 	} {
 		if got := ClassifyOffline(Input{Subject: "Re: Hallo", BodyText: body, Languages: all}); got.Class == ClassPositive {
 			t.Errorf("%q read as positive", body)
@@ -255,24 +259,20 @@ func TestNegatedAndHedgedInterestIsNotPositive(t *testing.T) {
 	}
 }
 
-// A negating word straight before the phrase turns it around; anything else between does not.
-func TestNegatedAtReadsTheWordBefore(t *testing.T) {
+// A negating word anywhere earlier in the sentence turns the phrase around.
+func TestNegatedAtReadsTheSentence(t *testing.T) {
 	for text, want := range map[string]bool{
-		"no me interesa mucho":        true,
-		"nicht klingt gut":            true,
-		"no, me interesa mucho":       false,
-		"bueno me interesa mucho":     false,
-		"me interesa mucho":           false,
-		"pero no  me interesa mucho":  true,
-		"no\nme interesa mucho":       true,
-		"no quiero me interesa mucho": true,
-		"no a b c me interesa mucho":  false,
+		"no me interesa mucho":          true,
+		"no, me interesa mucho":         true,
+		"pero no  me interesa mucho":    true,
+		"no\nme interesa mucho":         true,
+		"no a b c me interesa mucho":    true,
+		"bueno me interesa mucho":       false,
+		"me interesa mucho":             false,
+		"no. me interesa mucho":         false,
+		"por que no? me interesa mucho": false,
 	} {
-		start := len(text) - len("me interesa mucho")
-		if text == "nicht klingt gut" {
-			start = len("nicht ")
-		}
-		if got := negatedAt(text, start); got != want {
+		if got := negatedAt(text, len(text)-len("me interesa mucho")); got != want {
 			t.Errorf("negatedAt(%q) = %v, want %v", text, got, want)
 		}
 	}
