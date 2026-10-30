@@ -202,12 +202,20 @@ func TestLiveContentPoolHonorsHistoricalTokensAndExcludesFixedWording(t *testing
 		t.Fatal(err)
 	}
 	other := contentPoolMailbox(t, f)
-	for _, pair := range [][2]uuid.UUID{{f.sender, other}, {other, f.sender}, {f.recipient, other}, {other, f.recipient}} {
-		c, err := r.PickConversation(t.Context(), contentPoolPick(t, f, segment, pair[0], pair[1]))
-		if err != nil || c != nil {
-			t.Fatalf("historical mailbox exposure ignored: %+v %v", c, err)
+	assertExclusions := func() {
+		t.Helper()
+		for _, pair := range [][2]uuid.UUID{{f.sender, other}, {other, f.sender}, {f.recipient, other}, {other, f.recipient}} {
+			c, err := r.PickConversation(t.Context(), contentPoolPick(t, f, segment, pair[0], pair[1]))
+			if err != nil || c != nil {
+				t.Fatalf("historical mailbox exposure ignored: %+v %v", c, err)
+			}
 		}
 	}
+	assertExclusions()
+	if _, err := f.pool.Exec(t.Context(), `DELETE FROM warmup_tokens WHERE task_id=$1`, f.task); err != nil {
+		t.Fatal(err)
+	}
+	assertExclusions()
 	_, err = f.pool.Exec(t.Context(), `UPDATE warmup_conversations SET subject='Simulated diagnostic: historical clock' WHERE id=$1`, conversation)
 	if err != nil {
 		t.Fatal(err)
