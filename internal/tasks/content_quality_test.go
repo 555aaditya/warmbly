@@ -152,3 +152,12 @@ func TestHistoricalDiagnosticRepliesStop(t *testing.T) {
 		t.Fatal("self-describing warmup wording passed final dispatch lint")
 	}
 }
+
+func TestSenderIdentityIsNotHeldToTheWordingRule(t *testing.T) {
+	c := warmupConversations()[0]
+	for _, sender := range []Email{{Name: "Warmup Team"}, {Name: "Test Mailbox"}, {Email: "[EMAIL]"}} {
+		if err := lintDiagnosticContent(c.Subject, GenerateConversationOpeningEmail(c, sender), false, sender); err != nil {
+			t.Fatalf("%q: a sender's own name stopped its warmup: %v", sender.Name+sender.Email, err)
+		}
+	}
+}
