@@ -293,6 +293,12 @@ docker compose -p warmbly logs backend | grep -B2 -A12 "MAIL_TRANSPORT=log"
 The backend refuses to start without `EMAIL_ADDRESS` and `EMAIL_NAME`. The consumer logs a warning and silently disables all notification and digest email, so an instance can look healthy while sending nothing. Set both on every process.
 </Callout>
 
+## Automatic campaign send recovery
+
+| Variable | What it does | Default | Restart needed |
+|---|---|---|---|
+| `CAMPAIGN_SEND_ISOLATION_ENABLED` | Enables automatic isolation of authorized campaign sends with unknown outcomes after ten minutes. Set on backends and consumers only after every control-plane replica and the supported rollback release understand recovery pauses. Keep disabled during the initial compatibility rollout. See [activation and rollback](/development/send-safety/#automatic-campaign-isolation) | `false` | yes |
+
 ## Pre-send verification
 
 Before a campaign sends to an address, the backend can check it: syntax, then `MX`, then an `SMTP` `RCPT` probe against the recipient's mail server. An address that comes back `invalid` is skipped rather than sent to, which turns a would-be hard bounce into a silent drop. The probe runs from the backend, never from a worker, because workers are your sending IPs.
