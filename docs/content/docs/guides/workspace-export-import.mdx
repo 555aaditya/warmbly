@@ -96,6 +96,8 @@ Inbox, send history, delivery events, and logs are the ones that grow without li
 
 The pending warmup-filing queue stays on its source instance. The destination resyncs mail and files recognized warmup messages using its own workers and the mailbox's placement setting.
 
+Campaign contacts waiting for an uncertain send retain that protection with **Campaigns**, even when you omit **Send history**. Imported uncertain commands cannot execute again. Without their send history, those contacts stay protected because the destination cannot confirm the original outcome. Manual resume does not remove this protection.
+
 Warmup statistics travel as history. Source-only per-task charge and refund markers reset on import so settling an old task cannot refund another send's destination statistics. Existing destination charge dates and older completed-day counters are protected on overwrite; preserving older counts does not create charge or refund proof. Whole-instance database backups retain these markers.
 
 Mailbox transport-error reports travel as history, retaining every report ID, observation timestamp, task reference and recorded resolution. Their operation and observation provenance reset to unknown, including overwrite imports and older archives without those fields. Imported and legacy historical reports do not share the uniqueness rule for new, locally observed reports and are not automatically cleared by a successful sync or send. Unknown history means recovery is unverified, not that a provider is still failing.
