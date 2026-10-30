@@ -93,6 +93,7 @@ func (r *taskRepository) RecordVerifiedWarmupParent(ctx context.Context, parent,
 	return tx.Commit(ctx)
 }
 
+// BindWarmupSuccessor binds a verified reply without postponing an existing send.
 func (r *taskRepository) BindWarmupSuccessor(ctx context.Context, parent, recipient, internalID uuid.UUID, at time.Time) (bool, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
