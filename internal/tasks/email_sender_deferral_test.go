@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/generation"
 	"github.com/warmbly/warmbly/internal/repository"
 	"github.com/warmbly/warmbly/internal/scheduler"
 	"github.com/warmbly/warmbly/internal/tasks/proto"
@@ -96,6 +97,21 @@ func TestLiveWarmupTaskDoesNotApplyResultsAfterConfirmedDeferral(t *testing.T) {
 	exec(`UPDATE email_accounts SET worker_id=$1,warmup=NOW()-INTERVAL '30 days',warmup_days=127,warmup_pool_type='free' WHERE organization_id=$2`, worker, f.org)
 	exec(`INSERT INTO tasks(id,email_account_id,task_type,status,message_id,scheduled_at) VALUES($1,$2,'warmup','pending','',NOW()-INTERVAL '1 minute')`, task, f.sender.ID)
 	exec(`INSERT INTO warmup_tasks(task_id) VALUES($1)`, task)
+	exec(`UPDATE email_accounts SET test_receive_enabled=false WHERE id=$1`, f.atSmallHost)
+	contentRepo := repository.NewWarmupContentRepository(f.pool)
+	scenario, rendering := generation.DiagnosticScenarioVersion, generation.CanonicalRenderingVersion
+	conversation := &models.WarmupConversation{
+		ID: uuid.New(), PoolType: "premium", Source: models.WarmupContentSourceAI,
+		Subject: "A card count", Description: "An automated warmup example: this hypothetical sample has three cards. How many cards are there?",
+		Messages: []string{"The hypothetical sample has three cards.", "Agreed. This example is closed."},
+		Status:   models.WarmupConversationActive, ReplyEligible: true, LintPassed: true,
+		ScenarioVersion: &scenario, RenderingVersion: &rendering, SemanticReview: "passed",
+	}
+	if err := contentRepo.InsertConversation(ctx, conversation); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = contentRepo.DeleteConversation(context.Background(), conversation.ID) })
+	f.svc.warmupContentRepo = contentRepo
 	f.svc.taskRepo = repository.NewTaskRepository(f.pool)
 	f.svc.scheduler = preparationScheduler{}
 	sender := &preparationDeferringSender{repo: f.svc.taskRepo.(repository.WarmupDispatchRepository)}
