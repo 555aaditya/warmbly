@@ -44,17 +44,25 @@ type WarmupContentPick struct {
 	TaskID      uuid.UUID
 	SenderID    uuid.UUID
 	RecipientID uuid.UUID
+	// IncludeAI admits generated threads; static rows are admitted only when listed in StaticIDs.
+	IncludeAI bool
+	StaticIDs []uuid.UUID
 }
+
+// WarmupContentRepeatWindow is how long a mailbox goes before it may see a conversation again, in either role.
+const WarmupContentRepeatWindow = 30 * 24 * time.Hour
 
 // WarmupContentRepository is the data access for the warmup content bank,
 // offline generation jobs, generation settings, and content-cohort analytics.
 type WarmupContentRepository interface {
 	// Conversation bank
 	InsertConversation(ctx context.Context, c *models.WarmupConversation) error
-	// PickConversation atomically draws and accounts for an active thread from the SHARED
-	// content library, regardless of tier: free/premium separate which mailboxes
-	// warm together (reputation isolation), not what they say, so content is not
-	// split by pool. Prefers an exact segment match, falls back to generic.
+	// SeedStaticConversations inserts library rows that are missing and never revives one an admin archived.
+	SeedStaticConversations(ctx context.Context, rows []models.WarmupConversation) error
+	// PickConversation atomically draws and accounts for an active thread from the shared
+	// library, regardless of tier. It prefers what neither mailbox has seen within
+	// WarmupContentRepeatWindow, then the least recently seen, so it only returns nil
+	// when the library has no eligible row at all.
 	PickConversation(ctx context.Context, pick WarmupContentPick) (*models.WarmupConversation, error)
 	GetConversation(ctx context.Context, id uuid.UUID) (*models.WarmupConversation, error)
 	ListConversations(ctx context.Context, f ConversationFilter) ([]models.WarmupConversation, int, error)
@@ -167,11 +175,13 @@ const conversationCols = `id, pool_type, segment, source, theme, subject, descri
 const qualifiedConversationCols = `c.id, c.pool_type, c.segment, c.source, c.theme, c.subject, c.description, c.messages, c.status, c.lint_passed, c.reply_eligible, c.usage_count, c.generated_by_job_id, c.created_at, c.updated_at, c.scenario_version, c.rendering_version, c.semantic_review`
 
 // Opening eligibility is independent of existing threads' continuation authority.
-const openingConversationSQL = `status='active' AND reply_eligible AND lint_passed AND semantic_review='passed'
- AND scenario_version='` + generation.DiagnosticScenarioVersion + `' AND rendering_version='` + generation.CanonicalRenderingVersion + `'
- AND lower(subject) NOT LIKE '%simulated diagnostic%'
- AND lower(description) NOT LIKE '%simulated diagnostic%'
- AND lower(messages::text) NOT LIKE '%simulated diagnostic%'`
+// openingConversationWhere is the eligibility predicate for a new thread, qualified by table alias t.
+func openingConversationWhere(t string) string {
+	return t + "status='active' AND " + t + "reply_eligible AND " + t + "lint_passed AND " + t + "semantic_review='passed' AND " +
+		t + "scenario_version='" + generation.WarmupScenarioVersion + "' AND " + t + "rendering_version='" + generation.CanonicalRenderingVersion + "'"
+}
+
+var openingConversationSQL = openingConversationWhere("")
 
 func (r *warmupContentRepository) PickConversation(ctx context.Context, pick WarmupContentPick) (*models.WarmupConversation, error) {
 	if pick.TaskID == uuid.Nil || pick.SenderID == uuid.Nil || pick.RecipientID == uuid.Nil || pick.SenderID == pick.RecipientID {
@@ -186,6 +196,7 @@ func (r *warmupContentRepository) PickConversation(ctx context.Context, pick War
 	if err := tx.QueryRow(ctx, `SELECT id FROM tasks WHERE id=$1 AND email_account_id=$2 FOR UPDATE`, pick.TaskID, pick.SenderID).Scan(&task); err != nil {
 		return nil, err
 	}
+	// A retried task resends what it already reserved; created_at on a reservation is when the mailbox last saw the conversation.
 	var existing uuid.UUID
 	err = tx.QueryRow(ctx, `SELECT conversation_id FROM warmup_conversation_mailboxes WHERE task_id=$1 LIMIT 1`, pick.TaskID).Scan(&existing)
 	if err == nil {
@@ -199,19 +210,26 @@ func (r *warmupContentRepository) PickConversation(ctx context.Context, pick War
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
 	}
+	staticIDs := pick.StaticIDs
+	if staticIDs == nil {
+		staticIDs = []uuid.UUID{}
+	}
 	query := `
-		WITH picked AS (
-			SELECT id
-			FROM warmup_conversations
-			WHERE ` + openingConversationSQL + ` AND (segment = $1 OR segment = '')
-              AND NOT EXISTS (SELECT 1 FROM warmup_conversation_mailboxes used
-                  WHERE used.conversation_id=warmup_conversations.id AND used.email_account_id IN ($2,$3))
-              AND NOT EXISTS (SELECT 1 FROM warmup_tokens used
-                  WHERE used.conversation_id=warmup_conversations.id
-                    AND (used.sender_account_id IN ($2,$3) OR used.recipient_account_id IN ($2,$3)))
-			ORDER BY (segment = $1) DESC, usage_count ASC, random()
+		WITH seen AS (
+			SELECT conversation_id, MAX(created_at) AS last_seen
+			FROM warmup_conversation_mailboxes
+			WHERE email_account_id IN ($2,$3)
+			GROUP BY conversation_id
+		), picked AS (
+			SELECT c.id
+			FROM warmup_conversations c
+			LEFT JOIN seen ON seen.conversation_id = c.id
+			WHERE ` + openingConversationWhere("c.") + ` AND (c.segment = $1 OR c.segment = '')
+			  AND ((c.source = 'ai' AND $4) OR (c.source = 'static' AND c.id = ANY($5)))
+			ORDER BY (seen.last_seen IS NOT NULL AND seen.last_seen > NOW() - $6::interval), (c.segment = $1) DESC,
+			         seen.last_seen ASC NULLS FIRST, c.usage_count ASC, random()
 			LIMIT 1
-			FOR UPDATE SKIP LOCKED
+			FOR UPDATE OF c SKIP LOCKED
 		)
 		UPDATE warmup_conversations AS c
 		SET usage_count = c.usage_count + 1,
@@ -220,25 +238,37 @@ func (r *warmupContentRepository) PickConversation(ctx context.Context, pick War
 		WHERE c.id = picked.id
 		RETURNING ` + qualifiedConversationCols + `
 	`
-	c, err := scanConversation(tx.QueryRow(ctx, query, pick.Segment, pick.SenderID, pick.RecipientID))
+	c, err := scanConversation(tx.QueryRow(ctx, query, pick.Segment, pick.SenderID, pick.RecipientID, pick.IncludeAI, staticIDs, WarmupContentRepeatWindow.String()))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	claimed, err := tx.Exec(ctx, `INSERT INTO warmup_conversation_mailboxes(conversation_id,email_account_id,task_id)
- VALUES($1,$2,$4),($1,$3,$4) ON CONFLICT DO NOTHING`, c.ID, pick.SenderID, pick.RecipientID, pick.TaskID)
-	if err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO warmup_conversation_mailboxes(conversation_id,email_account_id,task_id)
+ VALUES($1,$2,$4),($1,$3,$4)
+ ON CONFLICT (conversation_id,email_account_id) DO UPDATE SET task_id=EXCLUDED.task_id, created_at=NOW()`, c.ID, pick.SenderID, pick.RecipientID, pick.TaskID); err != nil {
 		return nil, err
-	}
-	if claimed.RowsAffected() != 2 {
-		return nil, nil
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return c, nil
+}
+
+func (r *warmupContentRepository) SeedStaticConversations(ctx context.Context, rows []models.WarmupConversation) error {
+	batch := &pgx.Batch{}
+	for _, c := range rows {
+		msgs, err := json.Marshal(c.Messages)
+		if err != nil {
+			return err
+		}
+		batch.Queue(`INSERT INTO warmup_conversations
+ (id, pool_type, segment, source, theme, subject, description, messages, status, lint_passed, reply_eligible, usage_count, scenario_version, rendering_version, semantic_review)
+ VALUES ($1,$2,$3,'static',$4,$5,$6,$7,$8,$9,$10,0,$11,$12,$13)
+ ON CONFLICT (id) DO NOTHING`, c.ID, c.PoolType, c.Segment, c.Theme, c.Subject, c.Description, msgs, c.Status, c.LintPassed, c.ReplyEligible, c.ScenarioVersion, c.RenderingVersion, c.SemanticReview)
+	}
+	return r.db.SendBatch(ctx, batch).Close()
 }
 
 func (r *warmupContentRepository) GetConversation(ctx context.Context, id uuid.UUID) (*models.WarmupConversation, error) {
@@ -374,31 +404,25 @@ func (r *warmupContentRepository) DeleteConversation(ctx context.Context, id uui
 	return err
 }
 
+// CountAvailableConversations is the generated stock the two most-exposed mailboxes have not seen within the repeat window.
 func (r *warmupContentRepository) CountAvailableConversations(ctx context.Context, poolType, segment string) (int, error) {
 	var n int
 	err := r.db.QueryRow(ctx, `
  WITH available AS MATERIALIZED (
-   SELECT id,usage_count FROM warmup_conversations
-   WHERE pool_type=$1 AND segment=$2 AND `+openingConversationSQL+`
- ), seen AS (
-   SELECT used.email_account_id,used.conversation_id FROM warmup_conversation_mailboxes used
-     JOIN available a ON a.id=used.conversation_id
-   UNION
-   SELECT used.sender_account_id,used.conversation_id FROM warmup_tokens used
-     JOIN available a ON a.id=used.conversation_id
-   UNION
-   SELECT used.recipient_account_id,used.conversation_id FROM warmup_tokens used
-     JOIN available a ON a.id=used.conversation_id
+   SELECT id FROM warmup_conversations
+   WHERE pool_type=$1 AND segment=$2 AND source='ai' AND `+openingConversationSQL+`
  ), exposure AS (
-   SELECT COUNT(*) AS seen_count FROM seen
-   JOIN email_accounts ea ON ea.id=seen.email_account_id
-   WHERE ea.status='active' AND ea.warmup IS NOT NULL
+   SELECT COUNT(*) AS seen_count FROM warmup_conversation_mailboxes used
+   JOIN available a ON a.id=used.conversation_id
+   JOIN email_accounts ea ON ea.id=used.email_account_id
+   WHERE used.created_at > NOW() - $3::interval
+     AND ea.status='active' AND ea.warmup IS NOT NULL
      AND ea.warmup_paused_at IS NULL AND ea.warmup_stopped_at IS NULL
-   GROUP BY seen.email_account_id
+   GROUP BY used.email_account_id
  )
  SELECT GREATEST(0, (SELECT COUNT(*) FROM available)
    - COALESCE((SELECT SUM(seen_count) FROM (SELECT seen_count FROM exposure ORDER BY seen_count DESC LIMIT 2) most_exposed),0))
- `, poolType, segment).Scan(&n)
+ `, poolType, segment, WarmupContentRepeatWindow.String()).Scan(&n)
 	return n, err
 }
 

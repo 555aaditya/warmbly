@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -61,7 +62,7 @@ func contentPoolFixture(t *testing.T) (*poolLinkFixture, *warmupContentRepositor
 	f, _ := lineageFixture(t)
 	segment, conversation := "fixture-"+uuid.NewString(), uuid.New()
 	t.Cleanup(func() { _, _ = f.pool.Exec(t.Context(), `DELETE FROM warmup_conversations WHERE segment=$1`, segment) })
-	_, err := f.pool.Exec(t.Context(), `INSERT INTO warmup_conversations(id,pool_type,segment,source,subject,description,messages,status,scenario_version,rendering_version,reply_eligible,lint_passed,semantic_review) VALUES($1,'premium',$2,'ai','A clock example','An automated warmup example','["Reply","Closure"]','active','diagnostic-v1','canonical-v1',true,true,'passed')`, conversation, segment)
+	_, err := f.pool.Exec(t.Context(), `INSERT INTO warmup_conversations(id,pool_type,segment,source,subject,description,messages,status,scenario_version,rendering_version,reply_eligible,lint_passed,semantic_review) VALUES($1,'premium',$2,'ai','Paper notes again','I have gone back to paper notes for meetings.','["Reply","Closure"]','active','natural-v1','canonical-v1',true,true,'passed')`, conversation, segment)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +87,7 @@ func contentPoolPick(t *testing.T, f *poolLinkFixture, segment string, sender, r
 	if err != nil {
 		t.Fatal(err)
 	}
-	return WarmupContentPick{Segment: segment, TaskID: task, SenderID: sender, RecipientID: recipient}
+	return WarmupContentPick{Segment: segment, TaskID: task, SenderID: sender, RecipientID: recipient, IncludeAI: true}
 }
 
 func TestLiveContentPoolRetryReservesOnceAndReplenishesForExposedMailboxes(t *testing.T) {
@@ -128,8 +129,8 @@ func TestLiveContentPoolRetryReservesOnceAndReplenishesForExposedMailboxes(t *te
 	other := contentPoolMailbox(t, f)
 	for _, pair := range [][2]uuid.UUID{{f.sender, other}, {other, f.recipient}, {f.recipient, f.sender}} {
 		c, err := r.PickConversation(ctx, contentPoolPick(t, f, segment, pair[0], pair[1]))
-		if err != nil || c != nil {
-			t.Fatalf("mailbox repeated after cleanup/role change: %+v %v", c, err)
+		if err != nil || c == nil {
+			t.Fatalf("an exhausted pair stopped receiving content: %+v %v", c, err)
 		}
 	}
 }
@@ -152,8 +153,11 @@ func TestLiveContentPoolPreservesPlansForFutureDistinctMailboxes(t *testing.T) {
 	}
 }
 
-func TestLiveContentPoolConcurrentPairsCannotRepeatAMailbox(t *testing.T) {
-	f, r, segment, conversation := contentPoolFixture(t)
+func TestLiveContentPoolConcurrentPairsAlwaysReceiveContent(t *testing.T) {
+	f, r, segment, first := contentPoolFixture(t)
+	for i := range 11 {
+		contentPoolCopy(t, f, first, fmt.Sprintf("Topic %d", i))
+	}
 	picks := make([]WarmupContentPick, 12)
 	for i := range picks {
 		picks[i] = contentPoolPick(t, f, segment, f.sender, contentPoolMailbox(t, f))
@@ -171,9 +175,12 @@ func TestLiveContentPoolConcurrentPairsCannotRepeatAMailbox(t *testing.T) {
 		})
 	}
 	workers.Wait()
-	c, err := r.GetConversation(t.Context(), conversation)
-	if successes.Load() != 1 || err != nil || c == nil || c.UsageCount != 1 {
-		t.Fatalf("concurrent mailbox repeat: successes=%d source=%+v err=%v", successes.Load(), c, err)
+	var reservations int
+	if err := f.pool.QueryRow(t.Context(), `SELECT COUNT(*) FROM warmup_conversation_mailboxes WHERE email_account_id=$1`, f.sender).Scan(&reservations); err != nil {
+		t.Fatal(err)
+	}
+	if successes.Load() != 12 || reservations == 0 {
+		t.Fatalf("concurrent sends went without content: successes=%d reservations=%d", successes.Load(), reservations)
 	}
 }
 
@@ -195,55 +202,103 @@ func TestLiveContentPoolPrefersLessUsedEligiblePlans(t *testing.T) {
 	}
 }
 
-func TestLiveContentPoolHonorsHistoricalTokensAndExcludesFixedWording(t *testing.T) {
-	f, r, segment, conversation := contentPoolFixture(t)
-	_, err := f.pool.Exec(t.Context(), `INSERT INTO warmup_tokens(token,task_id,sender_account_id,recipient_account_id,subject,content_source,conversation_id) VALUES($1,$2,$3,$4,'A clock example','ai',$5)`, uuid.New(), f.task, f.sender, f.recipient, conversation)
+func contentPoolCopy(t *testing.T, f *poolLinkFixture, from uuid.UUID, subject string) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	_, err := f.pool.Exec(t.Context(), `INSERT INTO warmup_conversations(id,pool_type,segment,source,subject,description,messages,status,scenario_version,rendering_version,reply_eligible,lint_passed,semantic_review)
+ SELECT $2,pool_type,segment,source,$3,description||' '||$3,messages,status,scenario_version,rendering_version,reply_eligible,lint_passed,semantic_review FROM warmup_conversations WHERE id=$1`, from, id, subject)
 	if err != nil {
 		t.Fatal(err)
 	}
-	other := contentPoolMailbox(t, f)
-	assertExclusions := func() {
-		t.Helper()
-		for _, pair := range [][2]uuid.UUID{{f.sender, other}, {other, f.sender}, {f.recipient, other}, {other, f.recipient}} {
-			c, err := r.PickConversation(t.Context(), contentPoolPick(t, f, segment, pair[0], pair[1]))
-			if err != nil || c != nil {
-				t.Fatalf("historical mailbox exposure ignored: %+v %v", c, err)
-			}
+	return id
+}
+
+func TestLiveContentPoolPrefersWhatNeitherMailboxSawRecently(t *testing.T) {
+	f, r, segment, first := contentPoolFixture(t)
+	second := contentPoolCopy(t, f, first, "Desk plants")
+	if _, err := f.pool.Exec(t.Context(), `INSERT INTO warmup_conversation_mailboxes(conversation_id,email_account_id,created_at) VALUES($1,$2,NOW()-INTERVAL '1 day')`, first, f.sender); err != nil {
+		t.Fatal(err)
+	}
+	for _, pair := range [][2]uuid.UUID{{f.sender, contentPoolMailbox(t, f)}, {contentPoolMailbox(t, f), f.sender}} {
+		pick := contentPoolPick(t, f, segment, pair[0], pair[1])
+		c, err := r.PickConversation(t.Context(), pick)
+		if err != nil || c == nil || c.ID == first {
+			t.Fatalf("a conversation seen yesterday was repeated while another was unseen: %+v %v", c, err)
+		}
+		if _, err := f.pool.Exec(t.Context(), `DELETE FROM warmup_conversation_mailboxes WHERE task_id=$1`, pick.TaskID); err != nil {
+			t.Fatal(err)
 		}
 	}
-	assertExclusions()
-	if _, err := f.pool.Exec(t.Context(), `DELETE FROM warmup_tokens WHERE task_id=$1`, f.task); err != nil {
+	if _, err := f.pool.Exec(t.Context(), `UPDATE warmup_conversation_mailboxes SET created_at=NOW()-INTERVAL '31 days' WHERE conversation_id=$1 AND email_account_id=$2`, first, f.sender); err != nil {
 		t.Fatal(err)
 	}
-	assertExclusions()
-	_, err = f.pool.Exec(t.Context(), `UPDATE warmup_conversations SET subject='Simulated diagnostic: historical clock' WHERE id=$1`, conversation)
-	if err != nil {
+	if _, err := f.pool.Exec(t.Context(), `INSERT INTO warmup_conversation_mailboxes(conversation_id,email_account_id) VALUES($1,$2)`, second, f.sender); err != nil {
 		t.Fatal(err)
 	}
-	sender, recipient := contentPoolMailbox(t, f), contentPoolMailbox(t, f)
-	c, err := r.PickConversation(t.Context(), contentPoolPick(t, f, segment, sender, recipient))
-	if err != nil || c != nil {
-		t.Fatalf("fixed wording selected: %+v %v", c, err)
+	if c, err := r.PickConversation(t.Context(), contentPoolPick(t, f, segment, f.sender, contentPoolMailbox(t, f))); err != nil || c == nil || c.ID != first {
+		t.Fatalf("a conversation outside the repeat window lost to one seen today: %+v %v", c, err)
+	}
+	if _, err := f.pool.Exec(t.Context(), `UPDATE warmup_conversations SET scenario_version='diagnostic-v1' WHERE segment=$1`, segment); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := r.PickConversation(t.Context(), contentPoolPick(t, f, segment, contentPoolMailbox(t, f), contentPoolMailbox(t, f))); err != nil || (c != nil && c.Segment == segment) {
+		t.Fatalf("retired content selected: %+v %v", c, err)
 	}
 }
 
-func TestLiveContentPoolReplenishesForDisjointParticipantHistories(t *testing.T) {
+func TestLiveContentPoolExhaustedPairRepeatsTheLeastRecentlySeen(t *testing.T) {
 	f, r, segment, first := contentPoolFixture(t)
-	second := uuid.New()
-	_, err := f.pool.Exec(t.Context(), `INSERT INTO warmup_conversations(id,pool_type,segment,source,subject,description,messages,status,scenario_version,rendering_version,reply_eligible,lint_passed,semantic_review)
- SELECT $2,pool_type,segment,source,'A different example',description,messages,status,scenario_version,rendering_version,reply_eligible,lint_passed,semantic_review FROM warmup_conversations WHERE id=$1`, first, second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = f.pool.Exec(t.Context(), `INSERT INTO warmup_conversation_mailboxes(conversation_id,email_account_id) VALUES($1,$2),($3,$4)`, first, f.sender, second, f.recipient)
+	second := contentPoolCopy(t, f, first, "Desk plants")
+	_, err := f.pool.Exec(t.Context(), `INSERT INTO warmup_conversation_mailboxes(conversation_id,email_account_id,created_at) VALUES($1,$2,NOW()-INTERVAL '10 days'),($3,$4,NOW()-INTERVAL '1 day')`, first, f.sender, second, f.recipient)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if n, err := r.CountAvailableConversations(t.Context(), "premium", segment); err != nil || n != 0 {
 		t.Fatalf("disjoint participant histories hid exhaustion: n=%d err=%v", n, err)
 	}
-	if c, err := r.PickConversation(t.Context(), contentPoolPick(t, f, segment, f.sender, f.recipient)); err != nil || c != nil {
-		t.Fatalf("exhausted pair selected a conversation: %+v %v", c, err)
+	c, err := r.PickConversation(t.Context(), contentPoolPick(t, f, segment, f.sender, f.recipient))
+	if err != nil || c == nil || (c.Segment == segment && c.ID != first) {
+		t.Fatalf("exhausted pair did not repeat the least recently seen conversation: %+v %v", c, err)
+	}
+}
+
+func TestLiveContentPoolTokenCleanupKeepsExposure(t *testing.T) {
+	f, r, segment, first := contentPoolFixture(t)
+	second := contentPoolCopy(t, f, first, "Desk plants")
+	if _, err := f.pool.Exec(t.Context(), `INSERT INTO warmup_tokens(token,task_id,sender_account_id,recipient_account_id,subject,content_source,conversation_id) VALUES($1,$2,$3,$4,'Paper notes again','ai',$5)`, uuid.New(), f.task, f.sender, f.recipient, first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(t.Context(), `DELETE FROM warmup_tokens WHERE task_id=$1`, f.task); err != nil {
+		t.Fatal(err)
+	}
+	for _, pair := range [][2]uuid.UUID{{f.sender, contentPoolMailbox(t, f)}, {contentPoolMailbox(t, f), f.recipient}} {
+		pick := contentPoolPick(t, f, segment, pair[0], pair[1])
+		if c, err := r.PickConversation(t.Context(), pick); err != nil || c == nil || c.ID != second {
+			t.Fatalf("exposure recorded through a deleted token was forgotten: %+v %v", c, err)
+		}
+		if _, err := f.pool.Exec(t.Context(), `DELETE FROM warmup_conversation_mailboxes WHERE task_id=$1`, pick.TaskID); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestLiveContentPoolStaticRowsOnlyFromTheCurrentLibrary(t *testing.T) {
+	f, r, segment, first := contentPoolFixture(t)
+	if _, err := f.pool.Exec(t.Context(), `UPDATE warmup_conversations SET source='static' WHERE id=$1`, first); err != nil {
+		t.Fatal(err)
+	}
+	pick := contentPoolPick(t, f, segment, contentPoolMailbox(t, f), contentPoolMailbox(t, f))
+	pick.IncludeAI = false
+	if c, err := r.PickConversation(t.Context(), pick); err != nil || (c != nil && c.ID == first) {
+		t.Fatalf("static row outside the library selected: %+v %v", c, err)
+	}
+	pick = contentPoolPick(t, f, segment, contentPoolMailbox(t, f), contentPoolMailbox(t, f))
+	pick.IncludeAI, pick.StaticIDs = false, []uuid.UUID{first}
+	if c, err := r.PickConversation(t.Context(), pick); err != nil || c == nil || c.ID != first {
+		t.Fatalf("listed static row not selected: %+v %v", c, err)
+	}
+	if err := r.SeedStaticConversations(t.Context(), nil); err != nil {
+		t.Fatal(err)
 	}
 }
 

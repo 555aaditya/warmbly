@@ -46,7 +46,7 @@ func newOutboundStartFixture(t *testing.T) *outboundStartFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(handle.Pool.Close)
-	f := &outboundStartFixture{db: handle, user: uuid.New(), org: uuid.New(), sender: uuid.New(), recipient: uuid.New(), task: uuid.New(), worker: uuid.New(), source: tasks.Conversation{ID: uuid.New(), Version: generation.DiagnosticScenarioVersion, Subject: "A wording choice", Description: "This automated warmup exchange compares two hypothetical labels. Which is clearer?", Messages: []string{"The shorter label is clearer.", "Agreed. This example is closed."}}}
+	f := &outboundStartFixture{db: handle, user: uuid.New(), org: uuid.New(), sender: uuid.New(), recipient: uuid.New(), task: uuid.New(), worker: uuid.New(), source: tasks.Conversation{ID: uuid.New(), Version: generation.WarmupScenarioVersion, Subject: "A wording choice", Description: "I'm rewording the labels on our intake form and can't pick between two options. Which one reads clearer to you?", Messages: []string{"The shorter one, I think. It scans faster.", "Agreed, I'll go with that. Thanks for the quick read."}}}
 	contentRepo := repository.NewWarmupContentRepository(handle.Pool)
 	rendering := generation.CanonicalRenderingVersion
 	if err := contentRepo.InsertConversation(t.Context(), &models.WarmupConversation{ID: f.source.ID, PoolType: "premium", Source: models.WarmupContentSourceAI, Subject: f.source.Subject, Description: f.source.Description, Messages: f.source.Messages, Status: models.WarmupConversationActive, LintPassed: true, ReplyEligible: true, ScenarioVersion: &f.source.Version, RenderingVersion: &rendering, SemanticReview: "passed"}); err != nil {
@@ -528,7 +528,7 @@ func TestLiveWarmupGenericCannotRepeatStartedWarmupClaim(t *testing.T) {
 
 func TestLiveWarmupGenericDeniesHistoricalDiagnosticContent(t *testing.T) {
 	f := newOutboundStartFixture(t)
-	legacy := tasks.VettedDiagnosticConversations()[0]
+	legacy := tasks.Conversation{ID: uuid.NewSHA1(uuid.NameSpaceOID, []byte("warmbly:diagnostic-clock:v1")), Subject: "Simulated diagnostic: fictional clock"}
 	f.exec(t, `UPDATE warmup_tasks SET subject=$2 WHERE task_id=$1`, f.task, legacy.Subject)
 	f.exec(t, `UPDATE warmup_tokens SET subject=$2,content_source='static',conversation_id=$3 WHERE task_id=$1`, f.task, legacy.Subject, legacy.ID)
 	response, state := f.request(t, f.svc, true, nil)

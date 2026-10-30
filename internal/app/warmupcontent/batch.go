@@ -93,7 +93,7 @@ func (s *service) GenerateBatch(ctx context.Context, req GenerateRequest) (uuid.
 		return uuid.Nil, err
 	}
 
-	version := generation.DiagnosticScenarioVersion
+	version := generation.WarmupScenarioVersion
 	job := &models.WarmupGenerationJob{
 		ContentVersion:       &version,
 		MaxMessagesPerThread: &maxMessages,
@@ -323,7 +323,8 @@ func (s *service) ingestBatch(ctx context.Context, job *models.WarmupGenerationJ
 			job.GeneratedCount++
 			continue
 		}
-		if *job.ContentVersion != generation.DiagnosticScenarioVersion {
+		// A batch queued under the retired version is still reviewed, so its output is archived rather than lost.
+		if *job.ContentVersion != generation.WarmupScenarioVersion && *job.ContentVersion != generation.DiagnosticScenarioVersion {
 			job.FailedCount++
 			continue
 		}
@@ -334,7 +335,7 @@ func (s *service) ingestBatch(ctx context.Context, job *models.WarmupGenerationJ
 
 		// Preserve canonical facts before reviewing the complete rendered thread.
 		subject, description, messages = preserveCanonicalThread(subject, description, messages)
-		rendered, err := generation.RenderDiagnostic(generation.Conversation{Subject: subject, Description: description, Messages: messages}, [2]string{"Mailbox A (diagnostic)", "Mailbox B (diagnostic)"})
+		rendered, err := generation.RenderDiagnostic(generation.Conversation{Subject: subject, Description: description, Messages: messages}, [2]string{"Alex", "Sam"})
 		if err != nil {
 			job.LintRejectedCount++
 			continue
@@ -357,7 +358,7 @@ func (s *service) ingestBatch(ctx context.Context, job *models.WarmupGenerationJ
 		} else {
 			review, status = "passed", models.WarmupConversationActive
 		}
-		scenarioVersion, renderingVersion := generation.DiagnosticScenarioVersion, generation.CanonicalRenderingVersion
+		scenarioVersion, renderingVersion := generation.WarmupScenarioVersion, generation.CanonicalRenderingVersion
 
 		record := &models.WarmupConversation{
 			ID:               recordID,

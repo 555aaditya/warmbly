@@ -27,10 +27,15 @@ var ErrGenerationStopped = errors.New("warmup content generation is stopped")
 
 // defaultThemes seed topic variety when a generation run doesn't pin a theme.
 var defaultThemes = []string{
-	"productivity", "learning", "collaboration", "industry trends", "tools",
-	"networking", "feedback", "planning", "reading", "wellness", "events",
-	"career growth", "remote work", "meetings", "automation", "team culture",
-	"customer success", "writing", "travel", "community",
+	"productivity", "learning a new skill", "collaboration", "industry trends", "tools and workflow",
+	"networking", "giving feedback", "quarterly planning", "book recommendations", "wellness",
+	"conferences and meetups", "career growth", "remote work setups", "meetings", "team culture",
+	"customer support", "writing clearly", "travel tips", "local community", "hiring and interviews",
+	"mentoring", "documentation", "podcasts", "cooking", "weekend hobbies", "running and cycling",
+	"home office", "coffee and tea", "language learning", "photography", "gardening", "moving house",
+	"volunteering", "presentations", "note-taking", "project handoffs", "freelancing", "small business seasons",
+	"design and layout", "spreadsheets", "naming things", "backing up files", "onboarding new teammates",
+	"retrospectives", "saying no to extra scope", "time off and rest", "music practice", "board games",
 }
 
 // maxPerBatch bounds a single Batch API submission. Batch is async and cheap so

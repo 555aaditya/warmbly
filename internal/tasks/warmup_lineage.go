@@ -3,7 +3,6 @@ package tasks
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,9 +15,6 @@ import (
 )
 
 func resolveStaticConversation(id uuid.UUID) (Conversation, bool) {
-	if c, ok := ResolveDiagnosticConversation(id); ok {
-		return c, true
-	}
 	for _, c := range warmupConversations() {
 		if c.ID == id {
 			return c, true
@@ -28,15 +24,16 @@ func resolveStaticConversation(id uuid.UUID) (Conversation, bool) {
 }
 
 func lintDiagnosticContent(subject, body string, reply bool, account Email) error {
-	if err := generation.ValidateWarmupWording(subject, body); err != nil {
-		return err
-	}
 	identity := account.Name
 	if identity == "" {
 		identity = account.Email
 	}
-	canonical := strings.TrimSuffix(body, "\n\n"+identity)
-	return lintWarmupContent(subject, canonical, reply)
+	// The signature is the owner's chosen identity, so only the content is held to the wording rule.
+	body = generation.StripCanonicalSignature(body, identity)
+	if err := generation.ValidateWarmupWording(subject, body); err != nil {
+		return err
+	}
+	return lintWarmupContent(subject, body, reply)
 }
 
 func (s *tasksService) exactReplyContent(ctx context.Context, c *repository.WarmupReplyCandidate, account Email) (warmupContent, string, []string, error) {

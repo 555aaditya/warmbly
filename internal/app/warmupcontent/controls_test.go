@@ -94,7 +94,7 @@ func (r *controlRepo) InsertConversation(_ context.Context, c *models.WarmupConv
 
 func TestBatchCountsPriorLibraryDuplicatesAsRejectedContent(t *testing.T) {
 	s, r, p := newControlFixture()
-	version := generation.DiagnosticScenarioVersion
+	version := generation.WarmupScenarioVersion
 	job := models.WarmupGenerationJob{ID: uuid.New(), Model: "configured-model", RequestedCount: 1, ContentVersion: &version}
 	r.jobs = append(r.jobs, job)
 	r.insertErr = repository.ErrWarmupConversationDuplicate
@@ -155,7 +155,7 @@ func newControlFixture() (*service, *controlRepo, *controlProvider) {
 	return &service{repo: r, gen: p}, r, p
 }
 func diagnosticResult(job models.WarmupGenerationJob) generation.BatchResult {
-	return generation.BatchResult{CustomID: fmt.Sprintf("%s-0", job.ID), Conversation: &generation.Conversation{Subject: "A card count", Description: "An automated warmup exchange: this hypothetical sample contains 3 blue cards and 2 green cards. How many cards are in the sample?", Messages: []string{"The hypothetical sample contains 5 cards, not 6.", "Agreed. This example is closed; no physical cards were exchanged."}}}
+	return generation.BatchResult{CustomID: fmt.Sprintf("%s-0", job.ID), Conversation: &generation.Conversation{Subject: "A card count", Description: "We sorted the supply cupboard and found three boxes of index cards nobody remembers ordering. Do you still plan on cards?", Messages: []string{"I do, mostly for sketching out a week at a glance.", "Same here. Good to know I'm not the only one."}}}
 }
 
 func TestGenerationStopBlocksBeforeProviderAndReservation(t *testing.T) {
@@ -190,23 +190,23 @@ func TestBatchReviewsWithOpenAIWhenTypeSafeIsAbsent(t *testing.T) {
 		{Coherent: true, Confidence: 0.95},
 		{Coherent: true, Confidence: 0.5},
 		{Coherent: true, ContainsPitch: true, Confidence: 0.95},
-		{Coherent: true, FabricatesEvents: true, Confidence: 0.95},
+		{Coherent: true, Unnatural: true, Confidence: 0.95},
 		nil,
 	} {
 		s, r, p := newControlFixture()
-		version := generation.DiagnosticScenarioVersion
+		version := generation.WarmupScenarioVersion
 		job := models.WarmupGenerationJob{ID: uuid.New(), Model: "configured-model", RequestedCount: 1, ContentVersion: &version}
 		r.jobs = append(r.jobs, job)
 		p.review = review
 		result := diagnosticResult(job)
 		result.Conversation.Subject = "A card count"
-		result.Conversation.Description = "An automated warmup example has 3 blue cards and 2 green cards. How many cards is that?"
+		result.Conversation.Description = "Our team switched to index cards for planning the week. Have you tried that?"
 		p.results = []generation.BatchResult{result}
 		if err := s.ingestBatch(t.Context(), &r.jobs[0], "output", generation.BatchCounts{Total: 1}); err != nil {
 			t.Fatal(err)
 		}
 		got := r.records[batchConversationID(job.ID, result.CustomID)]
-		approved := review != nil && review.Coherent && !review.ContainsPitch && !review.FabricatesEvents && review.Confidence >= judgeConfFloor
+		approved := review != nil && review.Coherent && !review.ContainsPitch && !review.Unnatural && review.Confidence >= judgeConfFloor
 		if (got.Status == models.WarmupConversationActive) != approved || got.ReplyEligible != approved {
 			t.Fatalf("semantic review bypassed: review=%+v record=%+v", review, got)
 		}
@@ -215,7 +215,7 @@ func TestBatchReviewsWithOpenAIWhenTypeSafeIsAbsent(t *testing.T) {
 
 func TestBatchRejectsRepeatedSubjectsAndOpenings(t *testing.T) {
 	s, r, p := newControlFixture()
-	version := generation.DiagnosticScenarioVersion
+	version := generation.WarmupScenarioVersion
 	job := models.WarmupGenerationJob{ID: uuid.New(), Model: "configured-model", RequestedCount: 3, ContentVersion: &version}
 	r.jobs = append(r.jobs, job)
 	p.review = &generation.WarmupReview{Coherent: true, Confidence: 0.95}
@@ -291,7 +291,7 @@ func TestStoppedGenerationDrainsAndCancelsOutstandingBatches(t *testing.T) {
 	for _, review := range []string{"passed", "unavailable", "rejected", "legacy_unreviewed"} {
 		t.Run(review, func(t *testing.T) {
 			s, r, p := newControlFixture()
-			version := generation.DiagnosticScenarioVersion
+			version := generation.WarmupScenarioVersion
 			j := models.WarmupGenerationJob{ID: uuid.New(), Mode: models.WarmupGenerationModeBatch, Status: "running", BatchID: "existing-provider-id", RequestedCount: 1, ContentVersion: &version}
 			if review == "legacy_unreviewed" {
 				j.ContentVersion = nil
@@ -362,7 +362,7 @@ func TestBatchCustomIDScopeAndReplayAreCanonical(t *testing.T) {
 
 func TestBatchRequestedTurnCountSurvivesSettingsChange(t *testing.T) {
 	s, r, p := newControlFixture()
-	version, turns := generation.DiagnosticScenarioVersion, 1
+	version, turns := generation.WarmupScenarioVersion, 1
 	j := models.WarmupGenerationJob{ID: uuid.New(), Mode: "batch", Status: "running", BatchID: "existing-provider-batch", PoolType: "premium", RequestedCount: 1, ContentVersion: &version, MaxMessagesPerThread: &turns}
 	r.settings.MaxMessagesPerThread = 5
 	r.jobs = append(r.jobs, j)
