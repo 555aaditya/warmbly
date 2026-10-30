@@ -117,7 +117,7 @@ func (r *taskRepository) BindWarmupSuccessor(ctx context.Context, parent, recipi
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		id = uuid.New()
-		if _, err = tx.Exec(ctx, `INSERT INTO tasks(id,task_type,email_account_id,status,scheduled_at,message_id) VALUES($1,'warmup',$2,'pending',$3,'')`, id, recipient, at); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO tasks(id,task_type,email_account_id,status,message_id) VALUES($1,'warmup',$2,'pending','')`, id, recipient); err != nil {
 			return false, err
 		}
 		if _, err = tx.Exec(ctx, `INSERT INTO warmup_tasks(task_id) VALUES($1)`, id); err != nil {
@@ -134,7 +134,9 @@ func (r *taskRepository) BindWarmupSuccessor(ctx context.Context, parent, recipi
         FROM warmup_tokens wt JOIN warmup_tasks original ON original.task_id=wt.task_id
         JOIN warmup_received wr ON wr.task_id=wt.task_id AND wr.email_account_id=wt.recipient_account_id
         JOIN email_accounts ea ON ea.id=wt.recipient_account_id
+        JOIN tasks planned ON planned.id=$1
         WHERE successor.task_id=$1 AND wt.task_id=$2 AND wr.internal_id=$3 AND wt.recipient_account_id=$4
+        AND (planned.scheduled_at IS NULL OR planned.scheduled_at>=wr.created_at+INTERVAL '45 minutes')
         AND ea.status='active' AND ea.warmup IS NOT NULL AND ea.warmup_paused_at IS NULL
         AND wr.retired_at IS NULL AND wr.created_at>NOW()-INTERVAL '7 days'
         AND original.lineage_version=1 AND original.subject<>'' AND wt.conversation_id IS NOT NULL
@@ -148,7 +150,8 @@ func (r *taskRepository) BindWarmupSuccessor(ctx context.Context, parent, recipi
 	if tag.RowsAffected() == 0 {
 		return false, nil
 	}
-	if _, err = tx.Exec(ctx, `UPDATE tasks SET scheduled_at=GREATEST($2,(SELECT created_at+INTERVAL '45 minutes' FROM warmup_received WHERE email_account_id=$3 AND internal_id=$4)),updated_at=NOW() WHERE id=$1`, id, at, recipient, internalID); err != nil {
+	// Keep an earlier eligible send rather than delaying the mailbox for a reply.
+	if _, err = tx.Exec(ctx, `UPDATE tasks SET scheduled_at=GREATEST(LEAST(scheduled_at,$2),(SELECT created_at+INTERVAL '45 minutes' FROM warmup_received WHERE email_account_id=$3 AND internal_id=$4)),updated_at=NOW() WHERE id=$1`, id, at, recipient, internalID); err != nil {
 		return false, err
 	}
 	return true, tx.Commit(ctx)
