@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/warmbly/warmbly/internal/pkg/generation"
 	"github.com/warmbly/warmbly/internal/pkg/typesafe"
 )
 
@@ -20,6 +21,34 @@ const (
 	// runaway generation is not worth the tokens.
 	judgeStateLimit = 6000
 )
+
+func (s *service) reviewThread(ctx context.Context, thread generation.Conversation, model string) (*ThreadJudgment, error) {
+	if s.judge != nil {
+		return judgeThread(ctx, s.judge, thread.Subject, thread.Description, thread.Messages)
+	}
+	length := len([]rune(thread.Subject)) + len([]rune(thread.Description))
+	for _, body := range thread.Messages {
+		length += len([]rune(body))
+	}
+	if length > judgeStateLimit {
+		return nil, fmt.Errorf("warmup review: complete thread exceeds review limit")
+	}
+	review, err := s.gen.ReviewConversation(ctx, thread, model)
+	if err != nil || review == nil {
+		return nil, fmt.Errorf("warmup semantic review unavailable")
+	}
+	judgment := &ThreadJudgment{Confidence: review.Confidence, Model: model}
+	if review.ContainsPitch {
+		judgment.Pitch = 1
+	}
+	if review.FabricatesEvents {
+		judgment.Template = 1
+	}
+	if review.Coherent {
+		judgment.Naturalness = 1
+	}
+	return judgment, nil
+}
 
 // The questions. Links and signup words are not asked about: warmlint checks
 // those deterministically before this runs.

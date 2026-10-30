@@ -10,11 +10,11 @@ const CanonicalRenderingVersion = "canonical-v1"
 
 // ValidateDiagnostic checks structure; semantic review is a separate result.
 func ValidateDiagnostic(c Conversation) error {
-	if !strings.HasPrefix(c.Subject, "Simulated diagnostic:") || strings.ContainsAny(c.Subject, "<>{}\x00\r\n") {
-		return fmt.Errorf("missing diagnostic subject or invalid subject header")
+	if strings.TrimSpace(c.Subject) == "" || strings.ContainsAny(c.Subject, "<>{}\x00\r\n") {
+		return fmt.Errorf("missing subject or invalid subject header")
 	}
-	if !strings.HasPrefix(c.Description, "Simulated diagnostic.") || len(c.Messages) == 0 || len(c.Messages) > 5 {
-		return fmt.Errorf("missing diagnostic disclosure or invalid turn count")
+	if len(c.Messages) == 0 || len(c.Messages) > 5 {
+		return fmt.Errorf("invalid turn count")
 	}
 	turns := append([]string{c.Description}, c.Messages...)
 	for _, text := range turns {
@@ -28,11 +28,29 @@ func ValidateDiagnostic(c Conversation) error {
 	return nil
 }
 
+// ValidateFreshWarmup keeps historical wording readable without selecting it again.
+func ValidateFreshWarmup(c Conversation) error {
+	if err := ValidateDiagnostic(c); err != nil {
+		return err
+	}
+	return ValidateWarmupWording(append([]string{c.Subject, c.Description}, c.Messages...)...)
+}
+
+// ValidateWarmupWording applies to every outgoing turn, including queued historical threads.
+func ValidateWarmupWording(texts ...string) error {
+	for _, text := range texts {
+		if strings.Contains(strings.ToLower(strings.Join(strings.Fields(text), " ")), "simulated diagnostic") {
+			return fmt.Errorf("historical diagnostic boilerplate is not fresh warmup content")
+		}
+	}
+	return nil
+}
+
 func RenderCanonicalTurn(body, sender string) (string, error) {
 	if strings.TrimSpace(body) == "" || strings.ContainsAny(body, "<>{}\x00\r") || strings.TrimSpace(sender) == "" || strings.ContainsAny(sender, "\r\n\x00") {
 		return "", fmt.Errorf("invalid canonical body or sender identity")
 	}
-	return strings.TrimSpace(body) + "\n\nSimulated diagnostic.\n" + sender, nil
+	return strings.TrimSpace(body) + "\n\n" + sender, nil
 }
 
 // RenderDiagnostic alternates actual sender identities without rewriting bodies.

@@ -351,10 +351,18 @@ func (s *tasksService) HandleEmailTask(task *proto.ProcessTask) *errx.Error {
 		}
 	}
 
-	// STEP 7: Build a new warmup message when not replying. Content comes from
-	// the AI bank (segment-aware) when enabled, else the static library.
+	// STEP 7: Wait for fresh approved content instead of recycling a fallback.
 	if !shouldReply {
-		content = s.pickNewWarmupContent(ctx, *account)
+		var contentErr error
+		content, contentErr = s.pickNewWarmupContent(ctx, *account, partner.ID, taskID)
+		if contentErr != nil {
+			if !errors.Is(contentErr, errWarmupContentUnavailable) {
+				errs.CaptureException(contentErr)
+				return errx.InternalError()
+			}
+			log.Warn().Str("email_account_id", account.ID.String()).Msg("Warmup waiting for fresh approved content; check the generation job and provider configuration")
+			return s.closeWarmupThread(ctx, taskID, account.ID)
+		}
 	}
 	subject, emailBody, conversationTheme, contentSource, conversationID = content.subject, content.body, content.theme, content.contentSource, content.conversationID
 

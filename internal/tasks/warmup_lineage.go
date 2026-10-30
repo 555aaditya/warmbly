@@ -28,11 +28,14 @@ func resolveStaticConversation(id uuid.UUID) (Conversation, bool) {
 }
 
 func lintDiagnosticContent(subject, body string, reply bool, account Email) error {
+	if err := generation.ValidateWarmupWording(subject, body); err != nil {
+		return err
+	}
 	identity := account.Name
 	if identity == "" {
 		identity = account.Email
 	}
-	canonical := strings.TrimSuffix(body, "\n\nSimulated diagnostic.\n"+identity)
+	canonical := strings.TrimSuffix(body, "\n\n"+identity)
 	return lintWarmupContent(subject, canonical, reply)
 }
 
@@ -83,6 +86,9 @@ func (s *tasksService) diagnosticSource(ctx context.Context, c *repository.Warmu
 	}
 	if conv.Subject != c.Subject || conv.Version != c.ScenarioVersion {
 		return conv, errors.New("diagnostic source changed")
+	}
+	if err := generation.ValidateWarmupWording(append([]string{conv.Subject, conv.Description}, conv.Messages...)...); err != nil {
+		return Conversation{}, err
 	}
 	return conv, nil
 }
