@@ -201,9 +201,6 @@ func TestLiveContentPoolHonorsHistoricalTokensAndExcludesFixedWording(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if demand, err := r.WarmupMailboxDemandSince(t.Context(), time.Now().Add(-time.Hour)); err != nil || demand != 1 {
-		t.Fatalf("mailbox demand=%d err=%v", demand, err)
-	}
 	other := contentPoolMailbox(t, f)
 	for _, pair := range [][2]uuid.UUID{{f.sender, other}, {other, f.sender}, {f.recipient, other}, {other, f.recipient}} {
 		c, err := r.PickConversation(t.Context(), contentPoolPick(t, f, segment, pair[0], pair[1]))

@@ -417,6 +417,14 @@ jobs:
             grep -q "^--- PASS: $test " monitoring-clock.log
           done
 
+      - name: Approved warmup content and queued source regressions (PostgreSQL)
+        if: matrix.suite == 'live-2'
+        env:
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+        run: |
+          go test -race ./internal/repository -run '^TestLiveContentPool' -count=1
+          go test -race ./internal/tasks -run '^TestLiveWarmupDispatchRechecksOpeningSourceAndExactRecipient$' -count=1
+
       - name: Warmup generic execution authority regressions (PostgreSQL)
         if: matrix.suite == 'live-2'
         env:
@@ -431,7 +439,8 @@ jobs:
             TestLiveWarmupGenericCancellationPreservesOtherHolds \
             TestLiveWarmupGenericStartAndLateResult \
             TestLiveWarmupGenericStartAfterCompatibleOverwrite \
-            TestLiveWarmupGenericCannotRepeatStartedWarmupClaim; do
+            TestLiveWarmupGenericCannotRepeatStartedWarmupClaim \
+            TestLiveWarmupGenericDeniesHistoricalDiagnosticContent; do
             grep -q "^--- PASS: $test " warmup-generic-execution.log
           done
 
